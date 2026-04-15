@@ -4,8 +4,8 @@ import { AuthBar } from "@/components/AuthBar";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "EduShare — 共有テスト",
-  description: "PDF（過去問/論文）から生成する共有学習テスト",
+  title: "EduShare — テスト教材",
+  description: "PDF（過去問・論文）から生成する学習テスト教材",
 };
 
 export default function RootLayout({
@@ -21,9 +21,12 @@ export default function RootLayout({
             <Link href="/" className="font-semibold tracking-tight">
               EduShare
             </Link>
-            <nav className="flex flex-wrap items-center gap-4 text-sm text-zinc-700">
-              <Link className="hover:text-zinc-950" href="/tests">
-                テスト一覧
+            <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-zinc-700">
+              <Link className="hover:text-zinc-950" href="/tests/past-exam">
+                過去問（学校）
+              </Link>
+              <Link className="hover:text-zinc-950" href="/tests/paper">
+                論文
               </Link>
               <Link className="hover:text-zinc-950" href="/upload">
                 アップロード

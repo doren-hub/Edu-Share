@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { gradeWithClaude } from "@/lib/claude-quiz";
+import { recordQuestionPerformanceAfterSubmit } from "@/lib/question-performance";
 import type { AnswerMap, StoredQuestion } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -34,7 +35,7 @@ export async function POST(
   const admin = createAdminClient();
   const { data: row, error } = await admin
     .from("quiz_sessions")
-    .select("id, user_id, questions_json")
+    .select("id, user_id, test_id, questions_json, answers_json")
     .eq("id", sessionId)
     .single();
 
@@ -47,6 +48,7 @@ export async function POST(
 
   const questions = row.questions_json as StoredQuestion[];
   const answers = parsed.data.answers as AnswerMap;
+  const recordStats = row.answers_json == null;
 
   const graded = await gradeWithClaude({ questions, answers });
 
@@ -66,6 +68,17 @@ export async function POST(
       { error: upErr.message || "採点結果の保存に失敗しました" },
       { status: 500 },
     );
+  }
+
+  if (recordStats && row.test_id) {
+    await recordQuestionPerformanceAfterSubmit({
+      admin,
+      testId: row.test_id,
+      userId: user.id,
+      questions,
+      answers,
+      feedback: graded.feedback,
+    });
   }
 
   return NextResponse.json({
