@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ClientQuestion } from "@/lib/types";
@@ -8,9 +8,25 @@ import type { ClientQuestion } from "@/lib/types";
 export default function TakeQuiz({
   testId,
   initialIsAuthed,
+  reuseSessionId,
+  pickRandomPast,
+  pickReviewMistakes,
+  reviewMistakesScope,
+  startWithNotebookLmCsv,
+  notebookLmCsvPool,
+  vocabTestHint,
 }: {
   testId: string;
   initialIsAuthed: boolean;
+  reuseSessionId?: string;
+  pickRandomPast?: boolean;
+  pickReviewMistakes?: boolean;
+  reviewMistakesScope?: "standard" | "csv";
+  startWithNotebookLmCsv?: boolean;
+  /** URL ?csvPool=quiz|vocab */
+  notebookLmCsvPool?: "quiz" | "vocab";
+  /** URL ?vocab=1 または csvPool=vocab（単語テストの見出し用） */
+  vocabTestHint?: boolean;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -19,6 +35,7 @@ export default function TakeQuiz({
   const [questions, setQuestions] = useState<ClientQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<string, number | string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [csvHintRevealed, setCsvHintRevealed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!initialIsAuthed) {
@@ -33,13 +50,37 @@ export default function TakeQuiz({
       const res = await fetch(`/api/tests/${testId}/start`, {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          reuseSessionId
+            ? { reuseQuestionsFromSessionId: reuseSessionId }
+            : pickReviewMistakes
+              ? {
+                  pickReviewMistakesSession: true,
+                  reviewMistakesScope: reviewMistakesScope ?? "standard",
+                }
+              : pickRandomPast
+                ? { pickRandomPastSession: true }
+                : notebookLmCsvPool
+                  ? { notebookLmCsvPool }
+                  : startWithNotebookLmCsv
+                    ? { useNotebookLmCsvPool: true }
+                    : {},
+        ),
       });
       const json = (await res.json().catch(() => null)) as
-        | { error?: string; sessionId?: string; questions?: ClientQuestion[] }
+        | {
+            error?: string;
+            details?: string;
+            sessionId?: string;
+            questions?: ClientQuestion[];
+          }
         | null;
       if (cancelled) return;
       if (!res.ok) {
-        setErr(json?.error || "開始に失敗しました");
+        const base = json?.error || "開始に失敗しました";
+        const detail = json?.details?.trim();
+        setErr(detail ? `${base}\n${detail}` : base);
         setLoading(false);
         return;
       }
@@ -51,7 +92,21 @@ export default function TakeQuiz({
     return () => {
       cancelled = true;
     };
-  }, [testId, initialIsAuthed]);
+  }, [
+    testId,
+    initialIsAuthed,
+    reuseSessionId,
+    pickRandomPast,
+    pickReviewMistakes,
+    reviewMistakesScope,
+    startWithNotebookLmCsv,
+    notebookLmCsvPool,
+  ]);
+
+  const isVocabSession = useMemo(
+    () => notebookLmCsvPool === "vocab" || !!vocabTestHint,
+    [notebookLmCsvPool, vocabTestHint],
+  );
 
   async function submit() {
     if (!sessionId) return;
@@ -63,10 +118,15 @@ export default function TakeQuiz({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answers }),
     });
-    const json = (await res.json().catch(() => null)) as { error?: string } | null;
+    const json = (await res.json().catch(() => null)) as {
+      error?: string;
+      details?: string;
+    } | null;
     setSubmitting(false);
     if (!res.ok) {
-      setErr(json?.error || "提出に失敗しました");
+      const base = json?.error || "提出に失敗しました";
+      const detail = json?.details?.trim();
+      setErr(detail ? `${base}\n${detail}` : base);
       return;
     }
     router.push(`/tests/${testId}/result/${sessionId}`);
@@ -90,9 +150,33 @@ export default function TakeQuiz({
   if (loading) {
     return (
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold text-zinc-950">問題を生成しています</h1>
+        <h1 className="text-2xl font-semibold text-zinc-950">
+          {reuseSessionId
+            ? "再テスト用の問題を準備しています"
+            : pickReviewMistakes
+              ? "復習モードの問題を準備しています"
+              : pickRandomPast
+                ? "過去の問題から出題しています"
+                : vocabTestHint
+                  ? "単語テストの問題を準備しています"
+                  : startWithNotebookLmCsv
+                    ? "NotebookLM CSV の問題を準備しています"
+                    : "問題を生成しています"}
+        </h1>
         <p className="text-sm text-zinc-600">
-          Claude + RAG により、毎回まちまちの設問セットを作成します（数十秒かかることがあります）。
+          {reuseSessionId
+            ? "過去に生成した設問セットを読み込んでいます。"
+            : pickReviewMistakes
+              ? reviewMistakesScope === "csv"
+                ? "NotebookLM CSV の履歴のうち、誤答した設問だけを集めて出題しています。"
+                : "PDF・通常の履歴のうち、誤答した設問だけを集めて出題しています。"
+              : pickRandomPast
+                ? "テスト履歴の設問から選んで出題しています。"
+                : vocabTestHint
+                  ? "表面（用語）に対する裏面（解答）の内容を選択肢から選びます。"
+                  : startWithNotebookLmCsv
+                    ? "取り込んだ CSV の設問プールから出題します。"
+                    : "LLM + RAG により、毎回まちまちの設問セットを作成します（数十秒かかることがあります）。"}
         </p>
       </div>
     );
@@ -102,7 +186,7 @@ export default function TakeQuiz({
     return (
       <div className="space-y-4">
         <h1 className="text-2xl font-semibold text-zinc-950">エラー</h1>
-        <p className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+        <p className="whitespace-pre-wrap rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           {err}
         </p>
         <Link
@@ -119,9 +203,13 @@ export default function TakeQuiz({
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-950">テスト</h1>
+          <h1 className="text-2xl font-semibold text-zinc-950">
+            {isVocabSession ? "単語テスト（選択式）" : "テスト"}
+          </h1>
           <p className="mt-1 text-sm text-zinc-600">
-            回答後にスコアが表示されます（選択式は自動採点、記述式は Claude が採点）。
+            {isVocabSession
+              ? "各問は選択式です。正解は取り込んだ単語帳 CSV の裏面（解答）に対応します。"
+              : "回答後にスコアが表示されます（選択式は自動採点、記述式は LLM が採点）。"}
           </p>
         </div>
         <Link
@@ -142,13 +230,58 @@ export default function TakeQuiz({
               <p className="text-sm font-semibold text-zinc-900">
                 問{idx + 1}{" "}
                 <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
-                  {q.type === "multiple_choice" ? "選択式" : "記述式"}
+                  {q.type === "multiple_choice"
+                    ? isVocabSession
+                      ? "選択式（単語）"
+                      : "選択式"
+                    : "記述式"}
                 </span>
               </p>
             </div>
             <p className="mt-3 text-sm leading-6 text-zinc-800">{q.prompt}</p>
 
-            {q.type === "multiple_choice" ? (
+            {q.type === "multiple_choice" && q.notebookLmCsvHint?.trim() ? (
+              <>
+                <div className="mt-4 space-y-2">
+                  {q.options.map((opt, i) => (
+                    <label
+                      key={`${q.id}-${i}`}
+                      className="flex cursor-pointer items-start gap-3 rounded-md border border-zinc-200 px-3 py-2 hover:bg-zinc-50"
+                    >
+                      <input
+                        type="radio"
+                        name={q.id}
+                        checked={answers[q.id] === i}
+                        onChange={() =>
+                          setAnswers((prev) => ({ ...prev, [q.id]: i }))
+                        }
+                      />
+                      <span className="text-sm text-zinc-800">{opt}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-4">
+                  {!csvHintRevealed[q.id] ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCsvHintRevealed((prev) => ({ ...prev, [q.id]: true }))
+                      }
+                      className="rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-950 hover:bg-amber-100/80"
+                    >
+                      ヒントを表示
+                    </button>
+                  ) : (
+                    <div>
+                      <p className="text-xs font-medium text-zinc-600">ヒント</p>
+                      <div className="mt-2 whitespace-pre-wrap rounded-lg border border-amber-200/80 bg-amber-50/80 px-3 py-2.5 text-sm leading-relaxed text-amber-950">
+                        {q.notebookLmCsvHint.trim()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : q.type === "multiple_choice" ? (
               <div className="mt-4 space-y-2">
                 {q.options.map((opt, i) => (
                   <label
@@ -182,7 +315,7 @@ export default function TakeQuiz({
       </ol>
 
       {err ? (
-        <p className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+        <p className="whitespace-pre-wrap rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           {err}
         </p>
       ) : null}

@@ -1,19 +1,25 @@
-import { createClient } from "@/lib/supabase/server";
-import { TestList } from "@/components/TestList";
+import { redirect } from "next/navigation";
+import { TESTS_LIST_PATHS } from "@/lib/tests-list-paths";
 
-export default async function TestsPage() {
-  const supabase = await createClient();
-  const { data: tests } = await supabase
-    .from("tests")
-    .select(
-      "id,title,description,source_type,source_name,processing_status,created_at,document_type",
-    )
-    .order("created_at", { ascending: false });
-
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold text-zinc-950">共有テスト一覧</h1>
-      <TestList tests={tests ?? []} />
-    </div>
-  );
+/** `/tests` は廃止。旧クエリだけ専用一覧へ誘導し、それ以外はホームへ。 */
+export default async function TestsLegacyRedirect({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string; category?: string }>;
+}) {
+  const sp = await searchParams;
+  const t = sp.tab;
+  const c = sp.category;
+  if (t === "paper" || c === "paper") {
+    redirect(TESTS_LIST_PATHS.paper);
+  }
+  if (
+    t === "past_exam" ||
+    t === "past" ||
+    c === "past_exam" ||
+    c === "past"
+  ) {
+    redirect(TESTS_LIST_PATHS.pastExam);
+  }
+  redirect("/");
 }

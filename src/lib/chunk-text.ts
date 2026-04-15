@@ -19,8 +19,16 @@ export function chunkText(raw: string): string[] {
       }
     }
     const trimmed = slice.trim();
-    if (trimmed.length > 40) chunks.push(trimmed);
+    if (trimmed.length > 15) chunks.push(trimmed);
     i += Math.max(1, slice.length - OVERLAP);
   }
+
+  if (chunks.length === 0 && text.length > 50) {
+    for (let i = 0; i < text.length; i += MAX - OVERLAP) {
+      const piece = text.slice(i, i + MAX).trim();
+      if (piece.length > 10) chunks.push(piece);
+    }
+  }
+
   return chunks;
 }

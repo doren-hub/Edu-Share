@@ -170,6 +170,12 @@ create policy "quiz_update_own"
   to authenticated
   using (auth.uid() = user_id);
 
+drop policy if exists "quiz_delete_own" on public.quiz_sessions;
+create policy "quiz_delete_own"
+  on public.quiz_sessions for delete
+  to authenticated
+  using (auth.uid() = user_id);
+
 -- Storage bucket (create in Dashboard if insert fails)
 insert into storage.buckets (id, name, public)
 values ('pdfs', 'pdfs', false)

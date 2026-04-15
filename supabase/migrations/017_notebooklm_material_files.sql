@@ -1,0 +1,13 @@
+-- NotebookLM 用スライド（PDF）・動画（MP4）を Storage に保存するためのパス
+alter table public.tests
+  add column if not exists notebooklm_slide_pdf_storage_path text,
+  add column if not exists notebooklm_video_mp4_storage_path text;
+
+comment on column public.tests.notebooklm_slide_pdf_storage_path is 'pdfs バケット内のスライド用 PDF パス（NotebookLM 等の書き出し）';
+comment on column public.tests.notebooklm_video_mp4_storage_path is 'pdfs バケット内の動画 MP4 パス';
+
+-- 旧 URL 列はファイルアップロードに置き換え
+alter table public.tests drop column if exists notebooklm_slide_url;
+alter table public.tests drop column if exists notebooklm_video_url;
+
+notify pgrst, 'reload schema';
