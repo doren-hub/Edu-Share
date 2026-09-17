@@ -7,7 +7,10 @@ import {
   ensurePublicationYearPicklistOption,
   splitAuthorNamesForPicklist,
 } from "@/lib/ensure-expert-picklist-options";
-import { parsePaperMetadataPaste } from "@/lib/paper-metadata-paste";
+import {
+  looksLikeMisparsedAuthors,
+  parsePaperMetadataPaste,
+} from "@/lib/paper-metadata-paste";
 import { fetchPicklistValues } from "@/lib/picklist-api";
 import { assertStoredPickWithOther } from "@/lib/picklist-parse";
 
@@ -51,14 +54,27 @@ export function SciSpacePaperMetadataPaste({
 
       let mergedAuthors = initialFields.paperAuthors;
       let picklistMsg: string | null = null;
+      let authorsWarning: string | null = null;
       if (parsed.authors?.trim()) {
         const names = splitAuthorNamesForPicklist(parsed.authors);
-        if (names.length > 0) {
+        if (names.length > 0 && looksLikeMisparsedAuthors(names)) {
+          authorsWarning =
+            "著者の解析に失敗した可能性があるため、著者は変更せず既存の値を保持しました。貼り付け内容を確認するか、「資料情報」から著者を編集してください。";
+        } else if (names.length > 0) {
           const { values, message } = await ensureExpertNamePicklistOptions(names);
           mergedAuthors = values;
           picklistMsg = message;
         }
       }
+      if (parsed.authorsTruncated) {
+        const n = parsed.truncatedAuthorsCount;
+        authorsWarning =
+          (authorsWarning ? `${authorsWarning}\n` : "") +
+          `貼り付け元で著者が省略されています（他${n ?? "数"}名、"...+${n ?? "N"} More" 等の表記）。「資料情報」から不足分を追記してください。`;
+      }
+      const venueWarning = parsed.venueUncertain
+        ? `掲載欄には「${parsed.venue}」を設定しますが、分野タグ等の可能性があり掲載誌名として未確認です。「資料情報」から確認・修正してください。`
+        : null;
 
       const hadAnyParsed =
         Boolean(parsed.title?.trim()) ||
@@ -151,8 +167,13 @@ export function SciSpacePaperMetadataPaste({
 
       const base =
         "メタ情報を保存しました。貼り付けに発表年が含まれる場合はテストの発表年にも反映されます。業界は貼り付けでは変えず、既存の値がそのまま使われます。";
-      const extras = [yearEnsureNote, picklistMsg].filter(Boolean).join("");
-      setNote(extras ? `${base}${extras}` : base);
+      const extras = [yearEnsureNote, picklistMsg]
+        .filter(Boolean)
+        .join("");
+      const warnings = [venueWarning, authorsWarning].filter(Boolean).join("\n");
+      setNote(
+        [extras ? `${base}${extras}` : base, warnings].filter(Boolean).join("\n"),
+      );
       setPaste("");
       router.refresh();
     } catch (e) {
@@ -195,7 +216,11 @@ export function SciSpacePaperMetadataPaste({
             {error}
           </p>
         ) : null}
-        {note ? <p className="mt-2 text-xs text-sky-900">{note}</p> : null}
+        {note ? (
+          <p className="mt-2 whitespace-pre-wrap break-words text-xs text-sky-900">
+            {note}
+          </p>
+        ) : null}
       </div>
     </div>
   );
