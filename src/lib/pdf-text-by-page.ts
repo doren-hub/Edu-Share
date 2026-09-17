@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { sanitizeExtractedPdfText } from "@/lib/sanitize-pdf-text";
 
 /**
  * PDF.js でページごとのプレーンテキストを取得（取り込み・ページ推定用）。
@@ -27,7 +28,7 @@ export async function extractPdfTextByPage(buffer: Buffer): Promise<string[]> {
       const s = (it as { str?: string }).str;
       if (typeof s === "string" && s.length > 0) parts.push(s);
     }
-    out.push(parts.join(""));
+    out.push(sanitizeExtractedPdfText(parts.join("")));
   }
   return out;
 }
