@@ -42,7 +42,7 @@ export default async function PaperTestsPage() {
       <header className="space-y-2">
         <p className="text-xs font-medium tracking-wide text-violet-800">論文</p>
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-950">
-          論文テスト教材
+          論文一覧
         </h1>
         <p className="max-w-2xl text-sm text-zinc-600">
           論文PDFから取り込んだテストだけを表示しています。未登録の NotebookLM

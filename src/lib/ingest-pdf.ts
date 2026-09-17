@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { chunkText } from "@/lib/chunk-text";
 import { embedTexts, openAiEmbeddingsEnabled } from "@/lib/embeddings";
 import { extractPdfTextByPage, guessPdfPageForChunk } from "@/lib/pdf-text-by-page";
+import { sanitizeExtractedPdfText } from "@/lib/sanitize-pdf-text";
 import { stripReferencesSection } from "@/lib/strip-references-section";
 
 export async function ingestPdfForTest(params: {
@@ -38,7 +39,7 @@ export async function ingestPdfForTest(params: {
     let text: string;
     try {
       const parsed = await pdfParse(buf);
-      text = parsed.text ?? "";
+      text = sanitizeExtractedPdfText(parsed.text ?? "");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(
