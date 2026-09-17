@@ -9,7 +9,10 @@ import {
   ensureExpertNamePicklistOptions,
   splitAuthorNamesForPicklist,
 } from "@/lib/ensure-expert-picklist-options";
-import { parsePaperMetadataPaste } from "@/lib/paper-metadata-paste";
+import {
+  looksLikeMisparsedAuthors,
+  parsePaperMetadataPaste,
+} from "@/lib/paper-metadata-paste";
 import { createClient } from "@/lib/supabase/client";
 
 export default function UploadPage() {
@@ -267,15 +270,28 @@ export default function UploadPage() {
     if (parsed.doi) setPaperDoi(parsed.doi);
 
     let picklistMsg: string | null = null;
+    let authorsWarning: string | null = null;
     if (parsed.authors) {
       const names = splitAuthorNamesForPicklist(parsed.authors);
-      if (names.length > 0) {
+      if (names.length > 0 && looksLikeMisparsedAuthors(names)) {
+        authorsWarning =
+          "著者の解析に失敗した可能性があるため、著者は反映しませんでした。貼り付け内容を確認するか、手動で著者を入力してください。";
+      } else if (names.length > 0) {
         const { values, message } = await ensureExpertNamePicklistOptions(names);
         setPaperAuthors(values);
         setAuthorsPicklistKey((k: number) => k + 1);
         picklistMsg = message;
       }
     }
+    if (parsed.authorsTruncated) {
+      const n = parsed.truncatedAuthorsCount;
+      authorsWarning =
+        (authorsWarning ? `${authorsWarning}\n` : "") +
+        `貼り付け元で著者が省略されています（他${n ?? "数"}名、"...+${n ?? "N"} More" 等の表記）。不足分は手動で追記してください。`;
+    }
+    const venueWarning = parsed.venueUncertain
+      ? `掲載欄には「${parsed.venue}」を反映しましたが、分野タグ等の可能性があり掲載誌名として未確認です。内容を確認・修正してください。`
+      : null;
 
     const ok =
       Boolean(parsed.title) ||
@@ -283,10 +299,12 @@ export default function UploadPage() {
       Boolean(parsed.venue) ||
       Boolean(parsed.doi) ||
       Boolean(parsed.authors);
+    const warnings = [venueWarning, authorsWarning].filter(Boolean).join("\n");
     if (ok) {
       const base =
         "貼り付けを反映しました。業界・発表年は任意です。必要なら入力してください。";
-      setAutoFillNote(picklistMsg ? `${base}${picklistMsg}` : base);
+      const noted = picklistMsg ? `${base}${picklistMsg}` : base;
+      setAutoFillNote(warnings ? `${noted}\n${warnings}` : noted);
     } else {
       setAutoFillNote(
         "貼り付けから有効な項目を検出できませんでした。形式（Title: / DOI / 著者 / 年-掲載）を確認してください。",
@@ -485,7 +503,7 @@ export default function UploadPage() {
             PDFを解析して項目を自動入力しています...
           </p>
         ) : autoFillNote ? (
-          <p className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+          <p className="whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
             {autoFillNote}
           </p>
         ) : null}
