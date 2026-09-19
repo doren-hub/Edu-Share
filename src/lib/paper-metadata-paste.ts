@@ -192,6 +192,23 @@ function parseTitlePrefix(line: string): string | null {
   return m ? m[1].trim() : null;
 }
 
+/** SciSpace 画面のナビ・ファイル名・TL;DR本文など、メタ行ではないもの */
+function isNoiseMetadataLine(s: string): boolean {
+  const t = s.trim();
+  if (!t) return true;
+  if (/\.pdf$/i.test(t)) return true;
+  if (/^uploaded on\b/i.test(t)) return true;
+  if (
+    /^(home|agent gallery|templates|files(\s*\(\d+\))?|notebooks(\s*\(\d+\))?|chats(\s*\(\d+\))?|sort|export|share|upload pdfs|pdf upload|column settings|untitled folder|tools|lite|standard quality|en|tl;dr)$/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (/^(this paper|the paper|本研究|本論文)\b/i.test(t) && t.length > 80) return true;
+  return false;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -227,6 +244,10 @@ export function parsePaperMetadataPaste(raw: string): ParsedPaperMetadataPaste {
   let truncatedAuthorsCount: number | null = null;
 
   const used = new Set<number>();
+
+  for (let i = 0; i < lines.length; i++) {
+    if (isNoiseMetadataLine(lines[i])) used.add(i);
+  }
 
   // 1st pass: 確度の高いメタ行（Title: / DOI / 年-掲載 / 年(・DOI)・著者 / ラベル付き年 / 単独年）を検出
   for (let i = 0; i < lines.length; i++) {
@@ -281,7 +302,7 @@ export function parsePaperMetadataPaste(raw: string): ParsedPaperMetadataPaste {
     for (let i = 0; i < lines.length; i++) {
       if (used.has(i)) continue;
       const line = lines[i];
-      if (line.length > 8) {
+      if (line.length > 8 && !isNoiseMetadataLine(line)) {
         title = line;
         used.add(i);
         break;
