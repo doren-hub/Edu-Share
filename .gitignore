@@ -30,3 +30,7 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# paper-pipeline（ローカル実行）
+tools/paper-pipeline/node_modules/
+tools/paper-pipeline/.chrome-profile/

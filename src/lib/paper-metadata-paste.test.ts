@@ -88,3 +88,20 @@ test("buildDescriptionFromParsedPaste: 未確認掲載欄と省略著者の注�
   assert.match(desc, /掲載\/分野（未確認）: AIP Advances/);
   assert.match(desc, /著者: Yingfei Yang, Huayu Zhao ほか3名（貼り付け元で省略）/);
 });
+
+test("scispace Files カードのナビ込みコピーでもタイトルはファイル名にならない", () => {
+  const raw = [
+    "2312.01865v1.pdf",
+    "Home",
+    "A comprehensive survey of Schwarzschild's original papers: Schwarzschild's trick and Einstein's s(h)tick",
+    "2023\u22c5Galina Weinstein",
+    "arXiv",
+    "This paper examines Schwarzschild's contributions to general relativity, focusing on his methods for developing exact solutions.",
+  ].join("\n");
+  const p = parsePaperMetadataPaste(raw);
+  assert.match(p.title, /comprehensive survey of Schwarzschild/);
+  assert.equal(p.publicationYear, "2023");
+  assert.equal(p.authors, "Galina Weinstein");
+  assert.equal(p.venue, "arXiv");
+  assert.equal(p.venueUncertain, true);
+});
