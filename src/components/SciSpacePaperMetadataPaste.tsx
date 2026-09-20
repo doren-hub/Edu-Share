@@ -174,7 +174,7 @@ export function SciSpacePaperMetadataPaste({
       setNote(
         [extras ? `${base}${extras}` : base, warnings].filter(Boolean).join("\n"),
       );
-      setPaste("");
+      // 反映に成功しても貼り付け原文は消さない（再編集・パイプラインの再適用用）
       router.refresh();
     } catch (e) {
       setError(

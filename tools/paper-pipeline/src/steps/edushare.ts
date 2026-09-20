@@ -10,7 +10,7 @@ import {
   isDummyAuthorValue,
   pickAuthorSelectValue,
 } from "../edushare-form.ts";
-import { isCompleted, markCompleted, type PaperState, type StudioStageId } from "../state.ts";
+import { isCompleted, markCompleted, markEduUploaded, type PaperState, type StudioStageId } from "../state.ts";
 import { fillIfVisible, saveFailureShot } from "../ui.ts";
 import { videoArtifactPath, videoFileReady, ensureUploadableVideo, VIDEO_UPLOAD_MAX_BYTES } from "../video-file.ts";
 
@@ -560,9 +560,10 @@ export async function applySciSpaceMetaToPaperPage(
       await note.first().waitFor({ timeout: 60_000 });
       const text = ((await note.first().innerText().catch(() => "")) || "").trim();
       if (/検出できませんでした|著者が未設定|失敗/.test(text)) {
-        throw new Error(`SciSpace メタの反映失敗: ${text}`);
+        warn(`SciSpace 貼り付けは入れましたが、項目への反映はしませんでした: ${text}`);
+      } else {
+        log("Edu Share: SciSpace 貼り付け欄に Files 行をそのまま保存");
       }
-      log("Edu Share: SciSpace メタ（タイトル・著者・年・掲載）を保存");
     }
 
     const info = paperSection(page, "資料情報");
@@ -573,7 +574,7 @@ export async function applySciSpaceMetaToPaperPage(
     }
     const descBox = info.locator("label").filter({ hasText: "説明" }).locator("textarea");
     await descBox.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
-    if (state.title.trim()) {
+    if (!paste && state.title.trim()) {
       await fillIfVisible(
         info.locator("label").filter({ hasText: "タイトル" }).locator("input"),
         state.title.slice(0, 200),
@@ -789,17 +790,30 @@ export async function runEduShareMaterials(
   opts: {
     paperDir: string;
     state: PaperState;
+    selected?: readonly StudioStageId[];
   },
 ): Promise<void> {
   const { paperDir, state } = opts;
-  if (isCompleted(state, "edu-materials")) return;
+  const selected = opts.selected ?? [];
+  const uploaded = new Set(state.eduUploaded ?? []);
+  const quizReady = Boolean(state.quizCsvPath && existsSync(state.quizCsvPath));
+  const vocabReady = Boolean(state.vocabCsvPath && existsSync(state.vocabCsvPath));
+  const slidesReady = Boolean(state.slidePdfPath && existsSync(state.slidePdfPath));
+  const needQuiz = quizReady && !uploaded.has("nlm-quiz");
+  const needVocab = vocabReady && !uploaded.has("nlm-flashcards");
+  const needSlides = slidesReady && !uploaded.has("nlm-slides");
+  const needVideo =
+    videoFileReady(state.paperDir, state.videoMp4Path) && !uploaded.has("nlm-video");
+  if (isCompleted(state, "edu-materials") && !needQuiz && !needVocab && !needSlides && !needVideo) {
+    return;
+  }
   if (!state.eduShareTestUrl) throw new Error("Edu Share の論文 URL がありません");
 
   try {
     await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
     await expandSection(page, "NotebookLM");
 
-    if (state.quizCsvPath && existsSync(state.quizCsvPath)) {
+    if (needQuiz && state.quizCsvPath) {
       await importNotebookLmCsv(
         page,
         state.quizCsvPath,
@@ -808,8 +822,9 @@ export async function runEduShareMaterials(
         "クイズ CSV を取り込みました。",
         1,
       );
+      markEduUploaded(state, "nlm-quiz");
     }
-    if (state.vocabCsvPath && existsSync(state.vocabCsvPath)) {
+    if (needVocab && state.vocabCsvPath) {
       await importNotebookLmCsv(
         page,
         state.vocabCsvPath,
@@ -818,16 +833,20 @@ export async function runEduShareMaterials(
         "単語帳（Flashcard）CSV を取り込みました。",
         2,
       );
+      markEduUploaded(state, "nlm-flashcards");
     }
 
-    if (state.slidePdfPath && existsSync(state.slidePdfPath)) {
+    if (needSlides && state.slidePdfPath) {
       await expandSection(page, "NotebookLM");
       await page.locator('input[type="file"][accept*="pdf"]').last().setInputFiles(state.slidePdfPath);
       await page.getByText("スライド用 PDF を登録しました。").waitFor({ timeout: 120_000 }).catch(
         () => warn("スライド登録の完了表示がありません"),
       );
+      markEduUploaded(state, "nlm-slides");
     }
-    await attachEduShareVideo(page, state);
+    if (needVideo && (await attachEduShareVideo(page, state))) {
+      markEduUploaded(state, "nlm-video");
+    }
 
     if (state.notebooklmUrl) {
       await expandSection(page, "NotebookLM");
@@ -848,7 +867,13 @@ export async function runEduShareMaterials(
       await saveSciSpaceUrlOnEduShare(page, state);
     }
 
-    markCompleted(state, "edu-materials");
+    const remaining = selected.length
+      ? selected.filter((s) => {
+          const uploadedNow = new Set(state.eduUploaded ?? []);
+          return !uploadedNow.has(s);
+        })
+      : [];
+    if (remaining.length === 0) markCompleted(state, "edu-materials");
   } catch (e) {
     await saveFailureShot(page, paperDir, "edushare-materials");
     throw e;

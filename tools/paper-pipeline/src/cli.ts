@@ -1,31 +1,48 @@
 import { mkdirSync } from "node:fs";
 import {
   closeBrowser,
+  isTargetClosedMessage,
   launchBrowser,
   pageAlive,
   recoverStuckPage,
+  relaunchBrowser,
   type BrowserSession,
 } from "./browser.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
-import { listInboxPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
+import { listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
 import { loadExistingFromEduShare, processOnePaper, repairSciSpaceCardMeta, repairSciSpaceRecordLinks } from "./pipeline.ts";
 import { formatStudioGenerateJa } from "./studio-select.ts";
+import { EXIT_QUOTA } from "./notebook-quota.ts";
 import { EXIT_WAITING } from "./waiting.ts";
+import { emptyState, loadState, studioKickoffBegun } from "./state.ts";
 
 const MAX_RELAUNCH = 2;
 let activeSession: BrowserSession | null = null;
+let shuttingDown = false;
+
+function loadPaperState(item: { paperDir: string; filename: string; absPath: string }) {
+  return loadState(
+    item.paperDir,
+    emptyState({
+      filename: item.filename,
+      inboxPdfPath: item.absPath,
+      paperDir: item.paperDir,
+    }),
+  );
+}
 
 async function relaunch(session: BrowserSession, cfg: AppConfig): Promise<BrowserSession> {
-  await closeBrowser(session);
+  if (shuttingDown) return session;
   log("ブラウザを再起動します");
-  const next = await launchBrowser(cfg);
+  const next = await relaunchBrowser(session, cfg);
   activeSession = next;
   return next;
 }
 
 function installInterruptLogs(): void {
   const stop = (sig: string) => {
+    shuttingDown = true;
     logError(`プロセスが ${sig} で中断されました`);
     const session = activeSession;
     activeSession = null;
@@ -63,6 +80,7 @@ async function main(): Promise<void> {
     listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename),
     [
       ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
+      ...listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename),
       ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
       ...(cfg.studioGenerateExplicit
         ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
@@ -111,15 +129,40 @@ async function main(): Promise<void> {
     }
     for (const item of items) {
       log(`--- ${item.filename} ---`);
-      let r: "done" | "skipped" | "failed" | "waiting" = "failed";
+      let r: "done" | "skipped" | "failed" | "waiting" | "quota" = "failed";
       for (let attempt = 0; attempt <= MAX_RELAUNCH; attempt++) {
+        if (shuttingDown) break;
         if (!(await pageAlive(session.page))) {
           warn(`${item.filename}: ブラウザ切断を検出したため再起動します`);
           session = await relaunch(session, cfg);
         }
         r = await processOnePaper(session.page, cfg, item, existing);
-        if (r === "waiting") break;
-        if (r !== "failed" || (await pageAlive(session.page)) || attempt >= MAX_RELAUNCH) {
+        if (r === "quota") break;
+        if (r === "waiting") {
+          if (
+            shuttingDown ||
+            (await pageAlive(session.page)) ||
+            !studioKickoffBegun(loadPaperState(item))
+          ) {
+            break;
+          }
+          warn(
+            `${item.filename}: ブラウザ切断。同じ論文の Studio 再生成はせず、SciSpace / Edu Share を進めます`,
+          );
+          session = await relaunch(session, cfg);
+          r = await processOnePaper(session.page, cfg, item, existing, { skipStudio: true });
+          break;
+        }
+        if (r !== "failed" || (await pageAlive(session.page)) || attempt >= MAX_RELAUNCH || shuttingDown) {
+          break;
+        }
+        const paperState = loadPaperState(item);
+        if (studioKickoffBegun(paperState) || isTargetClosedMessage(paperState.lastError)) {
+          warn(
+            `${item.filename}: ブラウザ切断。同じ論文の Studio 再生成はせず、SciSpace / Edu Share を進めます`,
+          );
+          session = await relaunch(session, cfg);
+          r = await processOnePaper(session.page, cfg, item, existing, { skipStudio: true });
           break;
         }
         warn(
@@ -132,6 +175,10 @@ async function main(): Promise<void> {
       else if (r === "waiting") {
         log(`${item.filename}: 生成待ちのため Chrome を明け渡します`);
         process.exitCode = EXIT_WAITING;
+        break;
+      } else if (r === "quota") {
+        log(`${item.filename}: Notebook 利用量のため Chrome を明け渡します`);
+        process.exitCode = EXIT_QUOTA;
         break;
       } else {
         failed.push(item.filename);
@@ -153,7 +200,7 @@ async function main(): Promise<void> {
 
   log(
     `結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}${
-      process.exitCode === EXIT_WAITING ? " / 生成待ち" : ""
+      process.exitCode === EXIT_WAITING ? " / 生成待ち" : process.exitCode === EXIT_QUOTA ? " / 利用量待ち" : ""
     }`,
   );
   if (failed.length) {

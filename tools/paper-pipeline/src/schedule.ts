@@ -13,6 +13,8 @@ export type SchedJob = {
   kickoffBegun: boolean;
   /** スライド・動画・クイズ・単語帳がすべて開始済みか完了 */
   kickoffSettled: boolean;
+  /** 利用量待ち中に SciSpace / Edu Share / 収集を進められる */
+  harvestable: boolean;
 };
 
 export type PickResult =
@@ -35,17 +37,48 @@ function byReadyOrder(a: SchedJob, b: SchedJob): number {
 }
 
 /** 1本の Studio 4種が揃ってから次の論文の生成に進む */
-export function pickNextJob(jobs: SchedJob[], now: number): PickResult {
+export function pickNextJob(
+  jobs: SchedJob[],
+  now: number,
+  opts: { generationBlocked?: boolean } = {},
+): PickResult {
   const unfinished = jobs.filter(
     (j) => j.status === "ready" || j.status === "waiting",
   );
   if (unfinished.length === 0) return { kind: "done" };
+
+  if (opts.generationBlocked) {
+    const runnable = jobs
+      .filter(
+        (j) =>
+          j.harvestable &&
+          (j.status === "ready" || (j.status === "waiting" && j.nextCheckAt <= now)),
+      )
+      .sort(byReadyOrder);
+    if (runnable[0]) return { kind: "run", id: runnable[0].id };
+    const waitingHarvest = jobs.filter((j) => j.harvestable && j.status === "waiting");
+    if (waitingHarvest[0]) {
+      const next = Math.min(...waitingHarvest.map((j) => j.nextCheckAt));
+      return { kind: "idle", sleepMs: Math.max(1_000, next - now) };
+    }
+    return { kind: "idle", sleepMs: 60_000 };
+  }
 
   const unsettled = unfinished
     .filter((j) => j.kickoffBegun && !j.kickoffSettled)
     .sort(byInboxOrder);
   const focus = unsettled[0];
   if (focus) {
+    const harvest = jobs
+      .filter(
+        (j) =>
+          j.id !== focus.id &&
+          j.harvestable &&
+          j.kickoffSettled &&
+          (j.status === "ready" || (j.status === "waiting" && j.nextCheckAt <= now)),
+      )
+      .sort(byReadyOrder);
+    if (harvest[0]) return { kind: "run", id: harvest[0].id };
     if (focus.status === "ready" || focus.nextCheckAt <= now) {
       return { kind: "run", id: focus.id };
     }

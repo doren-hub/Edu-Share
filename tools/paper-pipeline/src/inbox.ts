@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import { fileStem } from "./match.ts";
+import { needsRawFilesPaste } from "./scispace-card.ts";
 import { doneMarkerPath, emptyState, loadState, type PaperState, type StudioStageId } from "./state.ts";
 import { missingStudioStages } from "./studio-select.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
@@ -137,6 +138,20 @@ export function listVideoRepairPdfs(workDir: string, onlyFilename = ""): InboxPd
     const { state } = loadWorkPaper(workDir, name);
     if (onlyFilename && state.filename !== onlyFilename) continue;
     if (!needsLocalVideoFile(state)) continue;
+    const absPath = workPdfPath(state);
+    if (!absPath) continue;
+    out.push(toInboxPdf(state, absPath));
+  }
+  return out.sort((a, b) => a.filename.localeCompare(b.filename, "en"));
+}
+
+/** 完了済みでも Files 行が加工済み／空なら、貼り付け欄を取り直す */
+export function listRawPasteRepairPdfs(workDir: string, onlyFilename = ""): InboxPdf[] {
+  const out: InboxPdf[] = [];
+  for (const name of listWorkDirs(workDir)) {
+    const { state } = loadWorkPaper(workDir, name);
+    if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (!needsRawFilesPaste(state)) continue;
     const absPath = workPdfPath(state);
     if (!absPath) continue;
     out.push(toInboxPdf(state, absPath));

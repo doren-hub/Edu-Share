@@ -14,7 +14,10 @@ flowchart TD
   orch -->|spawn 1本| worker[cli.ts]
   worker --> chrome[永続 Chrome]
   chrome --> sciUp[sci-upload: Files に PDF]
-  sciUp --> nlm[NotebookLM Studio]
+  sciUp --> quota{Notebook 短期>85% または 週枠100%?}
+  quota -->|余裕あり| nlm[NotebookLM Studio]
+  quota -->|利用量超え| harvest[SciSpace / できた生成物を Edu Share へ]
+  harvest --> orch
   nlm --> wait{4種は開始済みか完了?}
   wait -->|いいえ| same[同じ論文のキックオフを続ける]
   same --> orch
@@ -26,9 +29,11 @@ flowchart TD
   edu --> done[DONE + inbox から移動]
 ```
 
-終了コード: `0` 完了またはスキップ、`10` 生成待ち（4種を開始済み）、`1` 失敗（4種が揃うまでは同じ論文を先に回す。揃ったあとは他の ready を先に回す）。
+終了コード: `0` 完了またはスキップ、`10` 生成待ち（4種を開始済み）、`11` Notebook 利用量待ち、`1` 失敗（4種が揃うまでは同じ論文を先に回す。揃ったあとは他の ready を先に回す）。
 
 待ちの再確認間隔: スライド 90s、動画 60s、クイズ/単語帳 20s。
+
+Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短期枠)` / `(週枠)`）を読む。短期枠の利用量が 85% を超えているあいだは Studio 生成を止める。週枠が 100% なら `reset_at` まで待つ。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める。収集・Edu Share はキックオフ済みなら続ける。Chrome をもう一つ開いて Cookie を取り直すことはしない。
 
 ## 1 論文の段階
 
@@ -42,7 +47,10 @@ flowchart TD
   exist -->|なし| sciUp
   adopt --> sciUp
   sciUp[sci-upload] --> nlm[nlm-create / nlm-upload]
-  nlm --> studio[Studio 並列キックオフ]
+  nlm --> quota{利用量 OK?}
+  quota -->|短期>85% / 週枠100%| pause[生成停止して待つ]
+  pause --> quota
+  quota -->|はい| studio[Studio 並列キックオフ]
   studio --> wait{4種そろった?}
   wait -->|生成中| yield[GenerationWaitingError]
   wait -->|はい| sciMeta[sci-meta]
@@ -53,7 +61,7 @@ flowchart TD
   ver --> done[done]
 ```
 
-Studio の項目（スライド・解説動画・クイズ・単語帳）は `--generate` で選べる。省略時は 4 種。選んだ項目がすべて生成待ちか完了になるまで次の論文の生成には進まない。Edu Share 済みの論文にも足りない項目を後から生成できる。「後で作成」は使わない。動画は解説（2 分以上）。既存の `mm:ss · 解説` があれば再生成しない。
+Studio の項目（スライド・解説動画・クイズ・単語帳）は `--generate` で選べる。省略時は 4 種。選んだ項目がすべて生成待ちか完了になるまで次の論文の生成には進まない。Edu Share 済みの論文にも足りない項目を後から生成できる。「後で作成」は使わない。動画は解説（2 分以上）。既存の `mm:ss · 解説` があれば再生成しない。既存のスライド出力（`tablet` が無くても「件のソース」付きカード）や「スライド資料を生成して…」があればスライドも再生成しない。
 
 ## NotebookLM Studio
 
@@ -83,7 +91,7 @@ flowchart TD
 
 ## SciSpace
 
-指定フォルダへ PDF を載せ、隣カードを混ぜずにメタと `/records/…` を取る。フォルダ URL は保存しない。ログイン待ち中は画面を触らない。Files ビュー（`Upload PDFs` かつ `Files (`）まで最大 15 分。
+指定フォルダへ PDF を載せ、隣カードを混ぜずにメタと `/records/…` を取る。フォルダ URL は保存しない。ログイン待ち中は画面を触らない。フォルダ URL だけではノートのチャット/Home のことがあるので、`Files (N)` タブを押し、Files 表（`Uploaded on` または `TL;DR` 列）まで最大 15 分。サイドバーの `Upload PDFs` / `Files (` だけでは Files とみなさない。一覧検索は Files ツールバーの入力だけ。メタが取れなければ後回しにせず失敗する。
 
 ```mermaid
 flowchart TD
@@ -122,7 +130,7 @@ flowchart TD
 | `title` | タイトル |
 | `doi` | DOI 欄 |
 | `tldr` | 説明 |
-| `filesPaste` | SciSpace 貼り付け → 著者・年・掲載 |
+| `filesPaste` | SciSpace 貼り付け欄へ Files 行をそのまま入れる（タイトル・著者だけに加工しない）。完了済みでもファイル名付きの Files 行でなければ取り直す |
 | `venue` | 業界推定の材料 |
 | `scispaceUrl` | 論文ページの SciSpace URL |
 
@@ -131,7 +139,7 @@ flowchart TD
 ## Edu Share
 
 1. `/upload` に PDF。自動入力完了まで待つ。ログイン待ち中は触らない
-2. SciSpace 貼り付けを反映。業界は「その他」にしない。著者のデモ `A. Einstein` は使わない
+2. SciSpace 貼り付け欄に Files 行をそのまま入れる。業界は「その他」にしない。著者のデモ `A. Einstein` は使わない
 3. 既存論文なら一覧の `/tests/{id}` につなぐ。削除ボタン `.bg-red-50` はエラーではない
 4. quiz.csv / vocab.csv / slides.pdf、動画は `POST /api/tests/{id}/material/video`
 5. SciSpace 個別 URL を保存し、PDF・スライド・動画・CSV 開始まで verify

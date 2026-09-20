@@ -20,6 +20,7 @@ cp .env.example .env
 - `SCISPACE_FOLDER_URL` — 既定は SciSpace Notebooks フォルダ
 - 任意: `NOTEBOOKLM_EXPORT_EXTENSION_PATH` — クイズ/単語帳 CSV 用の Export 拡張のディレクトリ
 - 任意: `EDU_SHARE_EMAIL` / `EDU_SHARE_PASSWORD`
+- 任意: `TASKDESK_USAGE_URL` — Notebook 利用量 JSON（既定は taskdesk / ai-usage-board の `usage-latest.json`）
 
 Chrome プロファイルは `tools/paper-pipeline/.chrome-profile/` に作られます（git 管理外）。
 
@@ -46,7 +47,7 @@ Export 拡張をまだ入れていなければ、開いた Chrome の `chrome://
 3. 作業フォルダに `DONE` がある、または一覧とタイトル/DOI が一致するものは無視（PDF は入力側に残す）
 4. 作業開始時に `PAPER_WORK_DIR/<ファイル名>/` を作り、スライド・動画・CSV をそこに保存
 5. **SciSpace 指定フォルダへ PDF を先に載せる**（カードメタはまだ待たない）
-6. NotebookLM の Studio は `--generate` で選んだ項目（省略時は 4 種）を開始（または完了）してから Chrome を明け渡し、次の論文の生成へ進む。Edu Share 済みの論文にも足りない項目を後から生成できる
+6. NotebookLM の Studio は `--generate` で選んだ項目（省略時は 4 種）を開始（または完了）してから Chrome を明け渡し、次の論文の生成へ進む。Edu Share 済みの論文にも足りない項目を後から生成できる。**短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待つ**（taskdesk / 利用量ボードの Notebook 枠）。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める
 7. Studio が揃ったら SciSpace のカードメタと `/records/…` を取る（掲載から遅れて出るメタを、NotebookLM 待ちのあいだに進めておく）
 8. 業界はアップロード画面の PDF 自動入力と SciSpace メタから候補を選ぶ
 9. SciSpace のリンクはフォルダではなく個別レコード（`/records/…`）を保存する
@@ -68,4 +69,6 @@ npm start -- --generate all
 
 - SciSpace のカードメタは PDF 掲載から遅れるので、掲載は NotebookLM より先、メタ取得は Studio のあとです
 - NotebookLM の Studio は、同じ論文のスライド・動画・クイズ・単語帳がすべて生成待ちか完了になってから次の論文の生成に進みます。動画は数十分かかることがあります
+- Notebook の短期枠（Gemini Notebook）が 85% を超えているあいだは生成を止めます。週枠が 100% のときはリセット日時まで待ちます。値は taskdesk と同じ利用量 JSON をリアルタイムに読みます。止めないときは `--ignore-notebook-quota`
+- 利用量が回復するまでは、SciSpace への PDF 掲載・メタ反映と、1 種でもできている生成物の Edu Share 登録を先に進めます。残りの生成は枠が空いてから再開します
 - 公式 API ではないため、ボタン文言が変わると失敗します。失敗時は論文フォルダの `failures/` にスクリーンショットが残ります

@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts";
 import { PACKAGE_ROOT } from "./env.ts";
-import { hasDoneMarker, listInboxPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair, type InboxPdf } from "./inbox.ts";
+import { hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair, type InboxPdf } from "./inbox.ts";
 import { error as logError, log, warn } from "./log.ts";
 import { pickNextJob, type SchedJob, type SchedStatus } from "./schedule.ts";
 import {
@@ -14,12 +14,16 @@ import {
   type PaperState,
   type StudioStageId,
 } from "./state.ts";
+import { hasHarvestableWork } from "./harvest.ts";
+import { currentNotebookQuotaPause, EXIT_QUOTA, waitUntilNotebookQuotaAllows } from "./notebook-quota.ts";
 import { EXIT_WAITING, recheckDelayMs } from "./waiting.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
+import { needsRawFilesPaste } from "./scispace-card.ts";
+import { isTargetClosedMessage } from "./browser.ts";
 import { formatStudioGenerateArg, formatStudioGenerateJa } from "./studio-select.ts";
 
 const MAX_FAIL_RETRIES = 3;
-const CHROME_UNLOCK_MS = 1_500;
+const CHROME_UNLOCK_MS = 2_500;
 
 type Track = {
   item: InboxPdf;
@@ -72,31 +76,45 @@ function studioSkip(cfg: { studioSkip: readonly StudioStageId[] }): readonly Stu
   return cfg.studioSkip;
 }
 
-function applyKickoff(job: SchedJob, state: PaperState, skip: readonly StudioStageId[]): void {
+function applyKickoff(
+  job: SchedJob,
+  state: PaperState,
+  skip: readonly StudioStageId[],
+  selected: readonly StudioStageId[],
+): void {
   job.kickoffBegun = studioKickoffBegun(state, skip);
   job.kickoffSettled = studioKickoffSettled(state, skip);
+  job.harvestable = hasHarvestableWork(state, selected);
 }
 
 function initialStatus(
   item: InboxPdf,
   skip: readonly StudioStageId[],
-): { status: SchedStatus; nextCheckAt: number; kickoffBegun: boolean; kickoffSettled: boolean } {
+  selected: readonly StudioStageId[],
+): {
+  status: SchedStatus;
+  nextCheckAt: number;
+  kickoffBegun: boolean;
+  kickoffSettled: boolean;
+  harvestable: boolean;
+} {
   const state = loadPaperState(item);
   const kickoffBegun = studioKickoffBegun(state, skip);
   const kickoffSettled = studioKickoffSettled(state, skip);
+  const harvestable = hasHarvestableWork(state, selected);
   if (hasDoneMarker(item.paperDir)) {
-    if (needsLocalVideoFile(state)) {
-      return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled };
+    if (needsLocalVideoFile(state) || needsRawFilesPaste(state)) {
+      return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: true };
     }
-    return { status: "done", nextCheckAt: 0, kickoffBegun, kickoffSettled };
+    return { status: "done", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: false };
   }
   if (state.skippedAlreadyUploaded) {
-    return { status: "skipped", nextCheckAt: 0, kickoffBegun, kickoffSettled };
+    return { status: "skipped", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: false };
   }
   if (state.waitingFor && kickoffSettled) {
-    return { status: "waiting", nextCheckAt: Date.now(), kickoffBegun, kickoffSettled };
+    return { status: "waiting", nextCheckAt: Date.now(), kickoffBegun, kickoffSettled, harvestable };
   }
-  return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled };
+  return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable };
 }
 
 function orchHelp(): string {
@@ -110,6 +128,8 @@ function orchHelp(): string {
   Studio の生成（スライド・解説動画・クイズ・単語帳）が揃った論文は SciSpace メタ / Edu Share へ進みます。
   動画 MP4 は NotebookLM のダウンロードボタンで保存して Edu Share に載せます。
   同じ Chrome プロファイルは同時に使いません。
+  Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。
+  そのあいだは SciSpace 掲載・メタ、できている生成物の Edu Share 登録を先に進めます。
 
   npm start
   npm run worker -- --only paper.pdf
@@ -130,6 +150,7 @@ async function main(): Promise<void> {
   const inboxNames = new Set(inbox.map((i) => i.filename));
   const extras = [
     ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
+    ...listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename),
     ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
     ...(cfg.studioGenerateExplicit
       ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
@@ -147,7 +168,7 @@ async function main(): Promise<void> {
   const tracks = new Map<string, Track>();
   const jobs: SchedJob[] = items.map((item) => {
     tracks.set(item.filename, { item, retries: 0, fromUsed: false });
-    const init = initialStatus(item, skip);
+    const init = initialStatus(item, skip, cfg.studioGenerate);
     return {
       id: item.filename,
       mtime: mtimeMs(item.absPath),
@@ -157,6 +178,7 @@ async function main(): Promise<void> {
       source: inboxNames.has(item.filename) ? "inbox" : "repair",
       kickoffBegun: init.kickoffBegun,
       kickoffSettled: init.kickoffSettled,
+      harvestable: init.harvestable,
     };
   });
 
@@ -165,11 +187,22 @@ async function main(): Promise<void> {
   const failed: string[] = [];
 
   while (true) {
-    const pick = pickNextJob(jobs, Date.now());
+    const pause = await currentNotebookQuotaPause(cfg);
+    const generationBlocked = pause != null;
+    const pick = pickNextJob(jobs, Date.now(), { generationBlocked });
     if (pick.kind === "done") break;
     if (pick.kind === "idle") {
+      if (generationBlocked && !jobs.some((j) => j.harvestable && (j.status === "ready" || j.status === "waiting"))) {
+        log("オーケストレータ: 利用量のため生成は止め、他に進められる論文もありません");
+        await waitUntilNotebookQuotaAllows(cfg);
+        continue;
+      }
       const sec = Math.ceil(pick.sleepMs / 1000);
-      log(`オーケストレータ: 生成待ちのため約 ${sec}s 休みます`);
+      log(
+        generationBlocked
+          ? `オーケストレータ: 利用量回復待ち。先に進められる作業の再確認まで約 ${sec}s`
+          : `オーケストレータ: 生成待ちのため約 ${sec}s 休みます`,
+      );
       await sleep(Math.min(pick.sleepMs, 60_000));
       continue;
     }
@@ -190,15 +223,33 @@ async function main(): Promise<void> {
       track.fromUsed = true;
     }
 
-    log(`オーケストレータ: worker を呼びます → ${track.item.filename}`);
+    log(
+      generationBlocked
+        ? `オーケストレータ: 利用量待ちのため生成以外を進めます → ${track.item.filename}`
+        : `オーケストレータ: worker を呼びます → ${track.item.filename}`,
+    );
     const code = await runWorker(args);
     await sleep(CHROME_UNLOCK_MS);
 
+    if (code === EXIT_QUOTA) {
+      const state = loadPaperState(track.item);
+      applyKickoff(job, state, skip, cfg.studioGenerate);
+      job.status = "waiting";
+      job.nextCheckAt = Date.now() + 60_000;
+      log(
+        job.harvestable
+          ? `オーケストレータ: ${track.item.filename} は利用量待ち。できた作業は載せました。他の論文を先に回します`
+          : `オーケストレータ: ${track.item.filename} は Notebook 利用量のため生成を止めます。他にできる作業を先に回します`,
+      );
+      continue;
+    }
+
     if (code === EXIT_WAITING) {
       const state = loadPaperState(track.item);
-      applyKickoff(job, state, skip);
+      applyKickoff(job, state, skip, cfg.studioGenerate);
       const stage = state.waitingFor || "nlm-video";
-      if (!job.kickoffSettled) {
+      const cooldownUntil = Date.parse(state.kickoffRetryAt || "") || 0;
+      if (!job.kickoffSettled && !generationBlocked && cooldownUntil <= Date.now()) {
         job.status = "ready";
         job.nextCheckAt = 0;
         log(
@@ -207,9 +258,14 @@ async function main(): Promise<void> {
         continue;
       }
       job.status = "waiting";
-      job.nextCheckAt = Date.now() + recheckDelayMs(stage);
+      job.nextCheckAt =
+        cooldownUntil > Date.now() ? cooldownUntil : Date.now() + recheckDelayMs(stage);
       log(
-        `オーケストレータ: ${track.item.filename} は ${stage} 待ち（指定項目は開始済み）。次の論文の生成へ`,
+        generationBlocked
+          ? `オーケストレータ: ${track.item.filename} は生成待ち。利用量回復までは他の論文の SciSpace / Edu Share を進めます`
+          : cooldownUntil > Date.now()
+            ? `オーケストレータ: ${track.item.filename} は ${stage} 開始クールダウン。他の論文の SciSpace / Edu Share を進めます`
+            : `オーケストレータ: ${track.item.filename} は ${stage} 待ち（指定項目は開始済み）。次の論文の生成へ`,
       );
       continue;
     }
@@ -225,7 +281,16 @@ async function main(): Promise<void> {
       continue;
     }
 
-    applyKickoff(job, loadPaperState(track.item), skip);
+    applyKickoff(job, loadPaperState(track.item), skip, cfg.studioGenerate);
+    const disconnected = isTargetClosedMessage(loadPaperState(track.item).lastError);
+    if (disconnected) {
+      job.status = "waiting";
+      job.nextCheckAt = Date.now() + 60_000;
+      log(
+        `オーケストレータ: ${track.item.filename} はブラウザ切断。Studio 再生成はせず、他の論文の SciSpace / Edu Share を先に回します`,
+      );
+      continue;
+    }
     track.retries += 1;
     warn(
       job.kickoffBegun && !job.kickoffSettled

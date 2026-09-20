@@ -11,6 +11,7 @@ function job(partial: Partial<SchedJob> & Pick<SchedJob, "id">): SchedJob {
     source: "inbox",
     kickoffBegun: false,
     kickoffSettled: true,
+    harvestable: false,
     ...partial,
   };
 }
@@ -160,4 +161,58 @@ test("pickNextJob: 4種未完了が待ち中なら次の論文へ進まず idle"
   const r = pickNextJob(jobs, 100);
   assert.equal(r.kind, "idle");
   if (r.kind === "idle") assert.equal(r.sleepMs, 1_000);
+});
+
+test("pickNextJob: 4種未完了でも Files 貼り付け補修は先に回す", () => {
+  const jobs = [
+    job({
+      id: "partial.pdf",
+      mtime: 1,
+      kickoffBegun: true,
+      kickoffSettled: false,
+    }),
+    job({
+      id: "paste.pdf",
+      mtime: 50,
+      source: "repair",
+      harvestable: true,
+      kickoffSettled: true,
+    }),
+  ];
+  assert.deepEqual(pickNextJob(jobs, 100), { kind: "run", id: "paste.pdf" });
+});
+
+test("pickNextJob: 利用量待ちなら生成ロックを外して収穫できる論文を回す", () => {
+  const jobs = [
+    job({
+      id: "generating.pdf",
+      mtime: 1,
+      kickoffBegun: true,
+      kickoffSettled: false,
+      harvestable: false,
+    }),
+    job({
+      id: "harvest.pdf",
+      mtime: 50,
+      harvestable: true,
+    }),
+  ];
+  assert.deepEqual(pickNextJob(jobs, 100, { generationBlocked: true }), {
+    kind: "run",
+    id: "harvest.pdf",
+  });
+});
+
+test("pickNextJob: 利用量待ちで収穫できる論文が無ければ idle", () => {
+  const jobs = [
+    job({
+      id: "generating.pdf",
+      kickoffBegun: true,
+      kickoffSettled: false,
+      harvestable: false,
+    }),
+  ];
+  const r = pickNextJob(jobs, 100, { generationBlocked: true });
+  assert.equal(r.kind, "idle");
+  if (r.kind === "idle") assert.equal(r.sleepMs, 60_000);
 });
