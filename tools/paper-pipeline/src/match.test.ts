@@ -9,6 +9,7 @@ import {
   titlesLikelySame,
   titleUsableForExistingMatch,
   sciSpaceCardMetaIncomplete,
+  sciSpaceTldrIncomplete,
 } from "./match.ts";
 
 test("normalizeDoi: doi.org と裸の DOI を揃える", () => {
@@ -35,19 +36,29 @@ test("titlesLikelySame: ファイル名由来の短い一致は 12 文字以上�
   );
 });
 
-test("matchesExistingPaper: DOI 優先、なければタイトル", () => {
+test("matchesExistingPaper: PDF 名称が同じときだけ一致（DOI・タイトルは見ない）", () => {
   const existing = [
-    { title: "The field equations for gravitation and electromagnetism", doi: "10.1234/xyz" },
+    {
+      title: "The field equations for gravitation and electromagnetism",
+      doi: "10.1234/xyz",
+      filename: "2601.04170v1.pdf",
+    },
   ];
   assert.equal(
-    matchesExistingPaper(existing, { doi: "https://doi.org/10.1234/xyz" })?.doi,
-    "10.1234/xyz",
+    matchesExistingPaper(existing, { doi: "https://doi.org/10.1234/xyz" }),
+    null,
   );
-  assert.ok(
+  assert.equal(
     matchesExistingPaper(existing, {
       title: "The field equations for gravitation and electromagnetism",
     }),
+    null,
   );
+  assert.equal(
+    matchesExistingPaper(existing, { filename: "2601.04170v1.pdf" })?.filename,
+    "2601.04170v1.pdf",
+  );
+  assert.ok(matchesExistingPaper(existing, { filename: "2601.04170v1" }));
   assert.equal(matchesExistingPaper(existing, { filename: "unrelated.pdf" }), null);
 });
 
@@ -62,13 +73,12 @@ test("titleUsableForExistingMatch: 数字ファイル名や短すぎるタイト
   );
 });
 
-test("sciSpaceCardMetaIncomplete: ファイル名タイトル・空貼り付け・空 TL;DR", () => {
+test("sciSpaceCardMetaIncomplete: ファイル名タイトル・空貼り付けはメタ未入り（TL;DR は見ない）", () => {
   assert.equal(
     sciSpaceCardMetaIncomplete({
       title: "Popper-Conjectures-Rwefutations-GrowthOfKnowledge",
       filename: "Popper-Conjectures-Rwefutations-GrowthOfKnowledge.pdf",
       filesPaste: "",
-      tldr: "",
     }),
     true,
   );
@@ -77,7 +87,6 @@ test("sciSpaceCardMetaIncomplete: ファイル名タイトル・空貼り付け�
       title: "All objects and some questions",
       filename: "LineweaverPatel2023final.pdf",
       filesPaste: "2023⋅Charles H. Lineweaver",
-      tldr: "We present an overview of the thermal history of the Universe and the sequence of objects that formed as it cooled from the Big Bang to the present day.",
     }),
     false,
   );
@@ -85,14 +94,26 @@ test("sciSpaceCardMetaIncomplete: ファイル名タイトル・空貼り付け�
     titleUsableForExistingMatch("Commun. math. Phys. 43, 199—220 (1975)", "1103899181.pdf"),
     false,
   );
+});
+
+test("sciSpaceTldrIncomplete: 途中切れは説明に使わず、メタ完了とは別", () => {
+  assert.equal(
+    sciSpaceTldrIncomplete("inside the black hole where the Killing vector which represents time translations."),
+    true,
+  );
+  assert.equal(
+    sciSpaceTldrIncomplete(
+      "We present an overview of the thermal history of the Universe and the sequence of objects that formed as it cooled from the Big Bang to the present day.",
+    ),
+    false,
+  );
   assert.equal(
     sciSpaceCardMetaIncomplete({
       title: "Particle Creation by Black Holes",
       filename: "1103899181.pdf",
       filesPaste: "Particle Creation by Black Holes",
-      tldr: "inside the black hole where the Killing vector which represents time translations.",
     }),
-    true,
+    false,
   );
 });
 

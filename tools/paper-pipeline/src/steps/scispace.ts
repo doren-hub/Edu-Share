@@ -4,12 +4,14 @@ import {
   containsForeignPdf,
   doiFromHrefOrText,
   extractSciSpaceCardMeta,
+  metadataPasteFromCard,
   looksLikeCitationTitle,
   looksLikeSciSpaceNav,
   looksLikeVenueLine,
   pickBestSciSpaceCardText,
   isolateSciSpaceCardText,
   rawFilesCardPaste,
+  filesRowHasTruncatedAuthors,
   stripTldrSnippetNumbers,
   titleLooksLikeFilename,
   tldrUsable,
@@ -21,7 +23,11 @@ import {
   isSciSpaceRecordUrl,
   pickSciSpaceRecordUrl,
 } from "../scispace-record-url.ts";
-import { looksLikeSciSpaceFilesTable } from "../scispace-files-view.ts";
+import {
+  filesTabClickAllowed,
+  looksLikeSciSpaceChatHome,
+  looksLikeSciSpaceFilesTable,
+} from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
 import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
 import { saveFailureShot, uploadViaChooserOrInput } from "../ui.ts";
@@ -44,8 +50,16 @@ async function isNotebooksFilesView(page: Page, folderUrl: string): Promise<bool
   const uploadedOn = await page.getByText(/Uploaded on/i).first().isVisible({ timeout: 0 }).catch(() => false);
   const tldrCol = await page.getByText(/^TL;DR$/).first().isVisible({ timeout: 0 }).catch(() => false);
   const filesCount = await page.getByText(/Files\s*\(\d+\)/).first().isVisible({ timeout: 0 }).catch(() => false);
+  const sort = await page.getByRole("button", { name: /^Sort$/i }).first().isVisible({ timeout: 0 }).catch(() => false);
+  const noResults = await page
+    .getByText(/There are no results|Try searching with a better keyword/i)
+    .first()
+    .isVisible({ timeout: 0 })
+    .catch(() => false);
   if (upload && (uploadedOn || tldrCol)) return true;
   if (upload && filesCount && uploadedOn) return true;
+  if (upload && filesCount && sort) return true;
+  if (upload && filesCount && noResults) return true;
   const t = await pageText(page);
   if (looksLikeSciSpaceFilesTable(t)) return true;
   return false;
@@ -99,7 +113,27 @@ async function gotoSpecifiedFolder(page: Page, folderUrl: string): Promise<void>
   }
 }
 
+let lastFilesTabClickAt = 0;
+
+async function filesTabSelected(page: Page): Promise<boolean> {
+  const tab = page.getByRole("tab", { name: /Files\s*\(\d+\)/ }).first();
+  if (!(await tab.isVisible({ timeout: 350 }).catch(() => false))) return false;
+  const selected = await tab.getAttribute("aria-selected").catch(() => null);
+  const pressed = await tab.getAttribute("aria-pressed").catch(() => null);
+  return selected === "true" || pressed === "true";
+}
+
 async function clickFolderFilesTab(page: Page): Promise<boolean> {
+  const selected = await filesTabSelected(page);
+  if (
+    !filesTabClickAllowed({
+      alreadySelected: selected,
+      lastClickAt: lastFilesTabClickAt,
+      now: Date.now(),
+    })
+  ) {
+    return false;
+  }
   const names = [/Files\s*\(\d+\)/];
   for (const name of names) {
     const locs = [
@@ -111,6 +145,7 @@ async function clickFolderFilesTab(page: Page): Promise<boolean> {
     for (const loc of locs) {
       const el = loc.first();
       if (!(await el.isVisible({ timeout: 350 }).catch(() => false))) continue;
+      lastFilesTabClickAt = Date.now();
       await el.click({ timeout: 4_000 }).catch(() => undefined);
       return true;
     }
@@ -125,6 +160,13 @@ async function restoreFolderFilesTable(page: Page, folderUrl: string): Promise<v
     await sleep(800);
   }
   if (await isNotebooksFilesView(page, folderUrl)) return;
+  const t = await pageText(page);
+  if (looksLikeSciSpaceFilesTable(t)) return;
+  // Files タブを連打すると一覧が閉じて表が消える
+  if (isOnSpecifiedFolder(page, folderUrl) && /Files\s*\(\d+/i.test(t) && !looksLikeSciSpaceChatHome(t)) {
+    return;
+  }
+  if (await filesTabSelected(page)) return;
   const clicked = await clickFolderFilesTab(page);
   if (clicked) {
     log("SciSpace: Files タブを開きます");
@@ -157,7 +199,7 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
         log("SciSpace: ログイン中は画面を触りません。このウィンドウでログインしてください");
         loggedWait = true;
       }
-    } else if (Date.now() - lastFilesClick >= 4_000) {
+    } else if (Date.now() - lastFilesClick >= 15_000) {
       lastFilesClick = Date.now();
       await restoreFolderFilesTable(page, folderUrl);
     }
@@ -257,11 +299,6 @@ async function fillFilesListSearch(page: Page, folderUrl: string, query: string)
   const sort = page.getByRole("button", { name: /^Sort$/i }).first();
   if (await sort.isVisible({ timeout: 800 }).catch(() => false)) {
     const sortBox = await sort.boundingBox().catch(() => null);
-    const nextBtn = sort.locator("xpath=following::button[1]");
-    if (await nextBtn.isVisible({ timeout: 400 }).catch(() => false)) {
-      await nextBtn.click({ timeout: 3_000 }).catch(() => undefined);
-      await sleep(400);
-    }
     const inputs = page.locator("input:visible");
     const n = await inputs.count().catch(() => 0);
     for (let i = 0; i < n; i++) {
@@ -271,50 +308,79 @@ async function fillFilesListSearch(page: Page, folderUrl: string, query: string)
       const inFilesHeader = box.x > 220 && box.y > 70 && box.y < 320;
       if (!nearSort && !inFilesHeader) continue;
       await inputs.nth(i).fill(query).catch(() => undefined);
-      await inputs.nth(i).press("Enter").catch(() => undefined);
       await sleep(900);
-      if (!(await isNotebooksFilesView(page, folderUrl))) {
-        warn("SciSpace: 一覧検索で Files を出たので戻ります");
-        await restoreFolderFilesTable(page, folderUrl);
-        return false;
-      }
-      return true;
+      if (await isNotebooksFilesView(page, folderUrl)) return true;
+      warn("SciSpace: 一覧検索で Files を出たので戻ります");
+      await restoreFolderFilesTable(page, folderUrl);
+      return false;
     }
   }
   return setFilesSearch(page, folderUrl, query);
 }
 
-async function filesNameVisible(page: Page, filename: string): Promise<boolean> {
-  const loc = page.getByText(filename, { exact: false }).first();
-  if (!(await loc.isVisible({ timeout: 800 }).catch(() => false))) return false;
-  await loc.scrollIntoViewIfNeeded().catch(() => undefined);
-  await sleep(300);
-  return true;
+async function filesNameVisible(page: Page, filename: string, title = ""): Promise<boolean> {
+  const needles = [filename, filename.replace(/\.pdf$/i, ""), title].filter((s) => s.trim().length >= 4);
+  for (const needle of needles) {
+    const loc = page.getByText(needle, { exact: false }).first();
+    if (!(await loc.isVisible({ timeout: 800 }).catch(() => false))) continue;
+    await loc.scrollIntoViewIfNeeded().catch(() => undefined);
+    await sleep(300);
+    return true;
+  }
+  return false;
 }
 
-async function scrollFilesForName(page: Page, filename: string): Promise<boolean> {
-  if (await filesNameVisible(page, filename)) return true;
+async function expandFilesRowAuthors(page: Page, filename: string, title = ""): Promise<void> {
+  const needles = [filename, filename.replace(/\.pdf$/i, ""), title].filter((s) => s.trim().length >= 4);
+  const clicked = await page
+    .evaluate((needles: string[]) => {
+      const moreRe = /(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i;
+      const nodes = Array.from(document.querySelectorAll("button, a, span, div, [role='button']"));
+      const hit = nodes.find((el) => {
+        const compact = ((el as HTMLElement).innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!moreRe.test(compact) || /show less/i.test(compact)) return false;
+        if (compact.length > 160) return false;
+        let cur: HTMLElement | null = el as HTMLElement;
+        for (let i = 0; i < 14 && cur; i++) {
+          const row = (cur.innerText || "").replace(/\s+/g, " ");
+          if (needles.some((n) => n && row.includes(n))) return true;
+          cur = cur.parentElement;
+        }
+        return false;
+      }) as HTMLElement | undefined;
+      if (!hit) return false;
+      hit.click();
+      return true;
+    }, needles)
+    .catch(() => false);
+  if (!clicked) return;
+  log("SciSpace: 省略著者（+N More）を展開します");
+  await sleep(700);
+}
+
+async function scrollFilesForName(page: Page, filename: string, title = ""): Promise<boolean> {
+  if (await filesNameVisible(page, filename, title)) return true;
   const firstPdf = page.getByText(/\.pdf\b/).first();
   if (await firstPdf.isVisible({ timeout: 800 }).catch(() => false)) {
     await firstPdf.hover().catch(() => undefined);
     await sleep(200);
   }
   for (let i = 0; i < 80; i++) {
-    if (await filesNameVisible(page, filename)) return true;
+    if (await filesNameVisible(page, filename, title)) return true;
     await page.mouse.wheel(0, 900);
     await sleep(160);
   }
-  return filesNameVisible(page, filename);
+  return filesNameVisible(page, filename, title);
 }
 
 async function filterFilesList(page: Page, folderUrl: string, filename: string, title = ""): Promise<void> {
   if (!(await isNotebooksFilesView(page, folderUrl))) {
     await restoreFolderFilesTable(page, folderUrl);
   }
-  if (await filesNameVisible(page, filename)) return;
+  if (await filesNameVisible(page, filename, title)) return;
 
   const stem = filename.replace(/\.pdf$/i, "");
-  const queries = [stem, filename, stem.replace(/\./g, " "), title.slice(0, 48)].filter((q) => q.trim().length >= 4);
+  const queries = [title.slice(0, 48), stem, filename, stem.replace(/\./g, " ")].filter((q) => q.trim().length >= 4);
   for (const q of queries) {
     if (!(await isNotebooksFilesView(page, folderUrl))) {
       await restoreFolderFilesTable(page, folderUrl);
@@ -325,12 +391,12 @@ async function filterFilesList(page: Page, folderUrl: string, filename: string, 
     }
     if (await fillFilesListSearch(page, folderUrl, q)) {
       await sleep(400);
-      if (await filesNameVisible(page, filename)) return;
+      if (await filesNameVisible(page, filename, title)) return;
     }
   }
   await fillFilesListSearch(page, folderUrl, "");
   await sleep(400);
-  await scrollFilesForName(page, filename);
+  await scrollFilesForName(page, filename, title);
 }
 
 type FilesCardCandidates = { texts: string[]; dois: string[] };
@@ -402,13 +468,14 @@ async function readFilesRowCardText(page: Page, filename: string): Promise<strin
 async function collectFilesCardCandidates(
   page: Page,
   filename: string,
+  title = "",
 ): Promise<FilesCardCandidates> {
   const stem = filename.replace(/\.pdf$/i, "");
   const empty: FilesCardCandidates = { texts: [], dois: [] };
   const fromDom = await Promise.race([
     page
       .evaluate(
-        ({ filename: name, stem: st }) => {
+        ({ filename: name, stem: st, title: ti }) => {
           const texts: string[] = [];
           const dois: string[] = [];
           const seen = new Set<string>();
@@ -432,32 +499,38 @@ async function collectFilesCardCandidates(
               cur = cur.parentElement;
             }
           };
+          const matches = (t: string) =>
+            t === name || t === st || t.endsWith(name) || (ti && t.includes(ti));
 
           const nameHits = Array.from(
             document.querySelectorAll("a, span, div, p, td, li, h2, h3, h4"),
-          ).filter((el) => {
-            const t = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-            return t === name || t === st || t.endsWith(name);
-          });
+          ).filter((el) => matches((el.textContent ?? "").replace(/\s+/g, " ").trim()));
           for (const el of nameHits) walkUp(el);
 
           for (const el of Array.from(
             document.querySelectorAll("tr, [role='row'], li, article, [role='listitem']"),
           )) {
             const t = ((el as HTMLElement).innerText ?? "").trim();
-            if (!t.includes(name) && !(st && t.includes(st))) continue;
+            if (!t.includes(name) && !(st && t.includes(st)) && !(ti && t.includes(ti))) continue;
             pushText(t);
             pushDois(el);
           }
 
           if (texts.length === 0) {
             const hay = document.body?.innerText ?? "";
-            const idx = hay.indexOf(name) >= 0 ? hay.indexOf(name) : hay.indexOf(st);
+            const idx =
+              hay.indexOf(name) >= 0
+                ? hay.indexOf(name)
+                : hay.indexOf(st) >= 0
+                  ? hay.indexOf(st)
+                  : ti
+                    ? hay.indexOf(ti)
+                    : -1;
             if (idx >= 0) pushText(hay.slice(idx, idx + 2500));
           }
           return { texts: texts.slice(0, 60), dois: dois.slice(0, 20) };
         },
-        { filename, stem },
+        { filename, stem, title },
       )
       .catch(() => empty),
     new Promise<FilesCardCandidates>((resolve) => setTimeout(() => resolve(empty), 5_000)),
@@ -631,6 +704,7 @@ export async function captureSciSpaceCardMeta(
     }
     await openNotebooksFilesView(page, folderUrl);
     await filterFilesList(page, folderUrl, filename, state.title);
+    await expandFilesRowAuthors(page, filename, state.title);
     if (looksLikeSciSpaceNav(state.tldr)) state.tldr = "";
     if (!(await isNotebooksFilesView(page, folderUrl))) {
       warn("SciSpace: Files 以外の画面に出たのでフォルダへ戻ります");
@@ -643,9 +717,10 @@ export async function captureSciSpaceCardMeta(
       if (!(await isNotebooksFilesView(page, folderUrl))) {
         await restoreFolderFilesTable(page, folderUrl);
       }
-      if (!(await filesNameVisible(page, filename))) {
+      if (!(await filesNameVisible(page, filename, state.title))) {
         await filterFilesList(page, folderUrl, filename, state.title);
       }
+      await expandFilesRowAuthors(page, filename, state.title);
       filesTldr = await readFilesRowTldr(page, filename);
       if (!(descriptionUsable(filesTldr) || tldrUsable(filesTldr))) {
         filesTldr = await readFilesColumnTldr(page, filename);
@@ -691,7 +766,8 @@ export async function captureSciSpaceCardMeta(
       }
       filesTldr = await readFilesColumnTldr(page, filename);
     }
-    const found = await collectFilesCardCandidates(page, filename);
+    await expandFilesRowAuthors(page, filename, state.title);
+    const found = await collectFilesCardCandidates(page, filename, state.title);
     let filesPaste = "";
     for (const t of found.texts) {
       filesPaste = rawFilesCardPaste(t, filename);
@@ -700,9 +776,27 @@ export async function captureSciSpaceCardMeta(
     if (!filesPaste) {
       filesPaste = rawFilesCardPaste(pickBestSciSpaceCardText(found.texts, filename), filename);
     }
+    if (!filesPaste && state.title) {
+      const best = found.texts.find((t) => t.includes(state.title) && /Uploaded on|PDF UPLOAD/i.test(t)) || "";
+      if (best) filesPaste = `${filename}\n${best}`.slice(0, 4000);
+    }
     if (filesPaste && containsForeignPdf(filesPaste, filename)) {
       warn(`SciSpace Files の取得に他の PDF が混ざっていたので、${filename} のカードだけ使います`);
       filesPaste = rawFilesCardPaste(filesPaste, filename);
+    }
+    if (filesRowHasTruncatedAuthors(filesPaste)) {
+      await expandFilesRowAuthors(page, filename, state.title);
+      const again = await collectFilesCardCandidates(page, filename, state.title);
+      for (const t of again.texts) {
+        const next = rawFilesCardPaste(t, filename);
+        if (next && !filesRowHasTruncatedAuthors(next)) {
+          filesPaste = next;
+          break;
+        }
+      }
+    }
+    if (filesRowHasTruncatedAuthors(filesPaste)) {
+      warn("SciSpace: 著者の +N More を展開できなかったので、省略表記のまま貼ります");
     }
     applyExtractedCard(state, filename, extractSciSpaceCardMeta(filesPaste, filename), found.dois);
     if (descriptionUsable(filesTldr) || tldrUsable(filesTldr)) {
@@ -728,7 +822,7 @@ export async function captureSciSpaceCardMeta(
       throw new Error(`SciSpace の個別ページ URL が見つかりません（${filename}）`);
     }
 
-    if (!(descriptionUsable(state.tldr) || tldrUsable(state.tldr)) && sciSpaceMetaStillIncomplete(state, filename)) {
+    if (sciSpaceMetaStillIncomplete(state, filename) || sciSpaceTldrStillIncomplete(state)) {
       await fillMetaFromRecordPage(page, state, filename);
     }
     if (descriptionUsable(filesTldr) || tldrUsable(filesTldr)) {
@@ -736,7 +830,10 @@ export async function captureSciSpaceCardMeta(
     }
 
     log(
-      `SciSpace メタ: title=${state.title.slice(0, 80)} doi=${state.doi || "(なし)"} tldr=${descriptionUsable(state.tldr) || tldrUsable(state.tldr) ? "あり" : "なし"} paste=${state.filesPaste.trim() ? "あり" : "なし"}`,
+      `SciSpace メタ: title=${state.title.slice(0, 80)} doi=${state.doi || "(なし)"} venue=${state.venue || "(なし)"}`,
+    );
+    log(
+      `SciSpace TL;DR: ${descriptionUsable(state.tldr) || tldrUsable(state.tldr) ? "あり" : "なし"}`,
     );
     log(`SciSpace 個別ページ: ${state.scispaceUrl}`);
   } catch (e) {
@@ -748,8 +845,11 @@ export async function captureSciSpaceCardMeta(
 function sciSpaceMetaStillIncomplete(state: PaperState, filename: string): boolean {
   if (titleLooksLikeFilename(state.title, filename)) return true;
   if (!state.filesPaste.trim()) return true;
-  if (!descriptionUsable(state.tldr) && !tldrUsable(state.tldr)) return true;
   return false;
+}
+
+function sciSpaceTldrStillIncomplete(state: PaperState): boolean {
+  return !descriptionUsable(state.tldr) && !tldrUsable(state.tldr);
 }
 
 function applyExtractedCard(
@@ -758,17 +858,17 @@ function applyExtractedCard(
   card: ReturnType<typeof extractSciSpaceCardMeta>,
   dois: string[] = [],
 ): void {
-  const filesTldrOpener =
-    /^(The paper|This paper|The study|This study|本研究|本論文)\b/i;
-  if (card.tldr && (tldrUsable(card.tldr) || descriptionUsable(card.tldr)) && filesTldrOpener.test(card.tldr)) {
-    state.tldr = card.tldr;
-  }
   if (card.title && !looksLikeSciSpaceNav(card.title) && !titleLooksLikeFilename(card.title, filename) && !looksLikeCitationTitle(card.title) && !looksLikeVenueLine(card.title)) {
     state.title = card.title;
   } else if (!state.title) state.title = filename.replace(/\.pdf$/i, "");
   if (card.venue && !looksLikeSciSpaceNav(card.venue)) state.venue = card.venue;
   const doi = card.doi || dois.map((d) => doiFromHrefOrText(d)).find(Boolean) || "";
   if (doi) state.doi = doi;
+  const filesTldrOpener =
+    /^(The paper|This paper|The study|This study|本研究|本論文)\b/i;
+  if (card.tldr && (tldrUsable(card.tldr) || descriptionUsable(card.tldr)) && filesTldrOpener.test(card.tldr)) {
+    state.tldr = card.tldr;
+  }
 }
 
 const READ_SCISPACE_ABSTRACT = `(() => {
@@ -848,7 +948,7 @@ async function fillMetaFromRecordPage(page: Page, state: PaperState, filename: s
   const card = extractSciSpaceCardMeta(raw, filename);
   if ((!card.title || titleLooksLikeFilename(card.title, filename) || looksLikeSciSpaceNav(card.title) || looksLikeCitationTitle(card.title) || looksLikeVenueLine(card.title)) && heading) {
     card.title = heading;
-    card.paste = [heading, card.yearAuthorLine, card.venue].filter(Boolean).join("\n");
+    card.paste = metadataPasteFromCard(card, filename);
   }
   if ((!tldrUsable(card.tldr)) && tldrUsable(ogDesc)) {
     card.tldr = ogDesc.slice(0, 2000);
@@ -865,7 +965,7 @@ export async function captureSciSpaceRecordUrl(
   if (isSciSpaceRecordUrl(state.scispaceUrl)) return state.scispaceUrl;
   try {
     await openNotebooksFilesView(page, folderUrl);
-    await filterFilesList(page, folderUrl, filename);
+    await filterFilesList(page, folderUrl, filename, state.title);
     const url = await findSciSpaceRecordUrl(page, folderUrl, filename);
     if (!isSciSpaceRecordUrl(url)) {
       throw new Error(`SciSpace の個別ページ URL が見つかりません（${filename}）`);

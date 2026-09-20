@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
-import { fileStem } from "./match.ts";
+import { fileStem, normalizePdfFilename, type ExistingPaper } from "./match.ts";
 import { needsRawFilesPaste } from "./scispace-card.ts";
 import { doneMarkerPath, emptyState, loadState, type PaperState, type StudioStageId } from "./state.ts";
 import { missingStudioStages } from "./studio-select.ts";
@@ -129,6 +129,51 @@ function listWorkDirs(workDir: string): string[] {
   } catch {
     return [];
   }
+}
+
+function pdfNamesInPaperDir(paperDir: string, stateFilename: string): string[] {
+  const names = new Set<string>();
+  if (stateFilename.trim()) names.add(stateFilename.trim());
+  try {
+    for (const n of readdirSync(paperDir)) {
+      if (n.startsWith(".")) continue;
+      if (!n.toLowerCase().endsWith(".pdf")) continue;
+      names.add(n);
+    }
+  } catch {
+    /* フォルダが読めなくても state の名前は使う */
+  }
+  return [...names];
+}
+
+/** 作業フォルダ内の PDF 名称（同一論文の判定用。Edu Share 一覧は見ない） */
+export function listExistingWorkPapers(workDir: string): ExistingPaper[] {
+  const papers: ExistingPaper[] = [];
+  const seen = new Set<string>();
+  for (const name of listWorkDirs(workDir)) {
+    const { state, paperDir } = loadWorkPaper(workDir, name);
+    for (const filename of pdfNamesInPaperDir(paperDir, state.filename)) {
+      const key = `${paperDir}\0${normalizePdfFilename(filename)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      papers.push({
+        title: state.title,
+        doi: state.doi,
+        filename,
+        id: state.eduShareTestId || undefined,
+        url: state.eduShareTestUrl || undefined,
+        paperDir,
+      });
+    }
+  }
+  return papers;
+}
+
+export function existingWorkPapersExcept(
+  workDir: string,
+  paperDir: string,
+): ExistingPaper[] {
+  return listExistingWorkPapers(workDir).filter((p) => p.paperDir !== paperDir);
 }
 
 /** inbox から移したあとも、MP4 が無い完了論文を worker が拾えるようにする */

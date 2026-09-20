@@ -127,6 +127,7 @@ export function textLooksLikeGenerating(t: string): boolean {
     return true;
   }
   if (/\bsync\b/i.test(t) && /スライド資料|動画解説|Video overview|Slide deck/i.test(t)) return true;
+  if (/の生成を開始しています/.test(t)) return true;
   return false;
 }
 

@@ -5,6 +5,7 @@ import type { AppConfig } from "./config.ts";
 import { assertPageAlive, isTargetClosedError, isTargetClosedMessage, recoverStuckPage } from "./browser.ts";
 import {
   ensurePaperDir,
+  existingWorkPapersExcept,
   hasDoneMarker,
   moveInboxPdfToPaperDir,
   writeDoneMarker,
@@ -25,6 +26,7 @@ import {
   saveState,
   STAGES,
   studioKickoffBegun,
+  studioKickoffSettled,
   unmarkStudioStarted,
   type PaperState,
   type StageId,
@@ -32,7 +34,6 @@ import {
 } from "./state.ts";
 import {
   attachEduShareVideo,
-  collectExistingPapers,
   applySciSpaceMetaToPaperPage,
   runEduShareMaterials,
   runEduShareUpload,
@@ -41,7 +42,13 @@ import {
 } from "./steps/edushare.ts";
 import { runNotebookLm } from "./steps/notebooklm.ts";
 import { captureSciSpaceCardMeta, captureSciSpaceRecordUrl, runSciSpaceMeta, runSciSpaceUpload } from "./steps/scispace.ts";
-import { descriptionUsable, needsRawFilesPaste, sciSpaceExtractionLooksLikeChrome, tldrUsable } from "./scispace-card.ts";
+import {
+  descriptionUsable,
+  needsRawFilesPaste,
+  sciSpaceTldrLooksLikeChrome,
+  sciSpaceTitleLooksLikeChrome,
+  tldrUsable,
+} from "./scispace-card.ts";
 import { GenerationWaitingError } from "./waiting.ts";
 import { currentNotebookQuotaPause, NotebookQuotaPauseError } from "./notebook-quota.ts";
 import { needsLocalVideoFile, videoFileReady } from "./video-file.ts";
@@ -70,16 +77,15 @@ function applyFromStage(state: PaperState, from: StageId | null): void {
   saveState(state);
 }
 
-/** タイトルだけ一致した既存スキップは、隣カードの誤メタのことがあるのでやり直す */
+/** ファイル名では一致しない既存スキップは、タイトル誤判定のことがあるのでやり直す */
 function undoTitleOnlyExistingSkip(state: PaperState, existing: ExistingPaper[]): boolean {
   if (!state.skippedAlreadyUploaded || state.eduShareTestId) return false;
-  const byFileOrDoi = matchesExistingPaper(existing, {
+  const byFile = matchesExistingPaper(existing, {
     filename: state.filename,
-    doi: state.doi,
   });
-  if (byFileOrDoi) return false;
+  if (byFile) return false;
   log(
-    `前回の既存スキップを取り消します（${state.filename}: ファイル名/DOI では一致せず、タイトルのみ）`,
+    `前回の既存スキップを取り消します（${state.filename}: PDF 名称では一致しません）`,
   );
   state.skippedAlreadyUploaded = false;
   clearStage(state, "sci-meta");
@@ -101,7 +107,7 @@ function adoptExistingEduSharePaper(
 ): boolean {
   if (!hit.id) return false;
   const url = hit.url || `${baseUrl.replace(/\/$/, "")}/tests/${hit.id}`;
-  log(`Edu Share に既存なので論文ページへつなぎます: ${hit.title || hit.id}`);
+  log(`Edu Share に既存なので論文ページへつなぎます: ${hit.filename || hit.title || hit.id}`);
   state.eduShareTestId = hit.id;
   state.eduShareTestUrl = url;
   state.skippedAlreadyUploaded = false;
@@ -211,23 +217,28 @@ export async function repairSciSpaceCardMeta(
       });
       const oldTitleOk = titleUsableForExistingMatch(before.title, state.filename);
       const newTitleOk = titleUsableForExistingMatch(state.title, state.filename);
-      const newIsChrome = sciSpaceExtractionLooksLikeChrome(state.title, state.tldr);
-      if (newIsChrome || (oldTitleOk && !newTitleOk)) {
+      const titleChrome = sciSpaceTitleLooksLikeChrome(state.title);
+      const tldrChrome = sciSpaceTldrLooksLikeChrome(state.tldr);
+      if (titleChrome || (oldTitleOk && !newTitleOk)) {
         log(`${state.filename}: SciSpace 画面の文言なので前回のメタを残します`);
-        const keptTldr = descriptionUsable(state.tldr)
-          ? state.tldr
-          : descriptionUsable(before.tldr)
-            ? before.tldr
-            : tldrUsable(state.tldr)
-              ? state.tldr
-              : tldrUsable(before.tldr)
-                ? before.tldr
-                : "";
         state.title = before.title;
         state.filesPaste = before.filesPaste;
-        state.tldr = keptTldr;
         state.venue = before.venue;
         state.doi = before.doi;
+      }
+      if (tldrChrome) {
+        log(`${state.filename}: SciSpace 画面の文言なので前回の TL;DR を残します`);
+        state.tldr = descriptionUsable(before.tldr)
+          ? before.tldr
+          : tldrUsable(before.tldr)
+            ? before.tldr
+            : "";
+      } else if (!descriptionUsable(state.tldr) && descriptionUsable(before.tldr)) {
+        state.tldr = before.tldr;
+      } else if (!tldrUsable(state.tldr) && tldrUsable(before.tldr)) {
+        state.tldr = before.tldr;
+      }
+      if (titleChrome || (oldTitleOk && !newTitleOk)) {
         state.lastError = "";
         saveState(state);
         if (oldTitleOk) {
@@ -235,8 +246,6 @@ export async function repairSciSpaceCardMeta(
         }
         continue;
       }
-      if (!descriptionUsable(state.tldr) && descriptionUsable(before.tldr)) state.tldr = before.tldr;
-      else if (!tldrUsable(state.tldr) && tldrUsable(before.tldr)) state.tldr = before.tldr;
       saveState(state);
       const changed =
         before.title !== state.title ||
@@ -300,29 +309,11 @@ function reopenStudioFollowup(
   return true;
 }
 
-export async function loadExistingFromEduShare(
-  page: Page,
-  cfg: AppConfig,
-): Promise<ExistingPaper[]> {
-  try {
-    return await collectExistingPapers(page, cfg.eduShareBaseUrl, {
-      email: cfg.eduShareEmail,
-      password: cfg.eduSharePassword,
-    });
-  } catch (e) {
-    warn(
-      `論文一覧の取得に失敗しました（${e instanceof Error ? e.message : e}）。既存判定は弱くなります。`,
-    );
-    await recoverStuckPage(page);
-    return [];
-  }
-}
-
 export async function processOnePaper(
   page: Page,
   cfg: AppConfig,
   item: InboxPdf,
-  existing: ExistingPaper[],
+  _existing: ExistingPaper[] = [],
   opts: { skipStudio?: boolean } = {},
 ): Promise<"done" | "skipped" | "failed" | "waiting" | "quota"> {
   ensurePaperDir(item.paperDir);
@@ -337,6 +328,11 @@ export async function processOnePaper(
   state.inboxPdfPath = item.absPath;
   state.filename = item.filename;
   state.paperDir = item.paperDir;
+  if (state.waitingFor && isCompleted(state, state.waitingFor)) {
+    log(`${item.filename}: ${state.waitingFor} は完了済みなので待ちを外します`);
+    state.waitingFor = "";
+    state.generationStartedAt = "";
+  }
   saveState(state);
 
   const selected = cfg.studioGenerate;
@@ -366,7 +362,7 @@ export async function processOnePaper(
     }
   }
 
-  undoTitleOnlyExistingSkip(state, existing);
+  undoTitleOnlyExistingSkip(state, existingWorkPapersExcept(cfg.workDir, item.paperDir));
 
   if (
     state.skippedAlreadyUploaded &&
@@ -383,15 +379,15 @@ export async function processOnePaper(
     }
   }
 
+  const existing = existingWorkPapersExcept(cfg.workDir, item.paperDir);
   const early = matchesExistingPaper(existing, {
     filename: item.filename,
-    doi: state.doi,
   });
   if (early && !state.eduShareTestId) {
     if (adoptExistingEduSharePaper(state, early, cfg.eduShareBaseUrl)) {
       reopenStudioFollowup(state, selected, item.paperDir);
     } else {
-      log(`スキップ（Edu Share に既存: ${early.title || early.doi}）: ${item.filename}`);
+      log(`スキップ（作業フォルダに既存: ${early.filename || early.title}）: ${item.filename}`);
       state.skippedAlreadyUploaded = true;
       saveState(state);
       return "skipped";
@@ -401,7 +397,10 @@ export async function processOnePaper(
   applyFromStage(state, cfg.fromStage && cfg.onlyFilename ? cfg.fromStage : null);
 
   const quotaPause = await currentNotebookQuotaPause(cfg);
-  const skipStudioAfterDisconnect = isTargetClosedMessage(state.lastError);
+  const skipStudioAfterDisconnect =
+    isTargetClosedMessage(state.lastError) &&
+    studioKickoffSettled(state, cfg.studioSkip) &&
+    videoFileReady(item.paperDir, state.videoMp4Path);
   const skipKickoff = quotaPause != null;
   const forceSkipStudio = opts.skipStudio === true || skipStudioAfterDisconnect;
   const skipStudio =
@@ -448,15 +447,13 @@ export async function processOnePaper(
       await applySciSpaceMetaToPaperPage(page, { paperDir: item.paperDir, state });
     }
 
-    const afterSci = matchesExistingPaper(existing, {
+    const afterSci = matchesExistingPaper(existingWorkPapersExcept(cfg.workDir, item.paperDir), {
       filename: item.filename,
-      title: titleUsableForExistingMatch(state.title, item.filename) ? state.title : "",
-      doi: state.doi,
     });
     if (afterSci && !state.eduShareTestId) {
       if (!adoptExistingEduSharePaper(state, afterSci, cfg.eduShareBaseUrl)) {
         log(
-          `SciSpace 後スキップ（Edu Share に既存: ${afterSci.title || afterSci.doi}）。PDF は入力側に残します。`,
+          `SciSpace 後スキップ（作業フォルダに既存: ${afterSci.filename || afterSci.title}）。PDF は入力側に残します。`,
         );
         state.skippedAlreadyUploaded = true;
         saveState(state);
@@ -538,7 +535,7 @@ export async function processOnePaper(
     if (e instanceof GenerationWaitingError) {
       state.waitingFor = e.stage;
       if (!state.generationStartedAt) state.generationStartedAt = new Date().toISOString();
-      markStudioStarted(state, e.stage);
+      if (!skipStudio) markStudioStarted(state, e.stage);
       state.lastError = "";
       saveState(state);
       log(`${item.filename}: 生成待ち（${e.stage}）。Chrome を明け渡します`);

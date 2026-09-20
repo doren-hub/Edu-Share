@@ -37,6 +37,15 @@ alter table public.tests
 alter table public.tests
   add column if not exists paper_authors text[];
 
+alter table public.tests
+  add column if not exists pdf_filename text;
+
+create unique index if not exists tests_paper_pdf_filename_lower_uidx
+  on public.tests (lower(pdf_filename))
+  where document_type = 'paper'
+    and pdf_filename is not null
+    and length(trim(pdf_filename)) > 0;
+
 update public.tests
 set document_type = 'past_exam'
 where document_type is null;

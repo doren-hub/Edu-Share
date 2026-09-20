@@ -8,6 +8,8 @@ import {
   normalizeFilesRowText,
   rawFilesCardPaste,
   needsRawFilesPaste,
+  filesRowHasTruncatedAuthors,
+  eduShareSciSpaceMetadataPaste,
   pickBestSciSpaceCardText,
   sciSpaceExtractionLooksLikeChrome,
   titleLooksLikeFilename,
@@ -49,6 +51,8 @@ test("extractSciSpaceCardMeta: ナビ付きコピーからタイトル・年著�
       "arXiv",
     ].join("\n"),
   );
+  assert.doesNotMatch(m.paste, /This paper examines/);
+  assert.doesNotMatch(m.paste, /2312\.01865v1\.pdf/);
 });
 
 test("Files 行が1行でもタイトル・年著者・arXiv を貼り付け用に分ける", () => {
@@ -83,6 +87,55 @@ test("rawFilesCardPaste: Files 行をタイトル・著者だけに加工しな�
   assert.notEqual(extractSciSpaceCardMeta(row, "2307.09009v3.pdf").paste, paste);
 });
 
+test("eduShareSciSpaceMetadataPaste: タイトル・年⋅著者・掲載の3行はそのまま（Show Less も残す）", () => {
+  const meta = [
+    "Drift No More? Context Equilibria in Multi-Turn LLM Interactions",
+    "2025\u22c5Vardhan Dongre, Ryan A. Rossi, Viet Dac Lai, David Seunghyun Yoon, Dilek Hakkani-T\u00fcr, Trung BuiShow Less",
+    "arXiv",
+  ].join("\n");
+  const row = [
+    "2510.07777v1.pdf",
+    meta,
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+    "The paper investigates context drift in multi-turn interactions of Large Language Models (LLMs), proposing a framework to understand and mitigate this phenomenon.",
+  ].join("\n");
+  assert.equal(eduShareSciSpaceMetadataPaste(row, "2510.07777v1.pdf"), meta);
+  assert.equal(eduShareSciSpaceMetadataPaste(meta, "2510.07777v1.pdf"), meta);
+  assert.doesNotMatch(eduShareSciSpaceMetadataPaste(row, "2510.07777v1.pdf"), /The paper investigates/);
+});
+
+test("eduShareSciSpaceMetadataPaste: ワークショップ掲載と +N More もメタ3行に残し TL;DR は入れない", () => {
+  const meta = [
+    "EVALUATING PERFORMANCE DRIFT FROM MODEL SWITCHING IN MULTI-TURN LLM SYSTEMS",
+    "2026 · Raad Khraishi, Iman Zafar ...+2 More",
+    "ICLR 2026 CAO Workshop",
+  ].join("\n");
+  const row = [
+    "2603.03111v1.pdf",
+    meta,
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+    "The paper introduces a switch-matrix benchmark to measure performance drift in multi-turn language model systems when switching between models. It highlights that even a single-turn handoff can significantly affect outcomes, emphasizing the need for monitoring and mitigation strategies to address operational reliability in these systems 1 2 .",
+  ].join("\n");
+  assert.equal(eduShareSciSpaceMetadataPaste(row, "2603.03111v1.pdf"), meta);
+  const card = extractSciSpaceCardMeta(row, "2603.03111v1.pdf");
+  assert.equal(card.venue, "ICLR 2026 CAO Workshop");
+  assert.match(card.tldr, /switch-matrix benchmark/);
+  assert.doesNotMatch(card.tldr, /\s1(\s+2)?\.?$/);
+  assert.doesNotMatch(eduShareSciSpaceMetadataPaste(row, "2603.03111v1.pdf"), /switch-matrix/);
+});
+
+test("eduShareSciSpaceMetadataPaste: TL;DR とアップロード行だけなら空にする", () => {
+  const row = [
+    "42c1add0da9312ee.pdf",
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+    "The paper discusses the concept of multiverses, particularly focusing on the Level IV multiverse, which encompasses all possible mathematical structures.",
+  ].join("\n");
+  assert.equal(eduShareSciSpaceMetadataPaste(row, "42c1add0da9312ee.pdf"), "");
+});
+
 test("needsRawFilesPaste: タイトル・著者だけの貼り付けは取り直す", () => {
   assert.equal(
     needsRawFilesPaste({
@@ -107,6 +160,28 @@ test("needsRawFilesPaste: タイトル・著者だけの貼り付けは取り直
       filesPaste:
         "2601.15300v1.pdf\nA title\n2026⋅Weiwei Wang\narXiv\nPDF UPLOAD\nUploaded on 20 Sep 2026",
     }),
+    false,
+  );
+  assert.equal(
+    needsRawFilesPaste({
+      filename: "2510.07777v1.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/more",
+      filesPaste:
+        "2510.07777v1.pdf\nDrift No More? Context Equilibria in Multi-Turn LLM Interactions\n2025 · Vardhan Dongre, Ryan A. Rossi ...+4 More\narXiv\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+    }),
+    false,
+  );
+});
+
+test("filesRowHasTruncatedAuthors: +N More と展開後", () => {
+  assert.equal(
+    filesRowHasTruncatedAuthors("2025 · Vardhan Dongre, Ryan A. Rossi ...+4 More"),
+    true,
+  );
+  assert.equal(
+    filesRowHasTruncatedAuthors(
+      "2025 · Vardhan Dongre, Ryan A. Rossi, Viet Dac Lai, David Seunghyun Yoon, Dilek Hakkani-Tür, Trung Bui Show Less",
+    ),
     false,
   );
 });

@@ -214,6 +214,10 @@ export default function UploadPage() {
     }
 
     if (!res.ok) {
+      if (res.status === 409 && typeof json?.testId === "string" && json.testId) {
+        router.push(`/tests/${json.testId}`);
+        return;
+      }
       if (res.status === 413) {
         setError(
           "アップロードデータが大きすぎます（HTTP 413）。PDF のサイズを抑えるか、ホスティングのリクエスト上限を確認してください。",
@@ -466,7 +470,7 @@ export default function UploadPage() {
                 {pastingPaperMeta ? "反映中..." : "貼り付けから項目に反映"}
               </button>
               <p className="text-[11px] leading-relaxed text-zinc-600">
-                タイトル・発表年・掲載・DOI・著者に反映します。著者名はカンマ区切りで分割し、ピックリストの選択肢にも登録します。業界・発表年は任意です。
+                タイトル・発表年・掲載・DOI・著者に反映します。TL;DR や説明文は上の説明欄へ。著者名はカンマ区切りで分割し、ピックリストの選択肢にも登録します。業界・発表年は任意です。
               </p>
             </div>
             <PaperFormFields

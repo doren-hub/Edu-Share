@@ -25,6 +25,8 @@ export type TestRow = {
   paper_authors?: unknown;
   paper_venue?: string | null;
   paper_doi?: string | null;
+  /** アップロード時の PDF ファイル名（論文の同一判定） */
+  pdf_filename?: string | null;
   /** 論文一覧の資料バッジ用（省略時は未使用） */
   notebooklm_slide_pdf_storage_path?: string | null;
   notebooklm_video_mp4_storage_path?: string | null;
@@ -197,6 +199,7 @@ export function TestList({
         <li key={t.id}>
           <Link
             href={`/tests/${t.id}`}
+            data-pdf-filename={t.pdf_filename?.trim() || undefined}
             className={
               compact
                 ? "block rounded-lg border border-zinc-200 bg-zinc-50/40 px-3 py-2.5 transition hover:border-zinc-300 hover:bg-white"
@@ -220,6 +223,18 @@ export function TestList({
                 >
                   {t.title}
                 </h2>
+                {(t.document_type ?? "past_exam") === "paper" && t.pdf_filename?.trim() ? (
+                  <p
+                    className={
+                      compact
+                        ? "mt-0.5 truncate text-[11px] leading-snug text-zinc-500"
+                        : "mt-1 truncate text-xs text-zinc-500"
+                    }
+                    title={t.pdf_filename.trim()}
+                  >
+                    PDF: {t.pdf_filename.trim()}
+                  </p>
+                ) : null}
                 {!compact && t.description ? (
                   <p className="mt-1 line-clamp-2 text-sm text-zinc-600">
                     {t.description}

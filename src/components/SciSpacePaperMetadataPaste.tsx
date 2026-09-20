@@ -194,7 +194,7 @@ export function SciSpacePaperMetadataPaste({
           SciSpace などからコピーしたメタ情報（任意）
         </p>
         <p className="mt-1 text-xs text-sky-900/85">
-          タイトル・発表年・掲載・DOI・著者を解析してテストに保存します。発表年は候補に無い西暦4桁でも自動で候補に追加してから保存します。著者名もピックリストの選択肢に登録します。業界は貼り付けからは変えず、必要なら「資料情報」から編集してください。
+          タイトル・発表年・掲載・DOI・著者を解析してテストに保存します。TL;DR や論文の説明文はここには貼らず、「資料情報」の説明欄へ入れてください。発表年は候補に無い西暦4桁でも自動で候補に追加してから保存します。著者名もピックリストの選択肢に登録します。業界は貼り付けからは変えず、必要なら「資料情報」から編集してください。
         </p>
         <textarea
           className="mt-2 min-h-[100px] w-full rounded-md border border-sky-200 bg-white px-3 py-2 font-mono text-xs text-zinc-800"

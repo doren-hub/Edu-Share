@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
-import { TEST_BROWSE_PAPER_LIST_COLUMNS } from "@/lib/test-browse-select";
+import { TEST_BROWSE_COLUMNS, TEST_BROWSE_PAPER_LIST_COLUMNS } from "@/lib/test-browse-select";
 
 export const metadata: Metadata = {
   title: "論文｜EduShare",
@@ -28,11 +28,23 @@ export default async function PaperTestsPage() {
     .eq("document_type", "paper")
     .order("created_at", { ascending: false });
 
-  const [{ count: pastCount }, { count: paperCount }, { data: tests }] = await Promise.all([
+  const [{ count: pastCount }, { count: paperCount }, listed] = await Promise.all([
     pastCountQuery,
     paperCountQuery,
     listQuery,
   ]);
+
+  let tests = listed.data;
+  if (listed.error && /pdf_filename/i.test(listed.error.message ?? "")) {
+    const retry = await supabase
+      .from("tests")
+      .select(
+        `${TEST_BROWSE_COLUMNS},notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_questions_json,notebooklm_vocab_questions_json`,
+      )
+      .eq("document_type", "paper")
+      .order("created_at", { ascending: false });
+    tests = retry.data;
+  }
 
   const list = tests ?? [];
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;

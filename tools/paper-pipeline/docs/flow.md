@@ -41,8 +41,8 @@ Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短
 
 ```mermaid
 flowchart TD
-  start[PDF 1件] --> exist{Edu Share に既存?}
-  exist -->|ID が取れる| adopt[既存 /tests/uuid につなぐ]
+  start[PDF 1件] --> exist{work に同じ PDF 名?}
+  exist -->|work の PDF名が同じ| adopt[既存 /tests/uuid につなぐ]
   exist -->|判定不能| skip[skippedAlreadyUploaded]
   exist -->|なし| sciUp
   adopt --> sciUp
@@ -112,8 +112,9 @@ flowchart TD
   collect --> poll{メタは出た?}
   poll -->|いいえ| waitMeta[最大 90s 再読込]
   waitMeta --> collect
-  poll -->|はい| parse[title / authors / year / venue / doi / tldr / paste]
-  parse --> rec[records URL]
+  poll -->|はい| parseMeta[title / authors / year / venue / doi]
+  parseMeta --> parseTldr[tldr → 説明]
+  parseTldr --> rec[records URL]
   rec --> ok{records URL か?}
   ok -->|いいえ| errRec[失敗: 個別ページなし]
   ok -->|はい| markMeta[sci-meta 完了]
@@ -130,7 +131,7 @@ flowchart TD
 | `title` | タイトル |
 | `doi` | DOI 欄 |
 | `tldr` | 説明 |
-| `filesPaste` | SciSpace 貼り付け欄へ Files 行をそのまま入れる（タイトル・著者だけに加工しない）。完了済みでもファイル名付きの Files 行でなければ取り直す |
+| `filesPaste` | SciSpace Files から取った原文（判定・再取得用）。Edu Share のメタ欄にはタイトル・年著者行・掲載を原文のまま入れる（`Show Less` も残す）。TL;DR 本文は説明欄へ |
 | `venue` | 業界推定の材料 |
 | `scispaceUrl` | 論文ページの SciSpace URL |
 
@@ -139,7 +140,7 @@ flowchart TD
 ## Edu Share
 
 1. `/upload` に PDF。自動入力完了まで待つ。ログイン待ち中は触らない
-2. SciSpace 貼り付け欄に Files 行をそのまま入れる。業界は「その他」にしない。著者のデモ `A. Einstein` は使わない
+2. SciSpace のメタ（タイトル・年著者行・掲載）を原文のまま貼り付け欄へ。TL;DR は説明。DOI は DOI 欄。業界は「その他」にしない。著者のデモ `A. Einstein` / `A. K. Dewdney` は使わない
 3. 既存論文なら一覧の `/tests/{id}` につなぐ。削除ボタン `.bg-red-50` はエラーではない
 4. quiz.csv / vocab.csv / slides.pdf、動画は `POST /api/tests/{id}/material/video`
 5. SciSpace 個別 URL を保存し、PDF・スライド・動画・CSV 開始まで verify

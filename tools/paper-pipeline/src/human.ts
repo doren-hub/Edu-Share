@@ -21,15 +21,22 @@ export async function waitForEnter(message: string): Promise<void> {
   });
 }
 
+export function pageLooksLikeGoogleLogin(url: string, body: string): boolean {
+  if (/accounts\.google\.com|signin\.google/i.test(url)) return true;
+  return /Google でログイン|Sign in with Google|アカウントを選択してください|ログアウト済み|別のアカウントを使用/i.test(
+    body,
+  );
+}
+
 export async function looksLikeGoogleLogin(page: Page): Promise<boolean> {
+  let url = "";
   try {
-    const url = page.url();
-    if (/accounts\.google\.com|signin\.google/i.test(url)) return true;
+    url = page.url();
   } catch {
     return false;
   }
   const body = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
-  return /Google でログイン|Sign in with Google/i.test(body);
+  return pageLooksLikeGoogleLogin(url, body);
 }
 
 export async function looksLikeCaptcha(page: Page): Promise<boolean> {
@@ -44,7 +51,7 @@ export async function pauseIfBlocked(page: Page, context: string): Promise<void>
       `${context}: ログインまたは追加確認が必要です。ブラウザで済ませてから Enter を押してください。`,
     );
   } else {
-    log(`${context}: ログイン中は画面を触りません。このウィンドウでログインしてください`);
+    log(`${context}: ログイン中は画面を触りません。このウィンドウでアカウントを選んでログインしてください`);
   }
   const start = Date.now();
   const limit = 15 * 60_000;

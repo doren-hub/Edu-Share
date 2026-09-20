@@ -56,43 +56,49 @@ export function titleUsableForExistingMatch(title: string, filename: string): bo
   return true;
 }
 
-/** タイトルがファイル名のまま、貼り付けや TL;DR が空なら SciSpace メタが未入り */
+/** タイトルがファイル名のまま、または Files 原文が空なら SciSpace メタが未入り。TL;DR は見ない */
 export function sciSpaceCardMetaIncomplete(state: {
   title: string;
   filename: string;
   filesPaste: string;
-  tldr: string;
 }): boolean {
   if (!titleUsableForExistingMatch(state.title, state.filename)) return true;
   if (!state.filesPaste.trim()) return true;
-  if (!tldrUsable(state.tldr)) return true;
   return false;
+}
+
+/** TL;DR（説明）が未入り。メタ情報とは別 */
+export function sciSpaceTldrIncomplete(tldr: string): boolean {
+  return !tldrUsable(tldr);
 }
 
 export type ExistingPaper = {
   title: string;
   doi: string;
+  filename?: string;
   id?: string;
   url?: string;
+  paperDir?: string;
 };
 
+/** 論文 PDF の名称。パス・拡張子の有無・大小文字は同一とみなす */
+export function normalizePdfFilename(name: string): string {
+  const base = name.replace(/\\/g, "/").split("/").pop()?.trim() ?? "";
+  if (!base) return "";
+  const lower = base.toLowerCase();
+  return lower.endsWith(".pdf") ? lower : `${lower}.pdf`;
+}
+
+/** 既存論文かどうかは PDF ファイル名だけで判定する（タイトル・DOI は見ない） */
 export function matchesExistingPaper(
   existing: ExistingPaper[],
   candidate: { title?: string; doi?: string; filename?: string },
 ): ExistingPaper | null {
-  const doi = candidate.doi ? normalizeDoi(candidate.doi) : "";
-  if (doi) {
-    const hit = existing.find((e) => e.doi && normalizeDoi(e.doi) === doi);
-    if (hit) return hit;
-  }
-  const titles = [candidate.title, candidate.filename ? fileNameToTitle(candidate.filename) : ""]
-    .map((t) => t?.trim() ?? "")
-    .filter(Boolean);
-  for (const t of titles) {
-    const hit = existing.find((e) => titlesLikelySame(e.title, t));
-    if (hit) return hit;
-  }
-  return null;
+  const want = candidate.filename ? normalizePdfFilename(candidate.filename) : "";
+  if (!want) return null;
+  return (
+    existing.find((e) => e.filename && normalizePdfFilename(e.filename) === want) ?? null
+  );
 }
 
 export function pickBestOption(options: string[], haystackRaw: string): string {

@@ -51,6 +51,16 @@ test("needsLocalVideoFile: 生成済みで MP4 が無いときだけ", () => {
       }),
       false,
     );
+    assert.equal(
+      needsLocalVideoFile({
+        paperDir: dir,
+        videoMp4Path: "",
+        completed: ["nlm-quiz"],
+        notebooklmUrl: "https://notebook.google.com/notebook/x",
+        waitingFor: "nlm-video",
+      }),
+      true,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

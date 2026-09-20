@@ -61,7 +61,7 @@ const TEST_DETAIL_BASE_SELECT =
   "id,title,description,source_name,processing_status,processing_error,created_at,document_type,exam_department,exam_subject,exam_period,industry,publication_year,paper_doi,paper_venue,paper_authors,uploaded_by,quiz_source,notebooklm_questions_json,notebooklm_vocab_questions_json";
 
 const TEST_DETAIL_MATERIAL_COLS =
-  "notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_notebook_url,scispace_project_url";
+  "notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_notebook_url,scispace_project_url,pdf_filename";
 
 async function loadTestDetailRow(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -77,6 +77,7 @@ async function loadTestDetailRow(
     msg.includes("notebooklm_video_mp4_storage_path") ||
     msg.includes("notebooklm_notebook_url") ||
     msg.includes("scispace_project_url") ||
+    msg.includes("pdf_filename") ||
     msg.includes("quiz_source") ||
     msg.includes("notebooklm_questions_json") ||
     msg.includes("notebooklm_vocab_questions_json") ||
@@ -102,6 +103,7 @@ async function loadTestDetailRow(
         notebooklm_video_mp4_storage_path: null as string | null,
         notebooklm_notebook_url: null as string | null,
         scispace_project_url: null as string | null,
+        pdf_filename: null as string | null,
         quiz_source: "pdf" as string,
         notebooklm_questions_json: null as unknown,
         notebooklm_vocab_questions_json: null as unknown,
@@ -434,7 +436,7 @@ export default async function TestDetailPage({
               </div>
               <div>
                 <dt className="text-zinc-500">DOI</dt>
-                <dd className="font-mono text-sm font-medium text-zinc-900">
+                <dd>
                   {(() => {
                     const doi = normalizePaperDoiDisplay(
                       (test as { paper_doi?: string | null }).paper_doi,
@@ -452,6 +454,12 @@ export default async function TestDetailPage({
                       </a>
                     );
                   })()}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-zinc-500">PDFファイル名</dt>
+                <dd className="font-mono text-sm font-medium text-zinc-900">
+                  {(test as { pdf_filename?: string | null }).pdf_filename?.trim() || "—"}
                 </dd>
               </div>
               <div>

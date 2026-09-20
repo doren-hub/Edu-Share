@@ -105,3 +105,36 @@ test("scispace Files カードのナビ込みコピーでもタイトルはフ�
   assert.equal(p.venue, "arXiv");
   assert.equal(p.venueUncertain, true);
 });
+
+test("Files 行の TL;DR 本文はタイトルや掲載にしない", () => {
+  const raw = [
+    "42c1add0da9312ee.pdf",
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+    "The paper discusses the concept of multiverses, particularly focusing on the Level IV multiverse, which encompasses all possible mathematical structures. It explores the implications of different initial conditions and the potential for parallel universes, emphasizing the challenges in testing these theories.",
+  ].join("\n");
+  const p = parsePaperMetadataPaste(raw);
+  assert.equal(p.title, "");
+  assert.doesNotMatch(p.title, /multiverses/);
+  assert.doesNotMatch(p.venue, /multiverses/);
+  assert.doesNotMatch(p.authors, /multiverses/);
+});
+
+test("ワークショップ掲載の3行メタはタイトル・年・著者・掲載に分解する", () => {
+  const raw = [
+    "EVALUATING PERFORMANCE DRIFT FROM MODEL SWITCHING IN MULTI-TURN LLM SYSTEMS",
+    "2026\u22c5Raad Khraishi, Iman Zafar...+2 More",
+    "ICLR 2026 CAO Workshop",
+  ].join("\n");
+  const p = parsePaperMetadataPaste(raw);
+  assert.equal(
+    p.title,
+    "EVALUATING PERFORMANCE DRIFT FROM MODEL SWITCHING IN MULTI-TURN LLM SYSTEMS",
+  );
+  assert.equal(p.publicationYear, "2026");
+  assert.equal(p.authors, "Raad Khraishi, Iman Zafar");
+  assert.equal(p.authorsTruncated, true);
+  assert.equal(p.truncatedAuthorsCount, 2);
+  assert.equal(p.venue, "ICLR 2026 CAO Workshop");
+  assert.doesNotMatch(p.title, /switch-matrix/);
+});
