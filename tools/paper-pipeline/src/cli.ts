@@ -4,18 +4,18 @@ import {
   isTargetClosedMessage,
   launchBrowser,
   pageAlive,
-  recoverStuckPage,
   relaunchBrowser,
   type BrowserSession,
 } from "./browser.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
-import { listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
+import { listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
-import { loadExistingFromEduShare, processOnePaper, repairSciSpaceCardMeta, repairSciSpaceRecordLinks } from "./pipeline.ts";
+import { processOnePaper, repairSciSpaceCardMeta, repairSciSpaceRecordLinks } from "./pipeline.ts";
 import { formatStudioGenerateJa } from "./studio-select.ts";
 import { EXIT_QUOTA } from "./notebook-quota.ts";
 import { EXIT_WAITING } from "./waiting.ts";
 import { emptyState, loadState, studioKickoffBegun } from "./state.ts";
+import { videoFileReady } from "./video-file.ts";
 
 const MAX_RELAUNCH = 2;
 let activeSession: BrowserSession | null = null;
@@ -103,11 +103,8 @@ async function main(): Promise<void> {
     if (!(await pageAlive(session.page))) {
       session = await relaunch(session, cfg);
     }
-    let existing = await loadExistingFromEduShare(session.page, cfg);
-    if (!(await recoverStuckPage(session.page))) {
-      warn("論文一覧のあとブラウザが応答しないため再起動します");
-      session = await relaunch(session, cfg);
-    }
+    const existing = listExistingWorkPapers(cfg.workDir);
+    log(`作業フォルダの既存 PDF名 ${existing.length} 件`);
     const repaired = await repairSciSpaceRecordLinks(session.page, cfg);
     processed.push(...repaired.updated);
     failed.push(...repaired.failed);
@@ -123,9 +120,6 @@ async function main(): Promise<void> {
       log(
         `SciSpace メタ補修: 更新 ${metaRepaired.updated.length} / 失敗 ${metaRepaired.failed.length}`,
       );
-      if (items.length > 0) {
-        existing = await loadExistingFromEduShare(session.page, cfg);
-      }
     }
     for (const item of items) {
       log(`--- ${item.filename} ---`);
@@ -146,11 +140,16 @@ async function main(): Promise<void> {
           ) {
             break;
           }
+          const haveVideo = videoFileReady(item.paperDir, loadPaperState(item).videoMp4Path);
           warn(
-            `${item.filename}: ブラウザ切断。同じ論文の Studio 再生成はせず、SciSpace / Edu Share を進めます`,
+            haveVideo
+              ? `${item.filename}: ブラウザ切断。同じ論文の Studio 再生成はせず、SciSpace / Edu Share を進めます`
+              : `${item.filename}: ブラウザ切断。MP4 が無いので Studio から保存を再試行します`,
           );
           session = await relaunch(session, cfg);
-          r = await processOnePaper(session.page, cfg, item, existing, { skipStudio: true });
+          r = await processOnePaper(session.page, cfg, item, existing, {
+            skipStudio: haveVideo,
+          });
           break;
         }
         if (r !== "failed" || (await pageAlive(session.page)) || attempt >= MAX_RELAUNCH || shuttingDown) {
@@ -158,11 +157,14 @@ async function main(): Promise<void> {
         }
         const paperState = loadPaperState(item);
         if (studioKickoffBegun(paperState) || isTargetClosedMessage(paperState.lastError)) {
+          const haveVideo = videoFileReady(item.paperDir, paperState.videoMp4Path);
           warn(
-            `${item.filename}: ブラウザ切断。同じ論文の Studio 再生成はせず、SciSpace / Edu Share を進めます`,
+            haveVideo
+              ? `${item.filename}: ブラウザ切断。同じ論文の Studio 再生成はせず、SciSpace / Edu Share を進めます`
+              : `${item.filename}: ブラウザ切断。MP4 が無いので Studio から保存を再試行します`,
           );
           session = await relaunch(session, cfg);
-          r = await processOnePaper(session.page, cfg, item, existing, { skipStudio: true });
+          r = await processOnePaper(session.page, cfg, item, existing, { skipStudio: haveVideo });
           break;
         }
         warn(
@@ -207,9 +209,10 @@ async function main(): Promise<void> {
     logError(`失敗: ${failed.join(", ")}`);
     process.exitCode = 1;
   }
+  process.exit(process.exitCode ?? 0);
 }
 
 main().catch((e) => {
   logError(e instanceof Error ? e.stack ?? e.message : String(e));
-  process.exitCode = 1;
+  process.exit(1);
 });

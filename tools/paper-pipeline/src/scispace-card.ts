@@ -1,4 +1,7 @@
-/** SciSpace Files カードから、Edu Share に貼れるメタと TL;DR だけを取り出す */
+/**
+ * SciSpace Files カードからメタ情報と TL;DR を別々に取り出す。
+ * メタ = タイトル・著者・年・掲載・DOI。TL;DR = 説明本文。混ぜない。
+ */
 
 const MIDDLE_DOT = String.raw`[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]`;
 const YEAR_AUTHOR = new RegExp(`^((?:19|20)\\d{2})\\s*${MIDDLE_DOT}\\s*(.+)$`, "u");
@@ -24,6 +27,9 @@ export function looksLikeCitationTitle(s: string): boolean {
   return false;
 }
 
+const VENUE_HINT =
+  /\barxiv\b|\bworkshop\b|\bjournal\b|\btransactions\b|\bproceedings\b|\bconference\b|\bvol\.?\s*\d|\bissue\s*\d|\biclr\b|\bicml\b|\bneurips\b|\bnips\b|\bcvpr\b|\baaai\b|\bacl\b|\bemnlp\b/i;
+
 export function looksLikeVenueLine(s: string): boolean {
   const t = s.trim();
   if (!t || t.length > 90) return false;
@@ -32,6 +38,7 @@ export function looksLikeVenueLine(s: string): boolean {
   if (/^proceedings of the /i.test(t)) return true;
   if (/^american journal of /i.test(t)) return true;
   if (/astronomical society of /i.test(t)) return true;
+  if (VENUE_HINT.test(t) && !/[.!?。]$/.test(t)) return true;
   return false;
 }
 
@@ -71,22 +78,30 @@ export function looksLikeSciSpaceNav(s: string): boolean {
   return promptHits >= 1;
 }
 
-/** 空の TL;DR は未取得であり、画面の文言ではない */
-export function sciSpaceExtractionLooksLikeChrome(title: string, tldr: string): boolean {
-  if (title.trim() && looksLikeSciSpaceNav(title)) return true;
-  if (tldr.trim() && looksLikeSciSpaceNav(tldr)) return true;
-  return false;
+export function sciSpaceTitleLooksLikeChrome(title: string): boolean {
+  return Boolean(title.trim() && looksLikeSciSpaceNav(title));
 }
 
+export function sciSpaceTldrLooksLikeChrome(tldr: string): boolean {
+  return Boolean(tldr.trim() && looksLikeSciSpaceNav(tldr));
+}
+
+/** 空の TL;DR は未取得であり、画面の文言ではない。タイトルと TL;DR は別判定 */
+export function sciSpaceExtractionLooksLikeChrome(title: string, tldr: string): boolean {
+  return sciSpaceTitleLooksLikeChrome(title) || sciSpaceTldrLooksLikeChrome(tldr);
+}
+
+/** タイトル・著者・年・掲載・DOI。TL;DR は含めない */
 export type SciSpaceCardMeta = {
   title: string;
   yearAuthorLine: string;
   authors: string;
   publicationYear: string;
   venue: string;
-  tldr: string;
   doi: string;
   paste: string;
+  /** 説明用。メタの paste には入れない */
+  tldr: string;
 };
 
 function linesOf(text: string): string[] {
@@ -170,7 +185,7 @@ export function isolateSciSpaceCardTextKeepLines(raw: string, filename: string):
   return out.join("\n").replace(/^\n+|\n+$/g, "").slice(0, 4000);
 }
 
-/** Edu Share 貼り付け欄へ入れる Files 行。抽出したタイトル・年著者だけにはしない */
+/** SciSpace Files の原文（判定・再取得用）。Edu Share のメタ欄へはそのまま入れない */
 export function rawFilesCardPaste(raw: string, filename: string): string {
   const isolated = isolateSciSpaceCardTextKeepLines(raw, filename);
   if (!isolated.trim()) return "";
@@ -189,6 +204,11 @@ export function needsRawFilesPaste(state: {
 }): boolean {
   if (!state.filename || !state.eduShareTestUrl?.trim()) return false;
   return !rawFilesCardPaste(state.filesPaste ?? "", state.filename);
+}
+
+/** SciSpace カードの "...+N More" は著者が省略されている */
+export function filesRowHasTruncatedAuthors(paste: string): boolean {
+  return /(?:\.{2,3}|\u2026)\s*\+\s*\d+\s*More\b/i.test(paste.replace(/\s+/g, " "));
 }
 
 export function containsForeignPdf(raw: string, filename: string): boolean {
@@ -233,13 +253,52 @@ function pickVenue(lines: string[], filename: string, title: string): string {
     if (/\.pdf$/i.test(s)) continue;
     if (/^(this paper|the paper|本研究|本論文)\b/i.test(s)) continue;
     if (s.length > 80) continue;
-    if (/\barxiv\b|journal|transactions|\bvol\.?\s*\d|\bissue\s*\d|proceedings|conference/i.test(s)) return s;
+    if (isTldrBodyLine(s)) continue;
+    if (VENUE_HINT.test(s) || looksLikeVenueLine(s)) return s;
   }
   return "";
 }
 
 const TLDR_OPENER =
   /\b(?:this paper|the paper|本研究|本論文|examines|presents|addresses|explores|discusses|investigates|reviews|proposes|we (?:present|study|show|investigate))\b/i;
+
+/** Files 右列の TL;DR 本文。メタ情報（タイトル・著者・年・掲載・DOI）ではない */
+export function isTldrBodyLine(s: string): boolean {
+  const t = s.replace(/\s+/g, " ").trim();
+  if (!t || t.length < 80) return false;
+  if (/\.pdf$/i.test(t)) return false;
+  if (looksLikeSciSpaceNav(t)) return false;
+  if (parseYearAuthor(t)) return false;
+  if (looksLikeVenueLine(t)) return false;
+  if (looksLikeCitationTitle(t)) return false;
+  if (TLDR_OPENER.test(t)) return true;
+  const words = t.split(/\s+/).filter(Boolean);
+  return words.length >= 18 && /[.!?。]$/.test(t);
+}
+
+/** Edu Share メタ欄用。タイトル・年著者行・掲載を原文のまま。DOI と TL;DR は入れない */
+export function metadataPasteFromCard(
+  card: Pick<SciSpaceCardMeta, "title" | "yearAuthorLine" | "venue">,
+  filename: string,
+): string {
+  const title =
+    card.title && !titleLooksLikeFilename(card.title, filename) ? card.title.trim() : "";
+  return [title, card.yearAuthorLine, card.venue]
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+/** Edu Share のメタ貼り付け欄。Files 原文や TL;DR 本文は入れない */
+export function eduShareSciSpaceMetadataPaste(paste: string, filename: string): string {
+  const card = extractSciSpaceCardMeta(paste, filename);
+  const out = metadataPasteFromCard(card, filename);
+  if (!out) return "";
+  if (!card.yearAuthorLine && titleLooksLikeFilename(card.title, filename)) return "";
+  if (isTldrBodyLine(out)) return "";
+  return out;
+}
 
 function pickTldr(text: string, lines: string[], title: string): string {
   const fromLine = lines.find(
@@ -301,7 +360,7 @@ export function stripTldrSnippetNumbers(raw: string): string {
   let t = raw.replace(/\s+/g, " ").trim();
   t = t.replace(/[\s\u00a0]*\[\d+(?:\s*,\s*\d+)*\]\.?$/u, "");
   t = t.replace(/[\s\u00a0\u00b9\u00b2\u00b3\u2070-\u2079]+$/u, "");
-  t = t.replace(/[\s\u00a0]+\d+(?:\s*,\s*\d+|\s+\d+)*\.?$/u, "");
+  t = t.replace(/[\s\u00a0]+\d+(?:\s*,\s*\d+|\s+\d+)*\s*\.?$/u, "");
   t = t.replace(/\s+([.!?])$/u, "$1");
   if (t && !/[.!?。！？]$/.test(t) && !/[-–—,;:]$/.test(t)) t = `${t}.`;
   return t.trim();
@@ -349,16 +408,18 @@ export function extractSciSpaceCardMeta(raw: string, filename: string): SciSpace
   const venue = pickVenue(lines, filename, title);
   const tldr = pickAbstractSection(isolated) || pickTldr(isolated, lines, title);
   const doi = doiFromHrefOrText(isolated);
-  const paste = [title, yaLine, venue].filter(Boolean).join("\n");
-  return {
+  const meta = {
     title,
     yearAuthorLine: yaLine,
     authors: ya?.authors ?? "",
     publicationYear: ya?.year ?? "",
     venue,
-    tldr,
     doi,
-    paste,
+  };
+  return {
+    ...meta,
+    tldr,
+    paste: metadataPasteFromCard(meta, filename),
   };
 }
 

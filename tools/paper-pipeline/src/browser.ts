@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "./config.ts";
@@ -59,18 +59,48 @@ export async function assertPageAlive(page: Page): Promise<void> {
   throw new Error("ブラウザが閉じられています");
 }
 
-function markChromeExitedCleanly(userDataDir: string): void {
+function prepareChromeProfile(userDataDir: string, downloadsPath: string): void {
   const prefsPath = join(userDataDir, "Default", "Preferences");
-  if (!existsSync(prefsPath)) return;
+  mkdirSync(join(userDataDir, "Default"), { recursive: true });
+  let prefs: Record<string, unknown> = {};
+  if (existsSync(prefsPath)) {
+    try {
+      prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as Record<string, unknown>;
+    } catch {
+      warn("Chrome の Preferences を読めないので保存先は書き換えません");
+      return;
+    }
+  }
+  const profile =
+    prefs.profile && typeof prefs.profile === "object" ? (prefs.profile as Record<string, unknown>) : {};
+  profile.exit_type = "Normal";
+  profile.exited_cleanly = true;
+  prefs.profile = profile;
+  const download =
+    prefs.download && typeof prefs.download === "object" ? (prefs.download as Record<string, unknown>) : {};
+  download.default_directory = downloadsPath;
+  download.prompt_for_download = false;
+  prefs.download = download;
+  const savefile =
+    prefs.savefile && typeof prefs.savefile === "object" ? (prefs.savefile as Record<string, unknown>) : {};
+  savefile.default_directory = downloadsPath;
+  prefs.savefile = savefile;
   try {
-    const prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as {
-      profile?: { exit_type?: string; exited_cleanly?: boolean };
-    };
-    prefs.profile = { ...prefs.profile, exit_type: "Normal", exited_cleanly: true };
     writeFileSync(prefsPath, JSON.stringify(prefs));
   } catch (e) {
-    warn(`Chrome の終了フラグを直せません: ${e instanceof Error ? e.message : e}`);
+    warn(`Chrome の保存先を直せません: ${e instanceof Error ? e.message : e}`);
   }
+}
+
+/** Playwright の allowAndName だと GUID 中間ファイルになり、タブ切断で打ち切られる */
+async function useChromeOwnDownloads(context: BrowserContext, downloadsPath: string, page: Page): Promise<void> {
+  const session = await context.newCDPSession(page);
+  await session.send("Browser.setDownloadBehavior", {
+    behavior: "allow",
+    downloadPath: downloadsPath,
+    eventsEnabled: false,
+  });
+  log(`Chrome 保存先: ${downloadsPath}（ブラウザ自身に書かせます）`);
 }
 
 function clearStaleChromeProfileLocks(userDataDir: string): void {
@@ -98,20 +128,40 @@ function clearStaleChromeProfileLocks(userDataDir: string): void {
   }
 }
 
+function clearStaleIncompleteDownloads(downloadsPath: string): void {
+  let n = 0;
+  try {
+    for (const name of readdirSync(downloadsPath)) {
+      if (!name.endsWith(".crdownload")) continue;
+      try {
+        unlinkSync(join(downloadsPath, name));
+        n += 1;
+      } catch {
+        /* 起動時の掃除。失敗しても続行 */
+      }
+    }
+  } catch {
+    return;
+  }
+  if (n) log(`未完了ダウンロード ${n} 件を削除しました`);
+}
+
 export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   mkdirSync(cfg.chromeUserDataDir, { recursive: true });
   const downloadsPath = join(cfg.chromeUserDataDir, "playwright-downloads");
   mkdirSync(downloadsPath, { recursive: true });
   chromeDownloadsPath = downloadsPath;
+  clearStaleIncompleteDownloads(downloadsPath);
   clearStaleChromeProfileLocks(cfg.chromeUserDataDir);
-  markChromeExitedCleanly(cfg.chromeUserDataDir);
+  prepareChromeProfile(cfg.chromeUserDataDir, downloadsPath);
   const args: string[] = [
     "--hide-crash-restore-bubble",
     "--disable-session-crashed-bubble",
     "--disable-infobars",
+    "--disable-blink-features=AutomationControlled",
+    "--exclude-switches=enable-automation",
   ];
   if (cfg.exportExtensionPath) {
-    // disable-extensions-except は Chrome の PDF ビューアまで消すので使わない
     args.push(`--load-extension=${cfg.exportExtensionPath}`);
     log(`Export 拡張を読み込み: ${cfg.exportExtensionPath}`);
   }
@@ -121,7 +171,15 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     acceptDownloads: true,
     downloadsPath,
     args,
-    ignoreDefaultArgs: ["--enable-automation", "--enable-features=Translate", "--no-sandbox"],
+    ignoreDefaultArgs: [
+      "--enable-automation",
+      "--enable-features=Translate",
+      "--no-sandbox",
+      "--use-mock-keychain",
+      "--password-store=basic",
+      "--disable-sync",
+      "--metrics-recording-only",
+    ],
   };
   let context: BrowserContext;
   try {
@@ -135,19 +193,28 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     );
     context = await chromium.launchPersistentContext(cfg.chromeUserDataDir, launchOpts);
   }
-  const page = context.pages()[0] ?? (await context.newPage());
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+  });
+  const keeper = context.pages()[0] ?? (await context.newPage());
+  keeper.setDefaultTimeout(30_000);
+  await keeper.goto("about:blank").catch(() => undefined);
+  await useChromeOwnDownloads(context, downloadsPath, keeper).catch((e) => {
+    warn(`Chrome の保存先を切り替えできません: ${e instanceof Error ? e.message : e}`);
+  });
+  const page = await context.newPage();
   page.setDefaultTimeout(30_000);
   page.setDefaultNavigationTimeout(60_000);
-  if (context.pages().length < 2) {
-    const keeper = await context.newPage();
-    await keeper.goto("about:blank").catch(() => undefined);
-    await page.bringToFront().catch(() => undefined);
-  }
   return { context, page };
 }
 
 export async function closeBrowser(session: BrowserSession): Promise<void> {
-  await session.context.close().catch(() => undefined);
+  await Promise.race([
+    session.context.close().catch(() => undefined),
+    sleep(12_000),
+  ]);
+  // Google セッションをプロファイルに書き終わるまで待つ
+  await sleep(2_000);
 }
 
 export async function relaunchBrowser(session: BrowserSession, cfg: AppConfig): Promise<BrowserSession> {

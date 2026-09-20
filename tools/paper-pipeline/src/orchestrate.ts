@@ -8,6 +8,7 @@ import { error as logError, log, warn } from "./log.ts";
 import { pickNextJob, type SchedJob, type SchedStatus } from "./schedule.ts";
 import {
   emptyState,
+  isCompleted,
   loadState,
   studioKickoffBegun,
   studioKickoffSettled,
@@ -110,6 +111,9 @@ function initialStatus(
   }
   if (state.skippedAlreadyUploaded) {
     return { status: "skipped", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: false };
+  }
+  if (state.waitingFor && isCompleted(state, state.waitingFor)) {
+    return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable };
   }
   if (state.waitingFor && kickoffSettled) {
     return { status: "waiting", nextCheckAt: Date.now(), kickoffBegun, kickoffSettled, harvestable };

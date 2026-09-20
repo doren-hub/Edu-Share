@@ -225,6 +225,7 @@ function testRowSearchBlob(t: TestRow, category: TestsCategory): string {
     t.publication_year,
     t.paper_venue,
     t.paper_doi,
+    t.pdf_filename,
   ].map((x) => String(x ?? ""));
   if (category === "paper") {
     parts.push(normalizePaperAuthorsFromDb(t.paper_authors).join(" "));

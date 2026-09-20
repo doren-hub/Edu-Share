@@ -4,10 +4,62 @@ import { parseYearAuthor } from "./scispace-card.ts";
 
 const SKIP_AUTHOR_VALUES = new Set(["", "選択してください", "その他"]);
 /** アップロード画面のデモ選択肢。実著者ではない。 */
-const DUMMY_AUTHOR_VALUES = new Set(["A. Einstein", "Albert Einstein"]);
+const DUMMY_AUTHOR_VALUES = new Set(["A. Einstein", "Albert Einstein", "A. K. Dewdney"]);
 
 export function isDummyAuthorValue(v: string): boolean {
   return DUMMY_AUTHOR_VALUES.has(v.trim());
+}
+
+function authorNamesMatch(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  if (!x || !y) return false;
+  return x === y || x.startsWith(y) || y.startsWith(x);
+}
+
+export type ChosenPaperAuthor =
+  | { action: "keep"; value: string }
+  | { action: "select"; value: string }
+  | { action: "other"; value: string };
+
+/** デモ著者は捨て、SciSpace 貼り付けの先頭名を優先する */
+export function choosePaperAuthor(input: {
+  current: string;
+  optionValues: string[];
+  filesPaste: string;
+  title: string;
+  filename: string;
+}): ChosenPaperAuthor {
+  const current = input.current.trim();
+  const fromPaste = authorFromFilesPaste(input.filesPaste);
+  const currentOk = Boolean(current) && current !== "その他" && !isDummyAuthorValue(current);
+  if (currentOk && (!fromPaste || authorNamesMatch(current, fromPaste))) {
+    return { action: "keep", value: current };
+  }
+  const wanted =
+    fromPaste ||
+    pickAuthorSelectValue(input.optionValues) ||
+    fallbackAuthorName({
+      filesPaste: input.filesPaste,
+      title: input.title,
+      filename: input.filename,
+    });
+  const match = input.optionValues
+    .map((v) => v.trim())
+    .find(
+      (v) =>
+        Boolean(v) &&
+        !SKIP_AUTHOR_VALUES.has(v) &&
+        !v.startsWith("その他") &&
+        !isDummyAuthorValue(v) &&
+        authorNamesMatch(v, wanted),
+    );
+  if (match) return { action: "select", value: match };
+  if (!fromPaste) {
+    const existing = pickAuthorSelectValue(input.optionValues);
+    if (existing) return { action: "select", value: existing };
+  }
+  return { action: "other", value: wanted };
 }
 
 export const FALLBACK_AUTHOR_NAME = "著者未設定";

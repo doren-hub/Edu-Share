@@ -85,6 +85,11 @@ export function pickNextJob(
     return { kind: "idle", sleepMs: Math.max(1_000, focus.nextCheckAt - now) };
   }
 
+  const harvestReady = jobs
+    .filter((j) => j.status === "ready" && j.harvestable && j.kickoffSettled)
+    .sort(byReadyOrder);
+  if (harvestReady[0]) return { kind: "run", id: harvestReady[0].id };
+
   const ready = jobs.filter((j) => j.status === "ready").sort(byReadyOrder);
   if (ready[0]) return { kind: "run", id: ready[0].id };
 

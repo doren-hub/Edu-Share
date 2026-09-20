@@ -24,6 +24,28 @@ test("pickNextJob: 準備できた論文は変更日が古い順", () => {
   assert.deepEqual(pickNextJob(jobs, 100), { kind: "run", id: "old.pdf" });
 });
 
+test("pickNextJob: MP4 待ちで収穫が無い論文より、未完了の ready を先に回す", () => {
+  const jobs = [
+    job({
+      id: "mp4-wait.pdf",
+      mtime: 1,
+      status: "waiting",
+      nextCheckAt: 80,
+      kickoffBegun: true,
+      kickoffSettled: true,
+      harvestable: false,
+    }),
+    job({
+      id: "unsettled.pdf",
+      mtime: 50,
+      status: "ready",
+      kickoffBegun: true,
+      kickoffSettled: false,
+    }),
+  ];
+  assert.deepEqual(pickNextJob(jobs, 100), { kind: "run", id: "unsettled.pdf" });
+});
+
 test("pickNextJob: 4種開始済みの生成待ちより、未着手の ready を先に回す", () => {
   const jobs = [
     job({ id: "ready.pdf", mtime: 1, status: "ready" }),
@@ -182,6 +204,19 @@ test("pickNextJob: 4種未完了でも Files 貼り付け補修は先に回す",
   assert.deepEqual(pickNextJob(jobs, 100), { kind: "run", id: "paste.pdf" });
 });
 
+test("pickNextJob: 4種済みの収穫（verify 等）を未着手の生成より先に回す", () => {
+  const jobs = [
+    job({ id: "new.pdf", mtime: 1, harvestable: true, kickoffSettled: false }),
+    job({
+      id: "verify.pdf",
+      mtime: 50,
+      harvestable: true,
+      kickoffBegun: true,
+      kickoffSettled: true,
+    }),
+  ];
+  assert.deepEqual(pickNextJob(jobs, 100), { kind: "run", id: "verify.pdf" });
+});
 test("pickNextJob: 利用量待ちなら生成ロックを外して収穫できる論文を回す", () => {
   const jobs = [
     job({

@@ -83,12 +83,46 @@ test("hasHarvestableWork: 生成物が1つあれば Edu Share へ載せられる
     state.eduShareTestUrl = "http://localhost:3000/tests/uuid";
     state.completed.push("edu-upload");
     state.eduUploaded = ["nlm-slides"];
+    assert.equal(hasHarvestableWork(state, STUDIO_STAGES), true);
+    state.completed.push("verify");
     assert.equal(hasHarvestableWork(state, STUDIO_STAGES), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
+test("hasHarvestableWork: 解説動画はあるが MP4 が無いなら Studio から取る", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pp-harvest-mp4-"));
+  try {
+    writeFileSync(join(dir, "slides.pdf"), "x".repeat(2000));
+    writeFileSync(join(dir, "quiz.csv"), "question,answer\nWhat is it?,A fact.\n");
+    writeFileSync(join(dir, "vocab.csv"), "term,definition\nA,B\n");
+    const state = paper(dir, {
+      notebooklmUrl: "https://notebooklm.google.com/notebook/x",
+      completed: [
+        "sci-upload",
+        "sci-meta",
+        "edu-upload",
+        "nlm-slides",
+        "nlm-quiz",
+        "nlm-flashcards",
+        "nlm-video",
+      ],
+      studioStarted: ["nlm-quiz", "nlm-flashcards", "nlm-video"],
+      eduUploaded: ["nlm-quiz", "nlm-flashcards", "nlm-slides"],
+      filesPaste: "a.pdf\nA title\n2024 · Ada Lovelace\narXiv",
+      eduShareTestUrl: "http://localhost:3000/tests/x",
+      slidePdfPath: join(dir, "slides.pdf"),
+      quizCsvPath: join(dir, "quiz.csv"),
+      vocabCsvPath: join(dir, "vocab.csv"),
+    });
+    assert.equal(hasHarvestableWork(state, STUDIO_STAGES), true);
+    assert.equal(shouldSkipNotebookVisit(state, STUDIO_STAGES), false);
+    assert.equal(shouldSkipNotebookVisit(state, STUDIO_STAGES, { skipStudio: true }), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 test("shouldSkipNotebookVisit: メタ未取得や Chrome 切断後は Studio を開かない", () => {
   const dir = mkdtempSync(join(tmpdir(), "pp-harvest-skip-"));
   try {

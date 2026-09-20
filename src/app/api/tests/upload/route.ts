@@ -8,6 +8,7 @@ import { joinPaperAuthorsForSourceName } from "@/lib/paper-authors";
 import { assertStoredPickWithOther } from "@/lib/picklist-parse";
 import { mergePicklistOptionsForSelect } from "@/lib/picklist-merge";
 import { fetchPicklistOptionRows } from "@/lib/supabase/picklist-table";
+import { normalizePdfFilename } from "@/lib/pdf-filename";
 import type { UserRole } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -18,9 +19,13 @@ function looksLikePdf(file: File): boolean {
   return file.type === "" && name.endsWith(".pdf");
 }
 
-function describeTestsInsertError(message: string | undefined): string {
+function describeTestsInsertError(message: string | undefined, code?: string): string {
   const raw = message ?? "";
   const m = raw.toLowerCase();
+
+  if (code === "23505" || (m.includes("duplicate") && m.includes("pdf_filename"))) {
+    return "同じ PDF ファイル名の論文が既にあります";
+  }
 
   /** PostgREST: 列がDBに無い、またはスキーマキャッシュが古い（「schema cache」だけでは判定しない） */
   const looksLikeTestsColumnMissingOrStaleCache =
@@ -274,38 +279,80 @@ export async function POST(req: Request) {
     );
   }
 
-  const { data: inserted, error: insErr } = await admin
+  const pdfFilenameRaw =
+    (file.name ?? "").replace(/\\/g, "/").split("/").pop()?.trim().slice(0, 200) ?? "";
+  const pdfFilename = pdfFilenameRaw
+    ? document_type === "paper"
+      ? normalizePdfFilename(pdfFilenameRaw)
+      : pdfFilenameRaw
+    : null;
+
+  if (document_type === "paper" && pdfFilename) {
+    const { data: existingPapers, error: dupLookupErr } = await admin
+      .from("tests")
+      .select("id,pdf_filename")
+      .eq("document_type", "paper")
+      .not("pdf_filename", "is", null);
+    if (!dupLookupErr) {
+      const want = normalizePdfFilename(pdfFilename);
+      const hit = (existingPapers ?? []).find(
+        (row) =>
+          typeof row.pdf_filename === "string" &&
+          normalizePdfFilename(row.pdf_filename) === want,
+      );
+      if (hit?.id) {
+        return NextResponse.json(
+          {
+            error: "同じ PDF ファイル名の論文が既にあります",
+            testId: hit.id,
+          },
+          { status: 409 },
+        );
+      }
+    }
+  }
+
+  const insertRow = {
+    id: testId,
+    title: titleFinal,
+    description: (d.description ?? "").trim() || null,
+    pdf_storage_path: storagePath,
+    source_type,
+    source_name,
+    document_type,
+    exam_department:
+      document_type === "past_exam" ? examDepartmentTrim || null : null,
+    exam_subject:
+      document_type === "past_exam" ? examSubjectTrim || null : null,
+    exam_period: document_type === "past_exam" ? examPeriodTrim || null : null,
+    industry: document_type === "paper" ? industryTrim || null : null,
+    publication_year:
+      document_type === "paper" ? publicationYearTrim || null : null,
+    paper_doi: document_type === "paper" ? paperDoiTrim || null : null,
+    paper_venue: document_type === "paper" ? paperVenueTrim || null : null,
+    paper_authors: document_type === "paper" ? paperAuthorsResolved : null,
+    uploaded_by: user.id,
+    processing_status: "pending",
+    pdf_filename: pdfFilename,
+  };
+
+  let { data: inserted, error: insErr } = await admin
     .from("tests")
-    .insert({
-      id: testId,
-      title: titleFinal,
-      description: (d.description ?? "").trim() || null,
-      pdf_storage_path: storagePath,
-      source_type,
-      source_name,
-      document_type,
-      exam_department:
-        document_type === "past_exam" ? examDepartmentTrim || null : null,
-      exam_subject:
-        document_type === "past_exam" ? examSubjectTrim || null : null,
-      exam_period: document_type === "past_exam" ? examPeriodTrim || null : null,
-      industry: document_type === "paper" ? industryTrim || null : null,
-      publication_year:
-        document_type === "paper" ? publicationYearTrim || null : null,
-      paper_doi: document_type === "paper" ? paperDoiTrim || null : null,
-      paper_venue: document_type === "paper" ? paperVenueTrim || null : null,
-      paper_authors:
-        document_type === "paper" ? paperAuthorsResolved : null,
-      uploaded_by: user.id,
-      processing_status: "pending",
-    })
+    .insert(insertRow)
     .select("id")
     .single();
+
+  if (insErr && /pdf_filename/i.test(insErr.message ?? "")) {
+    const { pdf_filename: _omit, ...withoutName } = insertRow;
+    const retry = await admin.from("tests").insert(withoutName).select("id").single();
+    inserted = retry.data;
+    insErr = retry.error;
+  }
 
   if (insErr || !inserted) {
     return NextResponse.json(
       {
-        error: describeTestsInsertError(insErr?.message),
+        error: describeTestsInsertError(insErr?.message, insErr?.code),
         details: insErr?.message,
         code: insErr?.code,
       },

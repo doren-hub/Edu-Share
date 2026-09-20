@@ -105,6 +105,7 @@ test("Studio タイルの sync は生成中とみなす", () => {
     "tablet スライド資料 chevron_forward subscriptions 動画解説 chevron_forward sync 動画解";
   assert.equal(textLooksLikeGenerating(nearby), true);
   assert.equal(textLooksLikeGenerating("生成しています"), true);
+  assert.equal(textLooksLikeGenerating("スライド資料 の生成を開始しています。"), true);
   assert.equal(textLooksLikeGenerating("スライド資料を生成して... 1件のソースに基づく"), true);
   assert.equal(
     textLooksLikeGenerating("tablet スライド資料 chevron_forward subscriptions 動画解説 chevron_forward"),

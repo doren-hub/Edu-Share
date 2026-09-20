@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import {
   FALLBACK_AUTHOR_NAME,
   authorFromFilesPaste,
+  choosePaperAuthor,
   fallbackAuthorName,
   isAuthorRequiredError,
+  isDummyAuthorValue,
   pickAuthorSelectValue,
 } from "./edushare-form.ts";
 
@@ -21,6 +23,38 @@ test("pickAuthorSelectValue: デモの A. Einstein は使わない", () => {
   assert.equal(
     pickAuthorSelectValue(["", "A. Einstein", "Karl Popper", "その他"]),
     "Karl Popper",
+  );
+});
+
+test("isDummyAuthorValue: デモの Dewdney も実著者ではない", () => {
+  assert.equal(isDummyAuthorValue("A. K. Dewdney"), true);
+  assert.equal(isDummyAuthorValue("Vardhan Dongre"), false);
+});
+
+test("choosePaperAuthor: デモ著者は捨てて Files 貼り付けの先頭名を入れる", () => {
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "A. K. Dewdney",
+      optionValues: ["", "A. K. Dewdney", "Karl Popper", "その他"],
+      filesPaste:
+        "2510.07777v1.pdf\nDrift No More?\n2025\u22c5Vardhan Dongre, Ryan A. Rossi...+4 More\narXiv",
+      title: "Drift No More?",
+      filename: "2510.07777v1.pdf",
+    }),
+    { action: "other", value: "Vardhan Dongre" },
+  );
+});
+
+test("choosePaperAuthor: 貼り付けと同じ実著者は維持する", () => {
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Vardhan Dongre",
+      optionValues: ["", "Vardhan Dongre", "その他"],
+      filesPaste: "a.pdf\nTitle\n2025\u22c5Vardhan Dongre, Ryan A. Rossi\narXiv",
+      title: "Title",
+      filename: "a.pdf",
+    }),
+    { action: "keep", value: "Vardhan Dongre" },
   );
 });
 

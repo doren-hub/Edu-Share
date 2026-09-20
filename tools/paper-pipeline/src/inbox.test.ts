@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listInboxPdfs, listRawPasteRepairPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
+import { listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair, existingWorkPapersExcept } from "./inbox.ts";
 
 test("listInboxPdfs: 変更日が古い順（名前順ではない）", () => {
   const root = mkdtempSync(join(tmpdir(), "paper-inbox-"));
@@ -99,6 +99,50 @@ test("listRawPasteRepairPdfs: Files 行が無い／加工済みの完了論文�
     assert.deepEqual(
       listRawPasteRepairPdfs(work).map((p) => p.filename),
       ["2307.09009v3.pdf"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("listExistingWorkPapers: work 内の PDF 名で既存判定する", () => {
+  const root = mkdtempSync(join(tmpdir(), "paper-work-exist-"));
+  const work = join(root, "work");
+  const hawking = join(work, "hawking");
+  const other = join(work, "2601.04170v1");
+  mkdirSync(hawking, { recursive: true });
+  mkdirSync(other, { recursive: true });
+  try {
+    writeFileSync(join(hawking, "hawking.pdf"), "pdf");
+    writeFileSync(
+      join(hawking, "state.json"),
+      JSON.stringify({
+        filename: "hawking.pdf",
+        inboxPdfPath: join(hawking, "hawking.pdf"),
+        paperDir: hawking,
+        title: "Particle Creation by Black Holes",
+        doi: "10.1007/example",
+        eduShareTestId: "abc",
+        eduShareTestUrl: "http://localhost:3000/tests/abc",
+      }),
+    );
+    writeFileSync(join(other, "2601.04170v1.pdf"), "pdf");
+    writeFileSync(
+      join(other, "state.json"),
+      JSON.stringify({
+        filename: "2601.04170v1.pdf",
+        inboxPdfPath: join(other, "2601.04170v1.pdf"),
+        paperDir: other,
+      }),
+    );
+    const all = listExistingWorkPapers(work);
+    assert.equal(all.filter((p) => p.filename === "hawking.pdf").length, 1);
+    assert.equal(
+      existingWorkPapersExcept(work, hawking).some((p) => p.filename === "hawking.pdf"),
+      false,
+    );
+    assert.ok(
+      existingWorkPapersExcept(work, other).some((p) => p.filename === "hawking.pdf"),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

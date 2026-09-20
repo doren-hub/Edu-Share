@@ -46,10 +46,14 @@ export function needsLocalVideoFile(state: {
   videoMp4Path: string;
   completed: string[];
   notebooklmUrl: string;
+  waitingFor?: string;
+  studioStarted?: string[];
 }): boolean {
   if (!state.notebooklmUrl) return false;
-  if (!state.completed.includes("nlm-video") && !state.completed.includes("done")) return false;
-  return !videoFileReady(state.paperDir, state.videoMp4Path);
+  if (videoFileReady(state.paperDir, state.videoMp4Path)) return false;
+  if (state.completed.includes("nlm-video") || state.completed.includes("done")) return true;
+  if (state.waitingFor === "nlm-video") return true;
+  return (state.studioStarted ?? []).includes("nlm-video");
 }
 
 function ffmpegBin(): string | null {

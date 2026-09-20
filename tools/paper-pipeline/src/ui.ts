@@ -1,10 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join } from "node:path";
 import type { Locator, Page } from "playwright";
 import { getChromeDownloadsPath } from "./browser.ts";
 import { log, warn } from "./log.ts";
-import { downloadNameLooksLikeVideo } from "./video-file.ts";
+import { isRealVideoFile } from "./video-file.ts";
 
 export async function saveFailureShot(page: Page, paperDir: string, name: string): Promise<string> {
   const dir = join(paperDir, "failures");
@@ -204,6 +204,22 @@ export function copyNewestPdfTo(
   return false;
 }
 
+/** クリック後に増えた／伸びているファイルだけを新しいダウンロードとみなす */
+export function isIncomingDownloadActive(prevSize: number | undefined, size: number): boolean {
+  return prevSize == null || size > prevSize;
+}
+
+/** 未完了の .crdownload は使わない。動画は拡張子が無くても中身で判定する */
+export function isFinishedDownloadCandidate(
+  name: string,
+  destExt: string,
+  opts: { isVideoFile: boolean },
+): boolean {
+  if (name.endsWith(".crdownload")) return false;
+  if (destExt === ".mp4" && opts.isVideoFile) return true;
+  return name.toLowerCase().endsWith(destExt);
+}
+
 export async function waitForDownloadTo(
   page: Page,
   destPath: string,
@@ -223,34 +239,25 @@ export async function waitForDownloadTo(
     }
   }
   const t0 = Date.now();
-  const fromBrowser = page
-    .waitForEvent("download", { timeout: timeoutMs })
-    .then(async (download) => {
-      const name = download.suggestedFilename();
-      if (extname(destPath).toLowerCase() === ".mp4" && !downloadNameLooksLikeVideo(name)) {
-        await download.cancel().catch(() => undefined);
-        throw new Error(`動画ではなく ${name} が落ちたので破棄します`);
-      }
-      await download.saveAs(destPath);
-      log(`保存: ${destPath}（${name}）`);
-      return destPath;
-    })
-    .catch((e) => {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (/動画ではなく /.test(msg)) throw e;
-      return "";
-    });
-  await click();
   const ext = extname(destPath).toLowerCase();
+  // Playwright の Download.saveAs はタブ切断で打ち切るので、Chrome が書いたファイルを拾う
+  await click();
+  let lastCrKey = "";
+  let lastCrChangeAt = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    const viaEvent = await Promise.race([
-      fromBrowser,
-      new Promise<string>((r) => setTimeout(() => r(""), 250)),
-    ]);
-    if (viaEvent) return viaEvent;
+    if (
+      existsSync(destPath) &&
+      statSync(destPath).size > minBytes &&
+      (ext !== ".mp4" || isRealVideoFile(destPath))
+    ) {
+      log(`保存: ${destPath}`);
+      return destPath;
+    }
+    let crName = "";
+    let crSize = 0;
+    let crMtime = 0;
     for (const dir of dirs) {
       for (const n of readdirSync(dir)) {
-        if (!n.toLowerCase().endsWith(ext) || n.endsWith(".crdownload")) continue;
         const p = join(dir, n);
         let st: ReturnType<typeof statSync>;
         try {
@@ -258,10 +265,21 @@ export async function waitForDownloadTo(
         } catch {
           continue;
         }
-        if (st.size <= minBytes) continue;
         const prev = seen.get(p);
-        const isNew = prev == null || st.size > prev || st.mtimeMs >= t0 - 1_000;
-        if (!isNew) continue;
+        const active = isIncomingDownloadActive(prev, st.size);
+        if (ext === ".mp4" && n.endsWith(".crdownload") && active && isRealVideoFile(p)) {
+          if (st.mtimeMs >= crMtime) {
+            crName = n;
+            crSize = st.size;
+            crMtime = st.mtimeMs;
+          }
+          continue;
+        }
+        if (!isFinishedDownloadCandidate(n, ext, { isVideoFile: ext === ".mp4" && isRealVideoFile(p) })) {
+          continue;
+        }
+        if (st.size <= minBytes) continue;
+        if (!active && st.mtimeMs < t0 - 1_000) continue;
         await new Promise((r) => setTimeout(r, 400));
         try {
           if (statSync(p).size !== st.size) continue;
@@ -269,13 +287,40 @@ export async function waitForDownloadTo(
           continue;
         }
         if (copyIfReady(p, destPath, minBytes)) {
+          if (ext === ".mp4" && !isRealVideoFile(destPath)) {
+            try {
+              unlinkSync(destPath);
+            } catch {
+              /* 次の候補へ */
+            }
+            continue;
+          }
           log(`保存: ${destPath}（${n}）`);
           return destPath;
         }
       }
     }
+    if (crName) {
+      const key = `${crName}:${crSize}`;
+      if (key !== lastCrKey) {
+        lastCrKey = key;
+        lastCrChangeAt = Date.now();
+        log(`動画ダウンロード中: ${crSize} bytes（${crName}）`);
+      } else if (Date.now() - lastCrChangeAt > 20_000) {
+        let alive = false;
+        try {
+          alive = page.context().pages().some((p) => !p.isClosed());
+        } catch {
+          alive = false;
+        }
+        if (!alive) {
+          throw new Error(`動画ダウンロードが止まりました: ${crSize} bytes（${crName}）`);
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 250));
   }
-  if (copyIfReady(destPath, destPath, minBytes)) {
+  if (copyIfReady(destPath, destPath, minBytes) && (ext !== ".mp4" || isRealVideoFile(destPath))) {
     log(`保存: ${destPath}（既存ファイル）`);
     return destPath;
   }

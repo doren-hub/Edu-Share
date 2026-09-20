@@ -239,6 +239,14 @@ async function ensureOnNotebook(page: Page, url: string): Promise<void> {
 
 async function forgetMissingSource(page: Page, state: PaperState, pdfPath: string): Promise<void> {
   if (!isCompleted(state, "nlm-upload")) return;
+  if (
+    hasStudioStarted(state, "nlm-video") ||
+    isCompleted(state, "nlm-slides") ||
+    isCompleted(state, "nlm-quiz") ||
+    isCompleted(state, "nlm-flashcards")
+  ) {
+    return;
+  }
   await dismissNotebookLmPopups(page);
   await expandNotebookPanels(page);
   const t = await notebookBody(page);
@@ -708,15 +716,6 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
   log(`Studio付近: ${snippet.slice(0, 400)}`);
   if (/Illuminated Horizons/.test(body)) {
     log("本文に既存スライド（Illuminated Horizons）があります");
-    return true;
-  }
-  if (
-    /個のソースを表示/.test(body) &&
-    !/をカスタマイズ/.test(body) &&
-    !/解説 ·/.test(body) &&
-    !(/クイズ|単語帳|フラッシュカード/.test(body) && !/tablet|Illuminated|BLACK HOLES/i.test(body))
-  ) {
-    log("Studio にスライドビューアが開いています");
     return true;
   }
   const stamps = page.getByText(STUDIO_RELATIVE_TIME);
@@ -1610,17 +1609,6 @@ async function clickExplainerCardOverflow(page: Page): Promise<boolean> {
     if (await dismissSourceDeleteMenu(page)) return false;
     return true;
   }
-  const duration = page.getByText(/\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/).first();
-  if (await duration.isVisible({ timeout: 0 }).catch(() => false)) {
-    const box = await duration.boundingBox();
-    if (box) {
-      await page.mouse.click(box.x + box.width + 72, box.y + box.height / 2);
-      log("Studio: 解説カード右端をクリックしてメニューを開きます");
-      await page.waitForTimeout(500);
-      if (await dismissSourceDeleteMenu(page)) return false;
-      return true;
-    }
-  }
   return false;
 }
 
@@ -1684,43 +1672,127 @@ async function clickLabeledControl(
   return Boolean(hit);
 }
 
-async function clickNotebookLmVideoDownload(page: Page): Promise<boolean> {
-  if (await clickVideoHeaderDownload(page)) return true;
-  if (await clickLabeledControl(page, "download")) return true;
-  if (await clickFirstByName(page, VIDEO_DOWNLOAD_NAMES, { timeoutMs: 1_200 })) return true;
-  const openedOverflow =
-    (await clickExplainerCardOverflow(page)) || (await clickLabeledControl(page, "overflow"));
-  if (openedOverflow) {
-    if (await clickVideoHeaderDownload(page)) return true;
-    if (await clickLabeledControl(page, "download")) return true;
-    if (await clickFirstByName(page, VIDEO_DOWNLOAD_NAMES, { timeoutMs: 1_500 })) return true;
+async function clickExplainerDownloadMenuItem(page: Page): Promise<boolean> {
+  const hit = String(
+    await page
+      .evaluate(
+        `(() => {
+      const label = (el) => ((el.innerText || "") + " " + (el.getAttribute("aria-label") || "")).replace(/\\s+/g, " ").trim();
+      const isDl = (t) => {
+        if (!t) return false;
+        if (/ソースを削除|ソース名を変更|ノートブックを作成|ソースを追加/.test(t)) return false;
+        if (/動画をダウンロード|Download video|Download MP4|MP4 をダウンロード|動画（MP4）/i.test(t)) return true;
+        if (/^(download|file_download|ダウンロード)$/i.test(t)) return true;
+        return /ダウンロード/.test(t) && t.length < 48;
+      };
+      const walk = (root) => {
+        const els = Array.from(root.querySelectorAll("[role='menuitem'], button, [role='button']"));
+        for (const el of els) {
+          const t = label(el);
+          if (!isDl(t)) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) continue;
+          el.click();
+          return t.slice(0, 80);
+        }
+        for (const el of root.querySelectorAll("*")) {
+          if (el.shadowRoot) {
+            const nested = walk(el.shadowRoot);
+            if (nested) return nested;
+          }
+        }
+        return "";
+      };
+      return walk(document);
+    })()`,
+      )
+      .catch(() => ""),
+  );
+  if (hit) {
+    log(`Studio: ダウンロードをクリックしました（${hit}）`);
+    await page.waitForTimeout(400).catch(() => undefined);
+    return true;
   }
   return false;
 }
 
+async function clickNotebookLmVideoDownload(page: Page): Promise<boolean> {
+  if (!(await clickExplainerCardOverflow(page))) return false;
+  if (await clickExplainerDownloadMenuItem(page)) return true;
+  warn("解説カードのメニューにダウンロード項目がありません");
+  return false;
+}
+
+async function writeBufIfVideo(destPath: string, buf: Buffer, label: string): Promise<boolean> {
+  if (buf.length <= VIDEO_MIN_BYTES) return false;
+  writeFileSync(destPath, buf);
+  if (!isRealVideoFile(destPath)) {
+    try {
+      unlinkSync(destPath);
+    } catch {
+      /* 破棄できなくても次の取得で上書きする */
+    }
+    warn(`URL は MP4 ではありません: ${label.slice(0, 64)}（先頭 ${buf.subarray(0, 8).toString("latin1")}）`);
+    return false;
+  }
+  log(`保存: ${destPath}（${buf.length} bytes）`);
+  return true;
+}
+
+async function fetchUrlInPageToVideo(page: Page, src: string, destPath: string): Promise<boolean> {
+  const sink = page as VideoSinkPage;
+  await bindVideoSink(sink);
+  sink.__ppVideoChunks = [];
+  try {
+    const ok = await Promise.race([
+      page.evaluate(
+        `(async (src) => {
+          const res = await fetch(src, { credentials: "include", redirect: "follow" });
+          if (!res.ok) return false;
+          const buf = new Uint8Array(await res.arrayBuffer());
+          if (buf.length < ${VIDEO_MIN_BYTES}) return false;
+          const push = window["__ppVideoPush"];
+          if (typeof push !== "function") return false;
+          const step = 32768;
+          for (let i = 0; i < buf.length; i += step) {
+            const slice = buf.subarray(i, i + step);
+            let s = "";
+            for (let j = 0; j < slice.length; j++) s += String.fromCharCode(slice[j]);
+            await push(btoa(s));
+          }
+          return true;
+        })(${JSON.stringify(src)})`,
+      ),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 180_000)),
+    ]);
+    if (!ok) return false;
+    const buf = Buffer.concat(sink.__ppVideoChunks ?? []);
+    sink.__ppVideoChunks = [];
+    return writeBufIfVideo(destPath, buf, src);
+  } catch (e) {
+    sink.__ppVideoChunks = [];
+    warn(`ページ内の動画取得に失敗: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}`);
+    return false;
+  }
+}
 async function fetchUrlToVideo(page: Page, src: string, destPath: string): Promise<boolean> {
   if (!/^https?:/i.test(src)) return false;
   try {
     const res = await page.request.get(src, {
-      timeout: 90_000,
+      timeout: 180_000,
       maxRedirects: 10,
-      headers: { "Accept-Encoding": "identity" },
+      headers: {
+        "Accept-Encoding": "identity",
+        Accept: "video/mp4,application/octet-stream,*/*",
+        Referer: page.url() || "https://notebook.google.com/",
+      },
     });
-    if (!res.ok()) return false;
-    const buf = Buffer.from(await res.body());
-    if (buf.length <= VIDEO_MIN_BYTES) return false;
-    writeFileSync(destPath, buf);
-    if (!isRealVideoFile(destPath)) {
-      try {
-        unlinkSync(destPath);
-      } catch {
-        /* 破棄できなくても次の取得で上書きする */
-      }
-      warn(`URL は MP4 ではありません: ${src.slice(0, 64)}`);
+    if (!res.ok()) {
+      warn(`動画 URL HTTP ${res.status()}: ${src.slice(0, 96)}`);
       return false;
     }
-    log(`保存: ${destPath}（${buf.length} bytes）`);
-    return true;
+    const buf = Buffer.from(await res.body());
+    return writeBufIfVideo(destPath, buf, src);
   } catch (e) {
     warn(`動画 URL 取得に失敗: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}`);
     return false;
@@ -1733,19 +1805,113 @@ async function fetchVideoViaRpc(page: Page, destPath: string): Promise<boolean> 
     return null;
   })) as {
     status: number;
+    at?: boolean;
+    notebookId?: string;
     urls: string[];
+    preview?: string;
   } | null;
-  if (!payload?.urls?.length) return false;
+  if (!payload) return false;
+  log(
+    `LIST_ARTIFACTS(動画) status=${payload.status} urls=${payload.urls.length} notebook=${payload.notebookId ?? ""} at=${Boolean(payload.at)}`,
+  );
+  if (!payload.urls.length) {
+    warn(`LIST_ARTIFACTS 応答先頭: ${(payload.preview ?? "").replace(/\s+/g, " ")}`);
+    return false;
+  }
+  const hosts = [
+    ...new Set(
+      payload.urls.map((u) => {
+        try {
+          return new URL(u).host;
+        } catch {
+          return u.slice(0, 40);
+        }
+      }),
+    ),
+  ];
+  log(`LIST_ARTIFACTS hosts: ${hosts.join(" | ")}`);
   const videoNamed = payload.urls.filter((u) => /\.mp4(\?|$)|mime=video|video\/mp4/i.test(u));
-  const downloads = payload.urls.filter((u) => /contribution\.usercontent\.google\.com\/download/i.test(u));
-  const candidates = [...videoNamed, ...downloads.filter((u) => !videoNamed.includes(u))].slice(0, 12);
+  const downloads = payload.urls.filter(
+    (u) => /drum\.usercontent\.google\.com\/download|usercontent\.google\.com\/download/i.test(u) || /\.mp4(\?|$)/i.test(u),
+  );
+  const notThumbs = payload.urls.filter((u) => !/lh3\.googleusercontent\.com|fonts\.googleapis|favicon/i.test(u));
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const u of [...videoNamed, ...downloads, ...notThumbs]) {
+    if (seen.has(u)) continue;
+    seen.add(u);
+    candidates.push(u);
+    if (candidates.length >= 16) break;
+  }
+  log(`LIST_ARTIFACTS videoNamed=${videoNamed.length} downloads=${downloads.length} try=${candidates.length}`);
   for (const src of candidates) {
     log(`動画 RPC URL: ${src.slice(0, 120)}`);
+    if (await fetchUrlInPageToVideo(page, src, destPath)) return true;
     if (await fetchUrlToVideo(page, src, destPath)) return true;
   }
   return false;
 }
 
+type VideoSinkPage = Page & { __ppVideoChunks?: Buffer[]; __ppVideoBound?: boolean };
+
+async function bindVideoSink(page: VideoSinkPage): Promise<void> {
+  if (page.__ppVideoBound) return;
+  page.__ppVideoChunks = [];
+  try {
+    await page.exposeFunction("__ppVideoPush", (b64: string) => {
+      if (typeof b64 === "string" && b64) page.__ppVideoChunks!.push(Buffer.from(b64, "base64"));
+    });
+  } catch (e) {
+    if (!/already registered|has been already registered/i.test(String(e))) throw e;
+  }
+  page.__ppVideoBound = true;
+}
+
+async function fetchBlobUrlToVideo(page: Page, destPath: string): Promise<boolean> {
+  const sink = page as VideoSinkPage;
+  await bindVideoSink(sink);
+  sink.__ppVideoChunks = [];
+  const ok = await page
+    .evaluate(
+      `(async () => {
+        const v = document.querySelector("video");
+        const src = (v && (v.currentSrc || v.src)) || "";
+        if (!src || src.indexOf("blob:") !== 0) return false;
+        const res = await fetch(src);
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (buf.length < ${VIDEO_MIN_BYTES}) return false;
+        const push = window["__ppVideoPush"];
+        if (typeof push !== "function") return false;
+        const step = 32768;
+        for (let i = 0; i < buf.length; i += step) {
+          const slice = buf.subarray(i, i + step);
+          let s = "";
+          for (let j = 0; j < slice.length; j++) s += String.fromCharCode(slice[j]);
+          await push(btoa(s));
+        }
+        return true;
+      })()`,
+    )
+    .catch((e) => {
+      warn(`blob 動画取得: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+      return false;
+    });
+  if (!ok || !sink.__ppVideoChunks?.length) return false;
+  const buf = Buffer.concat(sink.__ppVideoChunks);
+  sink.__ppVideoChunks = [];
+  writeFileSync(destPath, buf);
+  if (!isRealVideoFile(destPath)) {
+    try {
+      unlinkSync(destPath);
+    } catch {
+      /* 破棄できなくても次の取得で上書きする */
+    }
+    warn("blob から取ったファイルは MP4 ではありません");
+    return false;
+  }
+  log(`保存: ${destPath}（${buf.length} bytes, blob）`);
+  return true;
+}
 async function fetchOpenVideoElement(page: Page, destPath: string): Promise<boolean> {
   const src = String(
     await page
@@ -1755,9 +1921,29 @@ async function fetchOpenVideoElement(page: Page, destPath: string): Promise<bool
       })()`)
       .catch(() => ""),
   );
-  if (!src || src.startsWith("blob:")) return false;
-  return fetchUrlToVideo(page, src, destPath);
-}
+  if (/^https?:/i.test(src)) {
+    if (await fetchUrlToVideo(page, src, destPath)) return true;
+  }
+  const perfUrls = (await page
+    .evaluate(
+      `(() => {
+        try {
+          return performance.getEntriesByType("resource").map((e) => e.name).filter((u) =>
+            /\\.(mp4|m4v|mov|webm)(\\?|$)/i.test(u) ||
+            /mime=video|video\\/mp4|googlevideo|contribution\\.usercontent\\.google\\.com\\/download/i.test(u)
+          );
+        } catch (e) {
+          return [];
+        }
+      })()`,
+    )
+    .catch(() => [])) as string[];
+  for (const u of perfUrls.slice(0, 8)) {
+    log(`動画 resource URL: ${String(u).slice(0, 120)}`);
+    if (await fetchUrlToVideo(page, u, destPath)) return true;
+  }
+  if (src.startsWith("blob:")) return fetchBlobUrlToVideo(page, destPath);
+  return false;}
 
 async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<void> {
   await withTimeout(
@@ -1765,21 +1951,24 @@ async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<voi
       if (!(await waitUntilVideoDurationVisible(page, 5_000))) {
         warn("動画の長さ表示が出る前にダウンロードを試みます");
       }
-      const player = await page.locator("video").first().isVisible().catch(() => false);
-      if (!player) {
-        const duration = page.getByText(/\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/).first();
-        if (await duration.isVisible({ timeout: 0 }).catch(() => false)) {
-          await duration.click({ timeout: 3_000 }).catch(() => undefined);
-          await page.waitForTimeout(800);
-        }
-      }
-      log("NotebookLM の動画を RPC から保存します（Chrome ダウンロードはタブを落とすので使いません）");
-      if (await fetchOpenVideoElement(page, destPath)) return;
+      log("Studio の解説カードから MP4 を保存します（再生しません）");
+      await ensureKeeperTab(page);
       if (await fetchVideoViaRpc(page, destPath)) return;
-      throw new Error("動画 URL を LIST_ARTIFACTS から取れませんでした（Chrome ダウンロードは使いません）");
+      if (page.isClosed()) throw new Error("ブラウザが閉じられています");
+      const clickDownload = async () => {
+        for (let i = 0; i < 12; i++) {
+          if (page.isClosed()) throw new Error("ブラウザが閉じられています");
+          if (await clickNotebookLmVideoDownload(page)) return;
+          await new Promise((r) => setTimeout(r, 1_000));
+        }
+        throw new Error("ダウンロード操作が見つかりません");
+      };
+      await waitForDownloadTo(page, destPath, clickDownload, 180_000, VIDEO_MIN_BYTES);
+      if (isRealVideoFile(destPath)) return;
+      throw new Error("動画 MP4 を Studio から保存できませんでした");
     })(),
-    100_000,
-    "動画保存が 100 秒を超えたので打ち切ります",
+    250_000,
+    "動画保存が 250 秒を超えたので打ち切ります",
   );
 }
 
@@ -2177,22 +2366,13 @@ async function collectReadyStudio(
     try {
       if (await studioHasExplainerVideoOutput(page)) {
         await dismissPointerBlockers(page);
-        const opened =
-          (await openStudioCardMatching(page, /\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/)) ||
-          (await clickFirstByName(page, [/play_arrow/, /再生/, /^Play$/i], { timeoutMs: 2_000 }));
-        if (opened) await page.waitForTimeout(1500);
-        const hasPlayer = await page.locator("video").first().isVisible().catch(() => false);
-        if (!hasPlayer) {
-          log("動画プレーヤーがまだ無いので保存は次の確認に回します");
-        } else {
-          log("既存の Studio 動画から MP4 を保存します（再生成しません）");
-          await downloadStudioVideoMp4(page, videoDest);
-          if (artifactReady(videoDest, VIDEO_MIN_BYTES)) {
-            state.videoMp4Path = videoDest;
-            saveState(state);
-            if (!state.completed.includes("nlm-video") && !state.completed.includes("done")) {
-              markCompleted(state, "nlm-video");
-            }
+        log("既存の Studio 動画から MP4 を保存します（再生せず、再生成しません）");
+        await downloadStudioVideoMp4(page, videoDest);
+        if (artifactReady(videoDest, VIDEO_MIN_BYTES)) {
+          state.videoMp4Path = videoDest;
+          saveState(state);
+          if (!state.completed.includes("nlm-video") && !state.completed.includes("done")) {
+            markCompleted(state, "nlm-video");
           }
         }
       }
@@ -2200,12 +2380,11 @@ async function collectReadyStudio(
       const msg = collectErrMsg(e);
       if (
         isTargetClosedError(e) ||
-        /ダウンロードボタンが見つかりません|動画保存が |LIST_ARTIFACTS|Chrome ダウンロード/.test(msg)
-      ) {
+        /ダウンロードボタンが見つかりません|動画保存が |LIST_ARTIFACTS|Chrome ダウンロード|動画 MP4 を Studio/.test(msg)      ) {
         ctx.skipVideoDownload = true;
       }
       warn(`動画の保存はまだできません: ${msg}`);
-      if (isTargetClosedError(e)) return;
+      if (isTargetClosedError(e) || page.isClosed()) return;
     }
   }
 
@@ -2436,6 +2615,7 @@ export async function runNotebookLm(
     return should(id);
   };
   if (
+    !needVideoFile &&
     !should("nlm-create") &&
     !should("nlm-upload") &&
     !shouldStudio("nlm-slides") &&
@@ -2486,8 +2666,7 @@ export async function runNotebookLm(
       shouldStudio("nlm-video") ||
       shouldStudio("nlm-quiz") ||
       shouldStudio("nlm-flashcards");
-    if (kicking && !skipKickoff && opts.quota && !opts.quota.ignoreNotebookQuota) {
-      const quota = await loadNotebookQuota(opts.quota);
+    if (kicking && !skipKickoff && !needVideoFile && opts.quota && !opts.quota.ignoreNotebookQuota) {      const quota = await loadNotebookQuota(opts.quota);
       const pause = notebookGenerationPause(
         quota,
         Date.now(),
@@ -2496,13 +2675,16 @@ export async function runNotebookLm(
       );
       if (pause && quota) throw new NotebookQuotaPauseError(pause, quota);
     }
-    if (kicking) {
+    if (kicking || needVideoFile) {
       if (!state.notebooklmUrl) {
-        if (skipKickoff) return;
+        if (skipKickoff && !needVideoFile) return;
         throw new Error("NotebookLM の URL がありません");
       }
+      if (needVideoFile) {
+        log("解説動画は生成済みなので、MP4 だけ Studio から保存して Edu Share へ載せます");
+      }
       await ensureOnNotebook(page, state.notebooklmUrl);
-      await runStudioParallel(page, paperDir, state, skipStudio, skipKickoff);
+      await runStudioParallel(page, paperDir, state, skipStudio, skipKickoff || needVideoFile);
     }
   } catch (e) {
     if (e instanceof GenerationWaitingError) throw e;

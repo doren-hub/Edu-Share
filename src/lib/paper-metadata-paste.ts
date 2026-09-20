@@ -205,7 +205,17 @@ function isNoiseMetadataLine(s: string): boolean {
   ) {
     return true;
   }
-  if (/^(this paper|the paper|本研究|本論文)\b/i.test(t) && t.length > 80) return true;
+  if (
+    t.length > 60 &&
+    /^(?:this paper|the paper|this study|the study|this work|we (?:present|propose|investigate|show|study)|本研究|本論文)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (t.length > 120 && t.split(/\s+/).length > 18 && /[.!?。]$/.test(t)) {
+    return true;
+  }
   return false;
 }
 
