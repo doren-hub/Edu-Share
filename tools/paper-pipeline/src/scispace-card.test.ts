@@ -205,6 +205,85 @@ test("Files カードは TL;DR のあと隣のタイトルを混ぜない", () =
   assert.doesNotMatch(m.paste, /Dewdney/);
 });
 
+test("Files 行が1行でもタイトル・年著者・arXiv を貼り付け用に分ける", () => {
+  const one =
+    "2510.07777v1.pdf Drift No More? Context Equilibria in Multi-Turn LLM Interactions 2025 · Vardhan Dongre, Ryan A. Rossi arXiv PDF UPLOAD Uploaded on 20 Sep 2026 The paper investigates context drift in multi-turn interactions of Large Language Models (LLMs), proposing a framework to understand and mitigate this phenomenon.";
+  const m = extractSciSpaceCardMeta(one, "2510.07777v1.pdf");
+  assert.match(m.title, /Drift No More/);
+  assert.equal(m.publicationYear, "2025");
+  assert.match(m.authors, /Vardhan Dongre/);
+  assert.equal(m.venue, "arXiv");
+  assert.match(m.paste, /Drift No More/);
+  assert.match(m.paste, /2025/);
+  assert.match(normalizeFilesRowText(one), /\n2025/);
+});
+
+test("rawFilesCardPaste: Files 行をタイトル・著者だけに加工しない", () => {
+  const row = [
+    "2307.09009v3.pdf",
+    "How is ChatGPT's behavior changing over time?",
+    "2023 · Lingjiao Chen, Matei Zaharia, James Zou",
+    "arXiv",
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+    "The paper investigates how the instruction-following capabilities of large language models (LLMs) like GPT-4 have changed over time, particularly in response to sensitive questions and composite instructions.",
+  ].join("\n");
+  const paste = rawFilesCardPaste(row, "2307.09009v3.pdf");
+  assert.match(paste, /2307\.09009v3\.pdf/);
+  assert.match(paste, /PDF UPLOAD/);
+  assert.match(paste, /Uploaded on 20 Sep 2026/);
+  assert.match(paste, /The paper investigates how the instruction-following/);
+  assert.equal(paste, row);
+  assert.notEqual(extractSciSpaceCardMeta(row, "2307.09009v3.pdf").paste, paste);
+});
+
+test("needsRawFilesPaste: タイトル・著者だけの貼り付けは取り直す", () => {
+  assert.equal(
+    needsRawFilesPaste({
+      filename: "2307.09009v3.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/x",
+      filesPaste: "The First Law of Robotics Revisited: A New Perspective on Autonomous Systems\n2024⋅DOI⋅A. K. Dewdney",
+    }),
+    true,
+  );
+  assert.equal(
+    needsRawFilesPaste({
+      filename: "2307.03172v3.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/y",
+      filesPaste: "",
+    }),
+    true,
+  );
+  assert.equal(
+    needsRawFilesPaste({
+      filename: "2601.15300v1.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/z",
+      filesPaste:
+        "2601.15300v1.pdf\nA title\n2026⋅Weiwei Wang\narXiv\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+    }),
+    false,
+  );
+});
+
+test("Files カードは TL;DR のあと隣のタイトルを混ぜない", () => {
+  const mixed = [
+    "2307.09009v3.pdf",
+    "How is ChatGPT's behavior changing over time?",
+    "2023 · Lingjiao Chen, Matei Zaharia, James Zou",
+    "arXiv",
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+    "The paper investigates how the instruction-following capabilities of large language models (LLMs) like GPT-4 have changed over time, particularly in response to sensitive questions and composite instructions.",
+    "The First Law of Robotics Revisited: A New Perspective on Autonomous Systems",
+    "2024⋅DOI⋅A. K. Dewdney",
+  ].join("\n");
+  const m = extractSciSpaceCardMeta(mixed, "2307.09009v3.pdf");
+  assert.match(m.title, /ChatGPT/);
+  assert.doesNotMatch(m.title, /First Law of Robotics/);
+  assert.match(m.authors, /Lingjiao Chen/);
+  assert.doesNotMatch(m.paste, /Dewdney/);
+});
+
 const mixedFiles = [
   "Home",
   "Files (5)",

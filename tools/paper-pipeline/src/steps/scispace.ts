@@ -199,8 +199,7 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
         log("SciSpace: ログイン中は画面を触りません。このウィンドウでログインしてください");
         loggedWait = true;
       }
-    } else if (Date.now() - lastFilesClick >= 15_000) {
-      lastFilesClick = Date.now();
+    } else if (Date.now() - lastFilesClick >= 15_000) {      lastFilesClick = Date.now();
       await restoreFolderFilesTable(page, folderUrl);
     }
     if (Date.now() - lastBeat >= 30_000) {
@@ -370,8 +369,7 @@ async function scrollFilesForName(page: Page, filename: string, title = ""): Pro
     await page.mouse.wheel(0, 900);
     await sleep(160);
   }
-  return filesNameVisible(page, filename, title);
-}
+  return filesNameVisible(page, filename, title);}
 
 async function filterFilesList(page: Page, folderUrl: string, filename: string, title = ""): Promise<void> {
   if (!(await isNotebooksFilesView(page, folderUrl))) {
@@ -396,8 +394,7 @@ async function filterFilesList(page: Page, folderUrl: string, filename: string, 
   }
   await fillFilesListSearch(page, folderUrl, "");
   await sleep(400);
-  await scrollFilesForName(page, filename, title);
-}
+  await scrollFilesForName(page, filename, title);}
 
 type FilesCardCandidates = { texts: string[]; dois: string[] };
 
@@ -833,8 +830,7 @@ export async function captureSciSpaceCardMeta(
       `SciSpace メタ: title=${state.title.slice(0, 80)} doi=${state.doi || "(なし)"} venue=${state.venue || "(なし)"}`,
     );
     log(
-      `SciSpace TL;DR: ${descriptionUsable(state.tldr) || tldrUsable(state.tldr) ? "あり" : "なし"}`,
-    );
+      `SciSpace TL;DR: ${descriptionUsable(state.tldr) || tldrUsable(state.tldr) ? "あり" : "なし"}`,    );
     log(`SciSpace 個別ページ: ${state.scispaceUrl}`);
   } catch (e) {
     await saveFailureShot(page, paperDir, "scispace-meta");
@@ -868,8 +864,7 @@ function applyExtractedCard(
     /^(The paper|This paper|The study|This study|本研究|本論文)\b/i;
   if (card.tldr && (tldrUsable(card.tldr) || descriptionUsable(card.tldr)) && filesTldrOpener.test(card.tldr)) {
     state.tldr = card.tldr;
-  }
-}
+  }}
 
 const READ_SCISPACE_ABSTRACT = `(() => {
   const label = /^(abstract|tl;\\s*dr|tldr|要旨|summary)$/i;

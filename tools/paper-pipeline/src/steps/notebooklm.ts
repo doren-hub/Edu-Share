@@ -1775,7 +1775,6 @@ async function fetchUrlInPageToVideo(page: Page, src: string, destPath: string):
     return false;
   }
 }
-
 async function fetchUrlToVideo(page: Page, src: string, destPath: string): Promise<boolean> {
   if (!/^https?:/i.test(src)) return false;
   try {
@@ -1913,7 +1912,6 @@ async function fetchBlobUrlToVideo(page: Page, destPath: string): Promise<boolea
   log(`保存: ${destPath}（${buf.length} bytes, blob）`);
   return true;
 }
-
 async function fetchOpenVideoElement(page: Page, destPath: string): Promise<boolean> {
   const src = String(
     await page
@@ -1945,8 +1943,7 @@ async function fetchOpenVideoElement(page: Page, destPath: string): Promise<bool
     if (await fetchUrlToVideo(page, u, destPath)) return true;
   }
   if (src.startsWith("blob:")) return fetchBlobUrlToVideo(page, destPath);
-  return false;
-}
+  return false;}
 
 async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<void> {
   await withTimeout(
@@ -2383,8 +2380,7 @@ async function collectReadyStudio(
       const msg = collectErrMsg(e);
       if (
         isTargetClosedError(e) ||
-        /ダウンロードボタンが見つかりません|動画保存が |LIST_ARTIFACTS|Chrome ダウンロード|動画 MP4 を Studio/.test(msg)
-      ) {
+        /ダウンロードボタンが見つかりません|動画保存が |LIST_ARTIFACTS|Chrome ダウンロード|動画 MP4 を Studio/.test(msg)      ) {
         ctx.skipVideoDownload = true;
       }
       warn(`動画の保存はまだできません: ${msg}`);
@@ -2627,6 +2623,11 @@ export async function runNotebookLm(
     !shouldStudio("nlm-quiz") &&
     !shouldStudio("nlm-flashcards")
   ) {
+    if (needVideoFile) {
+      log(
+        "解説動画は生成済みです。MP4 の RPC 保存は Chrome を落とすことがあるので Studio は開かず、SciSpace / Edu Share を先に進めます",
+      );
+    }
     return;
   }
 
@@ -2665,8 +2666,7 @@ export async function runNotebookLm(
       shouldStudio("nlm-video") ||
       shouldStudio("nlm-quiz") ||
       shouldStudio("nlm-flashcards");
-    if (kicking && !skipKickoff && !needVideoFile && opts.quota && !opts.quota.ignoreNotebookQuota) {
-      const quota = await loadNotebookQuota(opts.quota);
+    if (kicking && !skipKickoff && !needVideoFile && opts.quota && !opts.quota.ignoreNotebookQuota) {      const quota = await loadNotebookQuota(opts.quota);
       const pause = notebookGenerationPause(
         quota,
         Date.now(),

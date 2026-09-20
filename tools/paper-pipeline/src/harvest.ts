@@ -39,8 +39,7 @@ export function hasHarvestableWork(
     state.notebooklmUrl &&
     studioKickoffBegun(state) &&
     missingStudioStages(state, selected).length > 0
-  ) {
-    return true;
+  ) {    return true;
   }
   return false;
 }

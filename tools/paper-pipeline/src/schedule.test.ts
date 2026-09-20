@@ -217,7 +217,6 @@ test("pickNextJob: 4種済みの収穫（verify 等）を未着手の生成よ�
   ];
   assert.deepEqual(pickNextJob(jobs, 100), { kind: "run", id: "verify.pdf" });
 });
-
 test("pickNextJob: 利用量待ちなら生成ロックを外して収穫できる論文を回す", () => {
   const jobs = [
     job({

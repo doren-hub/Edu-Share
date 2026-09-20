@@ -123,7 +123,6 @@ test("hasHarvestableWork: 解説動画はあるが MP4 が無いなら Studio �
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("shouldSkipNotebookVisit: メタ未取得や Chrome 切断後は Studio を開かない", () => {
   const dir = mkdtempSync(join(tmpdir(), "pp-harvest-skip-"));
   try {

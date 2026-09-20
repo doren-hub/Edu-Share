@@ -12,7 +12,6 @@ export function filesTabClickAllowed(opts: {
 }
 
 /** SciSpace フォルダの Files 表か、ノートのチャット/Home かを本文から分ける。 */
-
 export function looksLikeSciSpaceFilesTable(text: string): boolean {
   const t = text.replace(/\s+/g, " ");
   if (!/Upload PDFs/i.test(t)) return false;
