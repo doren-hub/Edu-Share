@@ -2,7 +2,7 @@ import { readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import type { AppConfig } from "./config.ts";
-import { assertPageAlive, recoverStuckPage } from "./browser.ts";
+import { assertPageAlive, isTargetClosedError, isTargetClosedMessage, recoverStuckPage } from "./browser.ts";
 import {
   ensurePaperDir,
   hasDoneMarker,
@@ -11,17 +11,20 @@ import {
   type InboxPdf,
 } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
-import { matchesExistingPaper, titlesLikelySame, titleUsableForExistingMatch, type ExistingPaper } from "./match.ts";
+import { matchesExistingPaper, titleUsableForExistingMatch, type ExistingPaper } from "./match.ts";
 import { isSciSpaceRecordUrl } from "./scispace-record-url.ts";
 import {
   clearStage,
   doneMarkerPath,
   emptyState,
+  firstPendingStudioStage,
+  isCompleted,
   loadState,
   markCompleted,
   markStudioStarted,
   saveState,
   STAGES,
+  studioKickoffBegun,
   unmarkStudioStarted,
   type PaperState,
   type StageId,
@@ -38,10 +41,12 @@ import {
 } from "./steps/edushare.ts";
 import { runNotebookLm } from "./steps/notebooklm.ts";
 import { captureSciSpaceCardMeta, captureSciSpaceRecordUrl, runSciSpaceMeta, runSciSpaceUpload } from "./steps/scispace.ts";
-import { descriptionUsable, sciSpaceExtractionLooksLikeChrome, tldrUsable } from "./scispace-card.ts";
+import { descriptionUsable, needsRawFilesPaste, sciSpaceExtractionLooksLikeChrome, tldrUsable } from "./scispace-card.ts";
 import { GenerationWaitingError } from "./waiting.ts";
+import { currentNotebookQuotaPause, NotebookQuotaPauseError } from "./notebook-quota.ts";
 import { needsLocalVideoFile, videoFileReady } from "./video-file.ts";
 import { formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
+import { hasAnyStudioArtifact, missingEduUploads, shouldSkipNotebookVisit } from "./harvest.ts";
 
 export type BatchResult = {
   processed: string[];
@@ -185,6 +190,7 @@ export async function repairSciSpaceCardMeta(
     const state = loadState(paperDir, fallback);
     if (cfg.onlyFilename && state.filename !== cfg.onlyFilename) continue;
     if (!state.eduShareTestUrl || !state.filename) continue;
+    if (!needsRawFilesPaste(state)) continue;
     log(`--- SciSpace メタ補修 ${state.filename} ---`);
     const before = {
       title: state.title,
@@ -229,15 +235,6 @@ export async function repairSciSpaceCardMeta(
         }
         continue;
       }
-      if (oldTitleOk && state.title.trim() !== before.title.trim()) {
-        if (!titlesLikelySame(before.title, state.title)) {
-          log(`${state.filename}: 別論文に見えるタイトルなので前回を残します`);
-          state.title = before.title;
-        } else if (before.title.trim().length > state.title.trim().length) {
-          log(`${state.filename}: 短いタイトルより前回の長いタイトルを残します`);
-          state.title = before.title;
-        }
-      }
       if (!descriptionUsable(state.tldr) && descriptionUsable(before.tldr)) state.tldr = before.tldr;
       else if (!tldrUsable(state.tldr) && tldrUsable(before.tldr)) state.tldr = before.tldr;
       saveState(state);
@@ -258,6 +255,9 @@ export async function repairSciSpaceCardMeta(
       );
       await applySciSpaceMetaToPaperPage(page, { paperDir, state });
       state.lastError = "";
+      if (isSciSpaceRecordUrl(state.scispaceUrl)) {
+        markCompleted(state, "sci-meta");
+      }
       saveState(state);
       updated.push(state.filename);
     } catch (e) {
@@ -323,7 +323,8 @@ export async function processOnePaper(
   cfg: AppConfig,
   item: InboxPdf,
   existing: ExistingPaper[],
-): Promise<"done" | "skipped" | "failed" | "waiting"> {
+  opts: { skipStudio?: boolean } = {},
+): Promise<"done" | "skipped" | "failed" | "waiting" | "quota"> {
   ensurePaperDir(item.paperDir);
   let state = loadState(
     item.paperDir,
@@ -343,6 +344,15 @@ export async function processOnePaper(
     log(`${item.filename}: 完了済みだが動画 MP4 が無いので Edu Share へ載せ直します`);
     clearStage(state, "done");
     clearStage(state, "verify");
+    saveState(state);
+    try {
+      unlinkSync(doneMarkerPath(item.paperDir));
+    } catch {
+      /* 無ければ続行 */
+    }
+  } else if (hasDoneMarker(item.paperDir) && needsRawFilesPaste(state)) {
+    log(`${item.filename}: 完了済みだが Files 行が未貼り付けなので SciSpace メタを取り直します`);
+    clearStage(state, "done");
     saveState(state);
     try {
       unlinkSync(doneMarkerPath(item.paperDir));
@@ -390,6 +400,17 @@ export async function processOnePaper(
 
   applyFromStage(state, cfg.fromStage && cfg.onlyFilename ? cfg.fromStage : null);
 
+  const quotaPause = await currentNotebookQuotaPause(cfg);
+  const skipStudioAfterDisconnect = isTargetClosedMessage(state.lastError);
+  const skipKickoff = quotaPause != null;
+  const forceSkipStudio = opts.skipStudio === true || skipStudioAfterDisconnect;
+  const skipStudio =
+    forceSkipStudio ||
+    shouldSkipNotebookVisit(state, selected, {
+      skipKickoff,
+      skipStudio: forceSkipStudio,
+    });
+
   try {
     await runSciSpaceUpload(page, {
       folderUrl: cfg.scispaceFolderUrl,
@@ -399,14 +420,23 @@ export async function processOnePaper(
       state,
     });
 
-    await runNotebookLm(page, {
-      homeUrl: cfg.notebooklmUrl,
-      pdfPath: item.absPath,
-      paperDir: item.paperDir,
-      state,
-      studioSkip: cfg.studioSkip,
-    });
+    if (skipStudio) {
+      log(`${item.filename}: Studio は開かず、SciSpace メタ / Edu Share を先に進めます`);
+    } else {
+      await runNotebookLm(page, {
+        homeUrl: cfg.notebooklmUrl,
+        pdfPath: item.absPath,
+        paperDir: item.paperDir,
+        state,
+        studioSkip: cfg.studioSkip,
+        quota: cfg,
+        skipKickoff,
+      });
+    }
 
+    if (!(await recoverStuckPage(page))) {
+      throw new Error("ブラウザが閉じられています");
+    }
     await assertPageAlive(page);
     await runSciSpaceMeta(page, {
       folderUrl: cfg.scispaceFolderUrl,
@@ -414,6 +444,9 @@ export async function processOnePaper(
       paperDir: item.paperDir,
       state,
     });
+    if (state.eduShareTestUrl && state.filesPaste.trim()) {
+      await applySciSpaceMetaToPaperPage(page, { paperDir: item.paperDir, state });
+    }
 
     const afterSci = matchesExistingPaper(existing, {
       filename: item.filename,
@@ -431,6 +464,39 @@ export async function processOnePaper(
       }
     }
 
+    const canHarvestEdu = hasAnyStudioArtifact(state, selected);
+    if (skipKickoff) {
+      if (canHarvestEdu) {
+        log(
+          `${item.filename}: 利用量回復待ちのため、できている生成物を Edu Share / SciSpace へ先に載せます`,
+        );
+        await runEduShareUpload(page, {
+          baseUrl: cfg.eduShareBaseUrl,
+          email: cfg.eduShareEmail,
+          password: cfg.eduSharePassword,
+          pdfPath: item.absPath,
+          paperDir: item.paperDir,
+          state,
+        });
+        await runEduShareMaterials(page, {
+          paperDir: item.paperDir,
+          state,
+          selected,
+        });
+        await attachEduShareVideo(page, state);
+      } else {
+        log(`${item.filename}: Notebook 利用量のため生成は止め、SciSpace まで進めました`);
+      }
+      const stillPending = firstPendingStudioStage(state, cfg.studioSkip);
+      if (
+        stillPending ||
+        !isCompleted(state, "sci-meta") ||
+        missingEduUploads(state, selected).length > 0
+      ) {
+        return "quota";
+      }
+    }
+
     await runEduShareUpload(page, {
       baseUrl: cfg.eduShareBaseUrl,
       email: cfg.eduShareEmail,
@@ -440,8 +506,15 @@ export async function processOnePaper(
       state,
     });
 
-    await runEduShareMaterials(page, { paperDir: item.paperDir, state });
+    await runEduShareMaterials(page, { paperDir: item.paperDir, state, selected });
     await attachEduShareVideo(page, state);
+    const pendingStudio = firstPendingStudioStage(state, cfg.studioSkip);
+    if (pendingStudio) {
+      log(
+        `${item.filename}: SciSpace / Edu Share まで進めたので、残りの ${pendingStudio} は生成待ちとして明け渡します`,
+      );
+      throw new GenerationWaitingError(pendingStudio);
+    }
     if (
       !cfg.studioSkip.includes("nlm-video") &&
       state.completed.includes("nlm-video") &&
@@ -471,10 +544,24 @@ export async function processOnePaper(
       log(`${item.filename}: 生成待ち（${e.stage}）。Chrome を明け渡します`);
       return "waiting";
     }
+    if (e instanceof NotebookQuotaPauseError) {
+      state.lastError = "";
+      saveState(state);
+      log(`${item.filename}: ${e.message}`);
+      return "quota";
+    }
     const msg = firstLine(e);
     state.lastError = msg;
     saveState(state);
     logError(`${item.filename}: ${msg}`);
+    if (isTargetClosedError(e) && studioKickoffBegun(state, cfg.studioSkip)) {
+      const stage = firstPendingStudioStage(state, cfg.studioSkip) || state.waitingFor || "nlm-video";
+      state.waitingFor = stage;
+      if (!state.generationStartedAt) state.generationStartedAt = new Date().toISOString();
+      saveState(state);
+      log(`${item.filename}: ブラウザ切断のため Studio 再生成はせず、Chrome を明け渡します`);
+      return "waiting";
+    }
     return "failed";
   }
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listInboxPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
+import { listInboxPdfs, listRawPasteRepairPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 
 test("listInboxPdfs: 変更日が古い順（名前順ではない）", () => {
   const root = mkdtempSync(join(tmpdir(), "paper-inbox-"));
@@ -56,6 +56,50 @@ test("listVideoRepairPdfs: MP4 が無い完了論文だけ", () => {
     assert.deepEqual(mergeInboxAndVideoRepair(inbox, found).map((p) => p.filename), [
       "0709.2257v2.pdf",
     ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("listRawPasteRepairPdfs: Files 行が無い／加工済みの完了論文だけ", () => {
+  const root = mkdtempSync(join(tmpdir(), "paper-paste-repair-"));
+  const work = join(root, "work");
+  const bad = join(work, "2307.09009v3");
+  const good = join(work, "2601.15300v1");
+  mkdirSync(bad, { recursive: true });
+  mkdirSync(good, { recursive: true });
+  try {
+    writeFileSync(join(bad, "2307.09009v3.pdf"), "pdf");
+    writeFileSync(join(good, "2601.15300v1.pdf"), "pdf");
+    writeFileSync(
+      join(bad, "state.json"),
+      JSON.stringify({
+        filename: "2307.09009v3.pdf",
+        inboxPdfPath: join(bad, "2307.09009v3.pdf"),
+        paperDir: bad,
+        completed: ["sci-meta", "done"],
+        eduShareTestUrl: "http://localhost:3000/tests/bad",
+        filesPaste: "The First Law of Robotics Revisited\n2024⋅DOI⋅A. K. Dewdney",
+      }),
+    );
+    writeFileSync(
+      join(good, "state.json"),
+      JSON.stringify({
+        filename: "2601.15300v1.pdf",
+        inboxPdfPath: join(good, "2601.15300v1.pdf"),
+        paperDir: good,
+        completed: ["sci-meta", "done"],
+        eduShareTestUrl: "http://localhost:3000/tests/good",
+        filesPaste:
+          "2601.15300v1.pdf\nA title\n2026⋅Weiwei Wang\narXiv\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+      }),
+    );
+    writeFileSync(join(bad, "DONE"), "ok\n");
+    writeFileSync(join(good, "DONE"), "ok\n");
+    assert.deepEqual(
+      listRawPasteRepairPdfs(work).map((p) => p.filename),
+      ["2307.09009v3.pdf"],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

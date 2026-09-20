@@ -5,6 +5,9 @@ export const STUDIO_RELATIVE_TIME =
 const NON_VIDEO =
   /フラッシュカード|単語帳|クイズ|マインドマップ|インフォグラフィ|スライド資料|Slide deck/i;
 
+const NON_SLIDE_CARD =
+  /フラッシュカード|単語帳|クイズ|マインドマップ|インフォグラフィ|Data Table|音声解説|Audio overview|新しいメモ|sticky_note|Add note|レポートを作成/i;
+
 const EXPLAINER_DURATION =
   /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明)\b/gi;
 
@@ -67,11 +70,45 @@ export function studioVideoGenerationDone(scan: VideoKickoffScan): boolean {
   return scan.durationsSec.length > 0 && !shouldKickoffVideo(scan);
 }
 
+/** 生成タイルではなく、Studio に並んでいるスライド出力か */
+export function isSlideDeckCardText(text: string): boolean {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (NON_SLIDE_CARD.test(t)) return false;
+  if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/.test(t)) return false;
+  if (/chevron_forward/.test(t) && !/件のソース/.test(t)) return false;
+  if (/スライド資料を生成|Generating slide/i.test(t)) return false;
+  if (
+    /スライド資料|Slide deck|スライドデッキ|\btablet\b/i.test(t) &&
+    (/件のソース/.test(t) || STUDIO_RELATIVE_TIME.test(t))
+  ) {
+    return true;
+  }
+  return /件のソース/.test(t) && STUDIO_RELATIVE_TIME.test(t);
+}
+
+/** 既存スライドや生成中があれば、もう一枚作らない */
+export function shouldKickoffSlides(texts: string[]): boolean {
+  const joined = texts.join("\n");
+  if (/スライド資料を生成|スライドを生成中|Generating slide/i.test(joined)) return false;
+  if (textLooksLikeGenerating(joined) && /スライド/.test(joined)) return false;
+  return !texts.some((t) => isSlideDeckCardText(t));
+}
+
 export function formatVideoScan(scan: VideoKickoffScan): string {
   if (scan.durationsSec.length === 0) return "動画カード 0 件";
   const clock = (s: number) =>
     `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   return `動画カード ${scan.durationsSec.length} 件（${scan.durationsSec.map(clock).join(", ")}）`;
+}
+
+/** 読み込み中のツールバーだけを「出力が無い」と誤判定しない */
+export function studioOutputScanIncomplete(text: string): boolean {
+  const t = text.replace(/\s+/g, " ");
+  if (/Loading Notebook/i.test(t)) return true;
+  if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)\b/.test(t)) return false;
+  if (STUDIO_RELATIVE_TIME.test(t)) return false;
+  return true;
 }
 
 /** チャット欄のカスタマイズ（Studio の生成ダイアログではない） */
@@ -82,7 +119,13 @@ export function isChatCustomizeLabel(text: string): boolean {
 
 /** Studio が生成中かどうか。タイルは「生成しています」ではなく sync アイコンになる。 */
 export function textLooksLikeGenerating(t: string): boolean {
-  if (/生成しています|Generating|動画を生成中|スライドを生成中|作成しています/i.test(t)) return true;
+  if (
+    /生成しています|Generating|動画を生成中|スライドを生成中|スライド資料を生成|作成しています/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
   if (/\bsync\b/i.test(t) && /スライド資料|動画解説|Video overview|Slide deck/i.test(t)) return true;
   return false;
 }

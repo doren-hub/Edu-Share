@@ -11,13 +11,24 @@ export type BrowserSession = {
 
 let chromeDownloadsPath = "";
 
+export const CHROME_RELAUNCH_GAP_MS = 2_500;
+
 export function getChromeDownloadsPath(): string {
   return chromeDownloadsPath;
 }
 
+export function isTargetClosedMessage(m: string): boolean {
+  return /has been closed|Target closed|browser has been closed|Connection closed|ページが閉じられました|ブラウザが閉じられています/i.test(
+    m,
+  );
+}
+
 export function isTargetClosedError(e: unknown): boolean {
-  const m = e instanceof Error ? e.message : String(e);
-  return /has been closed|Target closed|browser has been closed|Connection closed|ページが閉じられました/i.test(m);
+  return isTargetClosedMessage(e instanceof Error ? e.message : String(e));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export async function pageAlive(page: Page): Promise<boolean> {
@@ -137,4 +148,10 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
 
 export async function closeBrowser(session: BrowserSession): Promise<void> {
   await session.context.close().catch(() => undefined);
+}
+
+export async function relaunchBrowser(session: BrowserSession, cfg: AppConfig): Promise<BrowserSession> {
+  await closeBrowser(session);
+  await sleep(CHROME_RELAUNCH_GAP_MS);
+  return launchBrowser(cfg);
 }

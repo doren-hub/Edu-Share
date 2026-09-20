@@ -56,6 +56,8 @@ export type PaperState = {
   kickoffRetryAt: string;
   /** kickoffRetryAt の対象段階。他の Studio は後回しにしない */
   kickoffRetryStage: StageId | "";
+  /** Edu Share に載せ済みの Studio 成果物。利用量待ちの途中アップロード用 */
+  eduUploaded: StudioStageId[];
 };
 
 export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath" | "paperDir">): PaperState {
@@ -84,6 +86,7 @@ export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath"
     studioStarted: [],
     kickoffRetryAt: "",
     kickoffRetryStage: "",
+    eduUploaded: [],
   };
 }
 
@@ -103,10 +106,16 @@ export function loadState(paperDir: string, fallback: PaperState): PaperState {
     const studioStarted = Array.isArray(parsed.studioStarted)
       ? parsed.studioStarted.filter((s): s is StageId => isStageId(s))
       : [];
+    const eduUploaded = Array.isArray(parsed.eduUploaded)
+      ? parsed.eduUploaded.filter((s): s is StudioStageId =>
+          (STUDIO_STAGES as readonly string[]).includes(s),
+        )
+      : [];
     return {
       ...fallback,
       ...parsed,
       studioStarted,
+      eduUploaded,
       kickoffRetryStage:
         parsed.kickoffRetryStage && isStageId(parsed.kickoffRetryStage) ? parsed.kickoffRetryStage : "",
       paperDir,
@@ -166,6 +175,12 @@ export function studioKickoffSettled(state: PaperState, skip: readonly StudioSta
 export function markStudioStarted(state: PaperState, stage: StageId): void {
   if (!state.studioStarted) state.studioStarted = [];
   if (!state.studioStarted.includes(stage)) state.studioStarted.push(stage);
+  saveState(state);
+}
+
+export function markEduUploaded(state: PaperState, stage: StudioStageId): void {
+  if (!state.eduUploaded) state.eduUploaded = [];
+  if (!state.eduUploaded.includes(stage)) state.eduUploaded.push(stage);
   saveState(state);
 }
 

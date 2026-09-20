@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Locator, Page } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
+import { isTargetClosedError } from "../browser.ts";
 import {
   firstPendingStudioStage,
   hasStudioStarted,
@@ -30,12 +31,21 @@ import {
   isChatCustomizeLabel,
   isStudioGenerateLabel,
   scanStudioVideoOutputs,
+  shouldKickoffSlides,
   shouldKickoffVideo,
+  studioOutputScanIncomplete,
   studioVideoGenerationDone,
+  isSlideDeckCardText,
   textLooksLikeGenerating,
   type VideoKickoffScan,
 } from "../studio-cards.ts";
 import { GenerationWaitingError } from "../waiting.ts";
+import {
+  loadNotebookQuota,
+  notebookGenerationPause,
+  NotebookQuotaPauseError,
+  type NotebookQuotaConfig,
+} from "../notebook-quota.ts";
 import { VIDEO_MIN_BYTES, isRealVideoFile, videoFileReady } from "../video-file.ts";
 import { formatStudioGenerateJa } from "../studio-select.ts";
 
@@ -627,17 +637,6 @@ async function studioOutputCount(page: Page): Promise<number> {
   return page.getByText(STUDIO_RELATIVE_TIME).count().catch(() => 0);
 }
 
-function isOtherStudioArtifact(text: string): boolean {
-  return /フラッシュカード|単語帳|クイズ|マインドマップ|インフォグラフィ|動画解説|Video overview|音声概要|Audio overview/i.test(
-    text,
-  ) || (/\b\d{1,2}:\d{2}\b/.test(text) && !/スライド|Slide/i.test(text));
-}
-
-function isSlideDeckCardText(text: string): boolean {
-  if (isOtherStudioArtifact(text)) return false;
-  return /スライド資料|Slide deck|スライドデッキ|\btablet\b/i.test(text);
-}
-
 async function clickStudioShowMore(page: Page): Promise<void> {
   const buttons = page.getByRole("button", { name: /もっと見る|Show more|See more/i });
   const n = Math.min(await buttons.count().catch(() => 0), 6);
@@ -675,6 +674,19 @@ async function revealStudioOutputs(page: Page): Promise<void> {
     await duration.scrollIntoViewIfNeeded().catch(() => undefined);
   }
   await page.waitForTimeout(200);
+}
+
+async function waitUntilStudioOutputsReady(page: Page, timeoutMs = 20_000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (page.isClosed()) return false;
+    await revealStudioOutputs(page);
+    const t = await notebookBody(page).catch(() => "");
+    if (!studioOutputScanIncomplete(t)) return true;
+    await page.waitForTimeout(500).catch(() => undefined);
+  }
+  warn("Studio 出力カードがまだ出ていません（ツールバーだけのときは開始記録を消しません）");
+  return false;
 }
 
 async function logStudioCardSummaries(page: Page): Promise<void> {
@@ -1036,6 +1048,15 @@ async function generateStudioItem(
     log(`Studio: 生成前の ${formatVideoScan(existing)}`);
     if (!shouldKickoffVideo(existing)) {
       log("既存の解説動画があるので生成は押しません");
+      await dismissStudioCustomize(page);
+      await dismissStudioViewer(page);
+      return "started";
+    }
+  }
+  if (opts.stage === "nlm-slides") {
+    const cards = await studioCardTexts(page);
+    if (!shouldKickoffSlides(cards)) {
+      log("既存のスライドがあるので生成は押しません");
       await dismissStudioCustomize(page);
       await dismissStudioViewer(page);
       return "started";
@@ -1677,6 +1698,67 @@ async function clickNotebookLmVideoDownload(page: Page): Promise<boolean> {
   return false;
 }
 
+async function fetchUrlToVideo(page: Page, src: string, destPath: string): Promise<boolean> {
+  if (!/^https?:/i.test(src)) return false;
+  try {
+    const res = await page.request.get(src, {
+      timeout: 90_000,
+      maxRedirects: 10,
+      headers: { "Accept-Encoding": "identity" },
+    });
+    if (!res.ok()) return false;
+    const buf = Buffer.from(await res.body());
+    if (buf.length <= VIDEO_MIN_BYTES) return false;
+    writeFileSync(destPath, buf);
+    if (!isRealVideoFile(destPath)) {
+      try {
+        unlinkSync(destPath);
+      } catch {
+        /* 破棄できなくても次の取得で上書きする */
+      }
+      warn(`URL は MP4 ではありません: ${src.slice(0, 64)}`);
+      return false;
+    }
+    log(`保存: ${destPath}（${buf.length} bytes）`);
+    return true;
+  } catch (e) {
+    warn(`動画 URL 取得に失敗: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}`);
+    return false;
+  }
+}
+
+async function fetchVideoViaRpc(page: Page, destPath: string): Promise<boolean> {
+  const payload = (await page.evaluate(`(${LIST_ARTIFACTS_IN_PAGE})()`).catch((e) => {
+    warn(`LIST_ARTIFACTS 失敗: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+    return null;
+  })) as {
+    status: number;
+    urls: string[];
+  } | null;
+  if (!payload?.urls?.length) return false;
+  const videoNamed = payload.urls.filter((u) => /\.mp4(\?|$)|mime=video|video\/mp4/i.test(u));
+  const downloads = payload.urls.filter((u) => /contribution\.usercontent\.google\.com\/download/i.test(u));
+  const candidates = [...videoNamed, ...downloads.filter((u) => !videoNamed.includes(u))].slice(0, 12);
+  for (const src of candidates) {
+    log(`動画 RPC URL: ${src.slice(0, 120)}`);
+    if (await fetchUrlToVideo(page, src, destPath)) return true;
+  }
+  return false;
+}
+
+async function fetchOpenVideoElement(page: Page, destPath: string): Promise<boolean> {
+  const src = String(
+    await page
+      .evaluate(`(() => {
+        const v = document.querySelector("video");
+        return (v && (v.currentSrc || v.src)) || "";
+      })()`)
+      .catch(() => ""),
+  );
+  if (!src || src.startsWith("blob:")) return false;
+  return fetchUrlToVideo(page, src, destPath);
+}
+
 async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<void> {
   await withTimeout(
     (async () => {
@@ -1691,28 +1773,10 @@ async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<voi
           await page.waitForTimeout(800);
         }
       }
-      log("NotebookLM のダウンロードから MP4 を保存します");
-      await waitForDownloadTo(
-        page,
-        destPath,
-        async () => {
-          const ok = await clickNotebookLmVideoDownload(page);
-          if (!ok) {
-            await logVisibleButtonNames(page);
-            throw new Error("NotebookLM の動画ダウンロードボタンが見つかりません");
-          }
-        },
-        90_000,
-        VIDEO_MIN_BYTES,
-      );
-      if (!isRealVideoFile(destPath)) {
-        try {
-          unlinkSync(destPath);
-        } catch {
-          /* 破棄できなくても次の取得で上書きする */
-        }
-        throw new Error("保存したファイルは MP4 ではありません（スライド PDF などを掴みました）");
-      }
+      log("NotebookLM の動画を RPC から保存します（Chrome ダウンロードはタブを落とすので使いません）");
+      if (await fetchOpenVideoElement(page, destPath)) return;
+      if (await fetchVideoViaRpc(page, destPath)) return;
+      throw new Error("動画 URL を LIST_ARTIFACTS から取れませんでした（Chrome ダウンロードは使いません）");
     })(),
     100_000,
     "動画保存が 100 秒を超えたので打ち切ります",
@@ -2000,6 +2064,10 @@ async function unmarkStaleStudioStarts(page: Page, state: PaperState): Promise<v
     log("生成開始から間もないので、出力カードがまだ無くてもやり直ししません");
     return;
   }
+  if (studioOutputScanIncomplete(body)) {
+    log("Studio 出力カードがまだ無いので開始記録はそのままにします");
+    return;
+  }
   if (hasStudioStarted(state, "nlm-slides") && !isCompleted(state, "nlm-slides")) {
     const stamps = page.getByText(STUDIO_RELATIVE_TIME);
     const n = Math.min(await stamps.count().catch(() => 0), 16);
@@ -2130,8 +2198,14 @@ async function collectReadyStudio(
       }
     } catch (e) {
       const msg = collectErrMsg(e);
-      if (/ダウンロードボタンが見つかりません|動画保存が /.test(msg)) ctx.skipVideoDownload = true;
+      if (
+        isTargetClosedError(e) ||
+        /ダウンロードボタンが見つかりません|動画保存が |LIST_ARTIFACTS|Chrome ダウンロード/.test(msg)
+      ) {
+        ctx.skipVideoDownload = true;
+      }
       warn(`動画の保存はまだできません: ${msg}`);
+      if (isTargetClosedError(e)) return;
     }
   }
 
@@ -2187,8 +2261,10 @@ async function runStudioParallel(
   paperDir: string,
   state: PaperState,
   skipStudio: readonly StudioStageId[] = [],
+  skipKickoff = false,
 ): Promise<void> {
   await expandNotebookPanels(page);
+  const outputsReady = await waitUntilStudioOutputsReady(page);
   await logStudioCardSummaries(page);
   await unmarkStaleStudioStarts(page, state);
 
@@ -2211,6 +2287,8 @@ async function runStudioParallel(
     if (!shouldKickoffVideo(videoScan)) {
       log(`既存の解説動画があるので再生成しません（${formatVideoScan(videoScan)}）`);
       markStudioStarted(state, "nlm-video");
+    } else if (!outputsReady && hasStudioStarted(state, "nlm-video")) {
+      log("Studio 出力カード待ちのため、既存の動画タイルは開きません");
     }
   } else if (videoKickoffCooling) {
     log("nlm-video は開始クールダウン中のため、動画タイルは開きません");
@@ -2224,13 +2302,25 @@ async function runStudioParallel(
     timeoutMs: number,
     extra: { explainerVideo?: boolean } = {},
   ): Promise<void> => {
+    if (skipKickoff) return;
     const r = await tryKickoffStudio(page, state, stage, labels, timeoutMs, extra);
     if (r === "complete") await collectReadyStudio(page, paperDir, state, studioCollect);
   };
 
+  if (skipKickoff) {
+    log("Notebook 利用量のため新規生成はせず、できている成果物だけ集めます");
+  }
+
   if (want("nlm-slides") && !isCompleted(state, "nlm-slides")) {
-    if (await studioHasSlideDeckOutput(page)) markStudioStarted(state, "nlm-slides");
-    else await kick("nlm-slides", [/スライド資料/, /Slide deck/i, /スライドデッキ/], SLIDE_MS);
+    const slideCards = await studioCardTexts(page);
+    if (!shouldKickoffSlides(slideCards) || (await studioHasSlideDeckOutput(page))) {
+      if (!shouldKickoffSlides(slideCards)) {
+        log("既存のスライドがあるので再生成しません");
+      }
+      markStudioStarted(state, "nlm-slides");
+    } else {
+      await kick("nlm-slides", [/スライド資料/, /Slide deck/i, /スライドデッキ/], SLIDE_MS);
+    }
   }
   if (want("nlm-video") && !isCompleted(state, "nlm-video")) {
     const cooldown = Date.parse(state.kickoffRetryAt || "") || 0;
@@ -2242,27 +2332,31 @@ async function runStudioParallel(
       log(
         `nlm-video の開始に失敗した直後なので、${new Date(cooldown).toISOString()} まで生成開始を飛ばします`,
       );
+    } else if (!outputsReady && hasStudioStarted(state, "nlm-video")) {
+      log("Studio 出力カード待ちのため、動画の生成タイルは開きません");
     } else {
-    videoScan = videoScan ?? (await scanPageVideoOutputs(page));
-    if (!shouldKickoffVideo(videoScan)) {
-      markStudioStarted(state, "nlm-video");
-    } else {
-      if (hasStudioStarted(state, "nlm-video") && videoScan.durationsSec.length === 0) {
-        const generating = textLooksLikeGenerating(await notebookBody(page));
-        if (generating) {
-          log("nlm-video の出力カードはまだ無いが生成中なので、開始は維持します");
-        } else {
-          log("nlm-video は開始記録があるが出力カードが無いので、生成をやり直します");
-          unmarkStudioStarted(state, "nlm-video");
+      videoScan = videoScan ?? (await scanPageVideoOutputs(page));
+      if (!shouldKickoffVideo(videoScan)) {
+        markStudioStarted(state, "nlm-video");
+      } else if (studioOutputScanIncomplete(await notebookBody(page))) {
+        log("Studio 出力カード待ちのため、動画の生成タイルは開きません");
+      } else {
+        if (hasStudioStarted(state, "nlm-video") && videoScan.durationsSec.length === 0) {
+          const generating = textLooksLikeGenerating(await notebookBody(page));
+          if (generating) {
+            log("nlm-video の出力カードはまだ無いが生成中なので、開始は維持します");
+          } else {
+            log("nlm-video は開始記録があるが出力カードが無いので、生成をやり直します");
+            unmarkStudioStarted(state, "nlm-video");
+          }
         }
+        await kick(
+          "nlm-video",
+          [/動画解説/, /Video overview/i, /^動画$/, /ビデオ概要/],
+          VIDEO_MS,
+          { explainerVideo: true },
+        );
       }
-      await kick(
-        "nlm-video",
-        [/動画解説/, /Video overview/i, /^動画$/, /ビデオ概要/],
-        VIDEO_MS,
-        { explainerVideo: true },
-      );
-    }
     }
   }
   if (want("nlm-quiz") && !isCompleted(state, "nlm-quiz")) {
@@ -2298,7 +2392,15 @@ async function runStudioParallel(
 
   const pending = firstPendingStudioStage(state, skipStudio);
   if (!pending) return;
+  if (skipKickoff) {
+    log(`Notebook 利用量のため ${pending} 以降の生成は後回しにします`);
+    return;
+  }
   if (!studioKickoffSettled(state, skipStudio)) {
+    const cooldown = Date.parse(state.kickoffRetryAt || "") || 0;
+    if (cooldown > Date.now()) {
+      throw new GenerationWaitingError(pending);
+    }
     throw new Error(`${pending} を開始できませんでした`);
   }
   const waitingStage = waitingStudioStage(state, skipStudio) ?? pending;
@@ -2314,9 +2416,12 @@ export async function runNotebookLm(
     state: PaperState;
     skipSlidesVideo?: boolean;
     studioSkip?: readonly StudioStageId[];
+    quota?: NotebookQuotaConfig;
+    skipKickoff?: boolean;
   },
 ): Promise<void> {
   const { homeUrl, pdfPath, paperDir, state, skipSlidesVideo = false } = opts;
+  const skipKickoff = opts.skipKickoff === true;
   const skipStudio: readonly StudioStageId[] =
     opts.studioSkip ?? (skipSlidesVideo ? ["nlm-slides", "nlm-video"] : []);
   forgetUnstableNotebook(state);
@@ -2336,14 +2441,22 @@ export async function runNotebookLm(
     !shouldStudio("nlm-slides") &&
     !shouldStudio("nlm-video") &&
     !shouldStudio("nlm-quiz") &&
-    !shouldStudio("nlm-flashcards") &&
-    !needVideoFile
+    !shouldStudio("nlm-flashcards")
   ) {
+    if (needVideoFile) {
+      log(
+        "解説動画は生成済みです。MP4 の RPC 保存は Chrome を落とすことがあるので Studio は開かず、SciSpace / Edu Share を先に進めます",
+      );
+    }
     return;
   }
 
   try {
     if (should("nlm-create")) {
+      if (skipKickoff) {
+        log("Notebook 利用量のためノート作成は後回しにします");
+        return;
+      }
       state.notebooklmUrl = canonicalNotebookUrl(await createNotebook(page, homeUrl));
       markCompleted(state, "nlm-create");
     } else if (state.notebooklmUrl) {
@@ -2353,6 +2466,10 @@ export async function runNotebookLm(
     await forgetMissingSource(page, state, pdfPath);
 
     if (should("nlm-upload")) {
+      if (skipKickoff) {
+        log("Notebook 利用量のため PDF 掲載は後回しにします");
+        return;
+      }
       if (!state.notebooklmUrl) {
         await page.goto(homeUrl, { waitUntil: "domcontentloaded" });
       } else {
@@ -2364,18 +2481,36 @@ export async function runNotebookLm(
       markCompleted(state, "nlm-upload");
     }
 
-    if (
+    const kicking =
       shouldStudio("nlm-slides") ||
       shouldStudio("nlm-video") ||
       shouldStudio("nlm-quiz") ||
-      shouldStudio("nlm-flashcards") ||
-      needVideoFile
-    ) {
+      shouldStudio("nlm-flashcards");
+    if (kicking && !skipKickoff && opts.quota && !opts.quota.ignoreNotebookQuota) {
+      const quota = await loadNotebookQuota(opts.quota);
+      const pause = notebookGenerationPause(
+        quota,
+        Date.now(),
+        opts.quota.notebookShortStopPercent,
+        opts.quota.notebookWeeklyStopPercent,
+      );
+      if (pause && quota) throw new NotebookQuotaPauseError(pause, quota);
+    }
+    if (kicking) {
+      if (!state.notebooklmUrl) {
+        if (skipKickoff) return;
+        throw new Error("NotebookLM の URL がありません");
+      }
       await ensureOnNotebook(page, state.notebooklmUrl);
-      await runStudioParallel(page, paperDir, state, skipStudio);
+      await runStudioParallel(page, paperDir, state, skipStudio, skipKickoff);
     }
   } catch (e) {
     if (e instanceof GenerationWaitingError) throw e;
+    if (e instanceof NotebookQuotaPauseError) throw e;
+    if (skipKickoff && isTargetClosedError(e)) {
+      warn("利用量待ちの収集中にブラウザが閉じました。手元のファイルで続けます");
+      return;
+    }
     await saveFailureShot(page, paperDir, "notebooklm");
     throw e;
   }

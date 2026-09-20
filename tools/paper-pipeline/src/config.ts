@@ -1,5 +1,11 @@
 import { existsSync } from "node:fs";
 import { PACKAGE_ROOT, loadDotEnv, resolvePathMaybe } from "./env.ts";
+import {
+  DEFAULT_SHORT_STOP_PERCENT,
+  DEFAULT_WEEKLY_STOP_PERCENT,
+  defaultNotebookQuotaFiles,
+  defaultNotebookQuotaUrls,
+} from "./notebook-quota.ts";
 import { isStageId, type StageId, type StudioStageId } from "./state.ts";
 import {
   parseStudioGenerateTokens,
@@ -26,6 +32,11 @@ export type AppConfig = {
   studioGenerate: StudioStageId[];
   studioSkip: readonly StudioStageId[];
   studioGenerateExplicit: boolean;
+  ignoreNotebookQuota: boolean;
+  notebookQuotaUrls: readonly string[];
+  notebookQuotaFiles: readonly string[];
+  notebookShortStopPercent: number;
+  notebookWeeklyStopPercent: number;
 };
 
 export type CliOverrides = {
@@ -37,6 +48,7 @@ export type CliOverrides = {
   fromStage?: string;
   skipSlidesVideo?: boolean;
   generate?: string[];
+  ignoreNotebookQuota?: boolean;
 };
 
 function stripTrailingSlash(u: string): string {
@@ -62,7 +74,7 @@ export function parseArgv(argv: string[]): CliOverrides {
         throw new Error("--generate には slides / video / quiz / flashcards / all を指定してください");
       }
       out.generate = [...(out.generate ?? []), ...tokens];
-    }
+    } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
   }
   return out;
 }
@@ -135,7 +147,28 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
     studioGenerate,
     studioSkip,
     studioGenerateExplicit,
+    ignoreNotebookQuota:
+      overrides.ignoreNotebookQuota === true ||
+      process.env.IGNORE_NOTEBOOK_QUOTA === "1" ||
+      process.env.IGNORE_NOTEBOOK_QUOTA === "true",
+    notebookQuotaUrls: defaultNotebookQuotaUrls(),
+    notebookQuotaFiles: defaultNotebookQuotaFiles(),
+    notebookShortStopPercent: envPercent(
+      "NOTEBOOK_SHORT_STOP_PERCENT",
+      DEFAULT_SHORT_STOP_PERCENT,
+    ),
+    notebookWeeklyStopPercent: envPercent(
+      "NOTEBOOK_WEEKLY_STOP_PERCENT",
+      DEFAULT_WEEKLY_STOP_PERCENT,
+    ),
   };
+}
+
+function envPercent(key: string, fallback: number): number {
+  const raw = (process.env[key] ?? "").trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 export function helpText(): string {
@@ -149,7 +182,7 @@ export function helpText(): string {
   npm start -- --only paper.pdf --generate slides,video
   npm run worker -- --only paper.pdf
 
-npm start は呼び出し側です。1論文ずつ既存 worker を呼びます。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。Edu Share 済みの論文にも、足りない項目を後から生成できます。同じプロファイルで Chrome を同時には開きません。
+npm start は呼び出し側です。1論文ずつ既存 worker を呼びます。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。Edu Share 済みの論文にも、足りない項目を後から生成できます。同じプロファイルで Chrome を同時には開きません。Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。そのあいだは SciSpace と、できている生成物の Edu Share 登録を先に進めます。
 
 必須: PAPER_INBOX_DIR と PAPER_WORK_DIR（.env または引数）
 
@@ -163,6 +196,7 @@ npm start は呼び出し側です。1論文ずつ既存 worker を呼びます�
   --stop-on-error      1件失敗で終了
   --headed / --headless
   --skip-slides-video  --generate quiz,flashcards と同じ（互換）
+  --ignore-notebook-quota  Notebook 利用量による停止をしない
 `;
 }
 

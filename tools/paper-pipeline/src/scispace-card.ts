@@ -121,9 +121,21 @@ function lineIsThisPdfFilename(s: string, filename: string): boolean {
   return false;
 }
 
+/** Files 行が1行に潰れていても、タイトル・年著者・TL;DR を分けられるようにする */
+export function normalizeFilesRowText(raw: string): string {
+  let t = raw.replace(/\r\n/g, "\n").replace(/\u00a0/g, " ");
+  t = t.replace(/[^\S\n]+/g, " ");
+  t = t.replace(/(\.pdf)\s+/gi, "$1\n");
+  t = t.replace(/\s+((?:19|20)\d{2}\s*[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65])/u, "\n$1");
+  t = t.replace(/\s+\b(arXiv|PDF UPLOAD|Uploaded on)\b/g, "\n$1");
+  t = t.replace(/\s+\b(The paper|This paper|The study|This study|本研究|本論文)\b/g, "\n$1");
+  t = t.replace(/\n{3,}/g, "\n\n");
+  return t.trim();
+}
+
 /** Files 一覧のコピーから、指定 PDF のカードだけを残す（次の .pdf 行で切る） */
 export function isolateSciSpaceCardText(raw: string, filename: string): string {
-  const lines = linesOf(raw);
+  const lines = linesOf(normalizeFilesRowText(raw));
   const start = lines.findIndex((l) => lineIsThisPdfFilename(l, filename));
   if (start < 0) {
     if (lines.some(isPdfFilenameLine)) return "";
@@ -134,8 +146,49 @@ export function isolateSciSpaceCardText(raw: string, filename: string): string {
     const s = lines[i]!;
     if (isPdfFilenameLine(s) && !lineNamesThisFile(s, filename)) break;
     out.push(s);
+    if (/^(The paper|This paper|The study|This study|本研究|本論文)\b/i.test(s) && s.length > 80) break;
   }
   return out.join("\n");
+}
+
+/** Files 行を改行のまま切り出す（タイトル・著者への整形はしない） */
+export function isolateSciSpaceCardTextKeepLines(raw: string, filename: string): string {
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((l) => lineIsThisPdfFilename(l.trim(), filename));
+  if (start < 0) {
+    const t = raw.trim();
+    const stem = filename.replace(/\.pdf$/i, "");
+    if (t.includes(filename) || t.includes(stem)) return t.slice(0, 4000);
+    return "";
+  }
+  const out = [lines[start]!];
+  for (let i = start + 1; i < lines.length; i++) {
+    const s = lines[i]!.trim();
+    if (isPdfFilenameLine(s) && !lineNamesThisFile(s, filename)) break;
+    out.push(lines[i]!);
+  }
+  return out.join("\n").replace(/^\n+|\n+$/g, "").slice(0, 4000);
+}
+
+/** Edu Share 貼り付け欄へ入れる Files 行。抽出したタイトル・年著者だけにはしない */
+export function rawFilesCardPaste(raw: string, filename: string): string {
+  const isolated = isolateSciSpaceCardTextKeepLines(raw, filename);
+  if (!isolated.trim()) return "";
+  const stem = filename.replace(/\.pdf$/i, "").toLowerCase();
+  const compact = isolated.replace(/\s+/g, " ").trim().toLowerCase();
+  if (compact === stem || compact === filename.toLowerCase()) return "";
+  if (looksLikeSciSpaceNav(isolated) && isolated.length < 80) return "";
+  return isolated.slice(0, 4000);
+}
+
+/** Edu Share 済みなのに Files 行が無い／タイトル・著者だけに加工されている */
+export function needsRawFilesPaste(state: {
+  filename: string;
+  filesPaste?: string;
+  eduShareTestUrl?: string;
+}): boolean {
+  if (!state.filename || !state.eduShareTestUrl?.trim()) return false;
+  return !rawFilesCardPaste(state.filesPaste ?? "", state.filename);
 }
 
 export function containsForeignPdf(raw: string, filename: string): boolean {
