@@ -3,13 +3,41 @@ import { join } from "node:path";
 import type { Locator, Page } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
-import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
+import {
+  firstPendingStudioStage,
+  hasStudioStarted,
+  isCompleted,
+  markCompleted,
+  markStudioStarted,
+  requiredStudioStages,
+  saveState,
+  studioKickoffSettled,
+  unmarkStudioStarted,
+  waitingStudioStage,
+  type PaperState,
+  type StageId,
+  type StudioStageId,
+} from "../state.ts";
 import {
   clickFirstByName,
   saveFailureShot,
   waitForAnyVisible,
   waitForDownloadTo,
 } from "../ui.ts";
+import {
+  STUDIO_RELATIVE_TIME,
+  formatVideoScan,
+  isChatCustomizeLabel,
+  isStudioGenerateLabel,
+  scanStudioVideoOutputs,
+  shouldKickoffVideo,
+  studioVideoGenerationDone,
+  textLooksLikeGenerating,
+  type VideoKickoffScan,
+} from "../studio-cards.ts";
+import { GenerationWaitingError } from "../waiting.ts";
+import { VIDEO_MIN_BYTES, isRealVideoFile, videoFileReady } from "../video-file.ts";
+import { formatStudioGenerateJa } from "../studio-select.ts";
 
 const NOTEBOOK_APP_HOST = /(?:notebooklm|notebook)\.google\.com/i;
 /** /notebook/creating は作成中の仮 URL。UUID 付きだけをノート本体とみなす */
@@ -18,7 +46,9 @@ const NOTEBOOK_DOC_PATH =
 
 function artifactReady(path: string, minBytes: number): boolean {
   try {
-    return existsSync(path) && statSync(path).size > minBytes;
+    if (!existsSync(path) || statSync(path).size <= minBytes) return false;
+    if (/\.mp4$/i.test(path)) return isRealVideoFile(path);
+    return true;
   } catch {
     return false;
   }
@@ -153,6 +183,7 @@ function textHasReadySources(t: string): boolean {
 }
 
 async function expandNotebookPanels(page: Page): Promise<void> {
+  await dismissSourceDeleteMenu(page);
   const t = await notebookBody(page);
   if (textHasReadySources(t) && !textHasZeroSources(t)) {
     if (!(await isVisibleNow(page.getByText("スライド資料", { exact: false })))) {
@@ -212,6 +243,8 @@ const SLIDE_MS = 20 * 60_000;
 const VIDEO_MS = 90 * 60_000;
 const STUDIO_START_STALL_MS = 40_000;
 const QUIZ_MS = 8 * 60_000;
+/** 生成中を確認してから Chrome を明け渡すまでの猶予（すぐ終わる生成はここで完了させる） */
+const YIELD_AFTER_GENERATING_MS = 12_000;
 
 const ANNOUNCEMENT_TEXT =
   /Gemini Notebook の使用方法|上限は 5 時間|バックグラウンド キュー|What's new|新機能/;
@@ -221,6 +254,18 @@ async function studioCustomizeVisible(page: Page): Promise<boolean> {
   if (!(await isVisibleNow(dialog))) return false;
   const t = await innerTextNow(dialog);
   return /後で生成|質問の数|をカスタマイズ|難易度レベル|希望するトピック|Generate later/i.test(t);
+}
+
+async function dismissPointerBlockers(page: Page): Promise<void> {
+  await dismissSourceDeleteMenu(page);
+  await dismissStudioCustomize(page);
+  await page.keyboard.press("Escape").catch(() => undefined);
+  const backdrop = page.locator(".cdk-overlay-backdrop-showing, .cdk-overlay-backdrop").first();
+  if (await isVisibleNow(backdrop)) {
+    await backdrop.click({ force: true, timeout: 1_000 }).catch(() => undefined);
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+  await page.waitForTimeout(200);
 }
 
 async function dismissStudioCustomize(page: Page): Promise<void> {
@@ -546,15 +591,40 @@ async function uploadPdfToNotebook(page: Page, pdfPath: string): Promise<void> {
   throw new Error(`NotebookLM のソース取り込みがタイムアウトしました（${lastHint}）`);
 }
 
+async function studioArtifactViewerOpen(page: Page): Promise<boolean> {
+  const t = await notebookBody(page);
+  if (/をカスタマイズ|後で生成|Generate later/i.test(t)) return false;
+  if (/個のソースを表示/.test(t) && /チャットパネル|collapse_content|expand_content/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/** スライド/動画の全画面ビューアが Studio タイルを隠すので閉じる */
+async function dismissStudioViewer(page: Page): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    if (!(await studioArtifactViewerOpen(page))) return;
+    log("Studio の成果物ビューアを閉じます");
+    const hit = await clickFirstByName(
+      page,
+      [/^閉じる$/, /^Close$/i, /collapse_content/, /arrow_back/, /戻る/],
+      { timeoutMs: 2_000 },
+    );
+    if (!hit) await page.keyboard.press("Escape").catch(() => undefined);
+    await page.waitForTimeout(600);
+  }
+}
+
 async function openStudio(page: Page): Promise<void> {
+  await dismissStudioViewer(page);
   const slide = page.getByText("スライド資料", { exact: false });
-  if (await isVisibleNow(slide)) return;
+  if (await isVisibleNow(slide) && !(await studioArtifactViewerOpen(page))) return;
   await clickFirstByName(page, [/Studio/i, /スタジオ/]);
   await page.waitForTimeout(800);
 }
 
 async function studioOutputCount(page: Page): Promise<number> {
-  return page.getByText(/\d+\s*(秒前|分前|時間前)/).count().catch(() => 0);
+  return page.getByText(STUDIO_RELATIVE_TIME).count().catch(() => 0);
 }
 
 function isOtherStudioArtifact(text: string): boolean {
@@ -568,13 +638,27 @@ function isSlideDeckCardText(text: string): boolean {
   return /スライド資料|Slide deck|スライドデッキ|\btablet\b/i.test(text);
 }
 
+async function clickStudioShowMore(page: Page): Promise<void> {
+  const buttons = page.getByRole("button", { name: /もっと見る|Show more|See more/i });
+  const n = Math.min(await buttons.count().catch(() => 0), 6);
+  for (let i = 0; i < n; i++) {
+    const btn = buttons.nth(i);
+    if (!(await isVisibleNow(btn))) continue;
+    const box = await btn.boundingBox().catch(() => null);
+    if (!box || box.x < 720) continue;
+    await btn.click({ timeout: 3_000 }).catch(() => undefined);
+    await page.waitForTimeout(350);
+  }
+}
+
 async function revealStudioOutputs(page: Page): Promise<void> {
+  await dismissSourceDeleteMenu(page);
   await page.getByText(/^Studio$/).first().scrollIntoViewIfNeeded().catch(() => undefined);
   await page
-    .evaluate(() => {
+    .evaluate(`(() => {
       const nodes = Array.from(document.querySelectorAll("h2, h3, div, span"));
-      const header = nodes.find((el) => ((el as HTMLElement).innerText || "").trim() === "Studio");
-      let p = header as HTMLElement | null;
+      const header = nodes.find((el) => ((el.innerText || "").trim() === "Studio");
+      let p = header;
       for (let i = 0; i < 10 && p; i++) {
         if (p.scrollHeight > p.clientHeight + 80) {
           p.scrollTop = p.scrollHeight;
@@ -583,25 +667,22 @@ async function revealStudioOutputs(page: Page): Promise<void> {
         p = p.parentElement;
       }
       return false;
-    })
+    })()`)
     .catch(() => false);
-  await page.waitForTimeout(400);
+  await clickStudioShowMore(page);
+  const duration = page.getByText(/\b\d{1,2}:\d{2}\s*·\s*解説/).first();
+  if (await duration.isVisible({ timeout: 0 }).catch(() => false)) {
+    await duration.scrollIntoViewIfNeeded().catch(() => undefined);
+  }
+  await page.waitForTimeout(200);
 }
 
 async function logStudioCardSummaries(page: Page): Promise<void> {
   await revealStudioOutputs(page);
-  const stamps = page.getByText(/\d+\s*(秒前|分前|時間前)|たった今/);
-  const n = Math.min(await stamps.count().catch(() => 0), 12);
-  const rows: string[] = [];
-  for (let i = 0; i < n; i++) {
-    const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
-    const text = ((await card.innerText({ timeout: 2_000 }).catch(() => "")) || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 80);
-    if (text) rows.push(text);
-  }
-  log(`Studio 出力カード: ${rows.join(" || ") || "(なし)"}`);
+  const rows = await studioCardTexts(page);
+  const scan = scanStudioVideoOutputs([...rows, await notebookBody(page)]);
+  log(`Studio 出力カード: ${rows.map((t) => t.replace(/\s+/g, " ").trim().slice(0, 80)).join(" || ") || "(なし)"}`);
+  log(`Studio ${formatVideoScan(scan)}`);
 }
 
 async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
@@ -626,7 +707,7 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
     log("Studio にスライドビューアが開いています");
     return true;
   }
-  const stamps = page.getByText(/\d+\s*(秒前|分前|時間前)|たった今/);
+  const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = await stamps.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
     const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
@@ -638,15 +719,19 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
 
 async function openStudioCardMatching(page: Page, re: RegExp): Promise<boolean> {
   await expandNotebookPanels(page);
-  await dismissStudioCustomize(page);
-  const stamps = page.getByText(/\d+\s*(秒前|分前|時間前)|たった今/);
+  await dismissPointerBlockers(page);
+  const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = await stamps.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
     const stamp = stamps.nth(i);
     const card = stamp.locator("xpath=ancestor::*[.//button][1]");
     const text = await card.innerText().catch(() => "");
     if (!re.test(text)) continue;
-    await stamp.click({ timeout: 8_000 }).catch(() => card.click({ timeout: 8_000 }));
+    const clicked = await stamp
+      .click({ timeout: 3_000, force: true })
+      .then(() => true)
+      .catch(async () => card.click({ timeout: 3_000, force: true }).then(() => true).catch(() => false));
+    if (!clicked) continue;
     await page.waitForTimeout(1500);
     return true;
   }
@@ -665,7 +750,7 @@ async function waitForStudioOutputs(page: Page, timeoutMs = 10_000): Promise<num
 }
 
 async function openLatestStudioOutput(page: Page): Promise<boolean> {
-  const time = page.getByText(/\d+\s*(秒前|分前|時間前)/);
+  const time = page.getByText(STUDIO_RELATIVE_TIME);
   if (!(await time.first().isVisible({ timeout: 0 }).catch(() => false))) return false;
   await time.first().click({ timeout: 8_000 }).catch(() => undefined);
   await page.waitForTimeout(1500);
@@ -686,7 +771,7 @@ async function logVisibleButtonNames(page: Page): Promise<void> {
         }
       };
       walk(document);
-      return out.slice(0, 40);
+      return out.slice(0, 80);
     })()`)) as string[];
     log(`見えるボタン: ${names.join(" | ") || "(なし)"}`);
   } catch (e) {
@@ -709,6 +794,28 @@ function textLooksLikeStudioFailure(t: string): boolean {
   return /再試行/.test(t) && /削除/.test(t);
 }
 
+/** 生成ボタンを押してから UI に sync が出るまでの猶予。ここを過ぎても出力が無ければやり直し。 */
+const GENERATION_START_GRACE_MS = 20 * 60 * 1000;
+
+function generationStartIsRecent(state: PaperState): boolean {
+  const t = Date.parse(state.generationStartedAt || "");
+  if (!Number.isFinite(t) || t <= 0) return false;
+  const age = Date.now() - t;
+  return age >= 0 && age < GENERATION_START_GRACE_MS;
+}
+
+async function studioHasCardMatching(page: Page, re: RegExp): Promise<boolean> {
+  await expandNotebookPanels(page);
+  const stamps = page.getByText(STUDIO_RELATIVE_TIME);
+  const n = await stamps.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
+    const text = await card.innerText({ timeout: 2_000 }).catch(() => "");
+    if (re.test(text)) return true;
+  }
+  return false;
+}
+
 async function clickStudioGenerate(page: Page): Promise<boolean> {
   const skipLater = /後で|later|スケジュール|Generate later/i;
   const preferNow = /今すぐ|Generate now/i;
@@ -720,7 +827,24 @@ async function clickStudioGenerate(page: Page): Promise<boolean> {
   );
   if (nowHit) return true;
 
-  const dialog = page.getByRole("dialog");
+  const overlay = page.locator("[role='dialog'], .cdk-overlay-pane, [aria-modal='true']");
+  const overlayOpen = await overlay.first().isVisible().catch(() => false);
+  if (!overlayOpen) {
+    const customizeBtns = page.getByRole("button", { name: /カスタマイズ|Customize/i });
+    const n = Math.min(await customizeBtns.count().catch(() => 0), 12);
+    for (let i = 0; i < n; i++) {
+      const btn = customizeBtns.nth(i);
+      if (!(await isVisibleNow(btn))) continue;
+      const text = `${await innerTextNow(btn, 0)} ${await attrNow(btn, "aria-label")}`;
+      if (isChatCustomizeLabel(text)) continue;
+      log("Studio: カスタマイズを開いてから生成します");
+      await btn.click({ timeout: 3_000 }).catch(() => undefined);
+      await page.waitForTimeout(800);
+      break;
+    }
+  }
+
+  const dialog = page.getByRole("dialog").or(page.locator(".cdk-overlay-pane"));
   if (await dialog.first().isVisible().catch(() => false)) {
     await dialog
       .first()
@@ -745,7 +869,9 @@ async function clickStudioGenerate(page: Page): Promise<boolean> {
       const text = `${(await b.innerText({ timeout: 0 }).catch(() => "")).replace(/\s+/g, " ")} ${
         await attrNow(b, "aria-label")
       }`;
-      if (/ノートブックを作成/.test(text) || skipLater.test(text)) continue;
+      if (!isStudioGenerateLabel(text) && skipLater.test(text)) continue;
+      if (/ノートブックを作成/.test(text) || skipLater.test(text) || isChatCustomizeLabel(text)) continue;
+      if (!/生成|Generate|作成/i.test(text)) continue;
       candidates.push({ btn: b, now: preferNow.test(text) });
     }
   }
@@ -755,12 +881,14 @@ async function clickStudioGenerate(page: Page): Promise<boolean> {
       await btn.scrollIntoViewIfNeeded().catch(() => undefined);
     }
     if (!(await btn.isEnabled().catch(() => false))) continue;
+    const text = `${await innerTextNow(btn, 0)} ${await attrNow(btn, "aria-label")}`;
+    if (isChatCustomizeLabel(text) || /ノートブックを作成/.test(text)) continue;
     await btn.click({ timeout: 5_000, force: true }).catch(() => undefined);
     return true;
   }
   return clickFirstByName(
     page,
-    [/^生成$/, /今すぐ生成/, /Generate now/i, /動画を生成/, /スライド.*生成/],
+    [/^生成$/, /^作成$/, /今すぐ生成/, /Generate now/i, /動画を生成/, /スライド.*生成/],
     { timeoutMs: 4_000 },
   );
 }
@@ -776,7 +904,7 @@ async function clickStudioTile(page: Page, labels: (string | RegExp)[]): Promise
     const re = typeof label === "string" ? new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) : label;
     const tiles = page.locator("button, [role='button'], a").filter({ hasText: re });
     const n = Math.min(await tiles.count().catch(() => 0), 20);
-    for (let i = 0; i < n; i++) {
+    for (let i = n - 1; i >= 0; i--) {
       const t = tiles.nth(i);
       if (!(await t.isVisible({ timeout: 0 }).catch(() => false))) continue;
       await t.scrollIntoViewIfNeeded().catch(() => undefined);
@@ -845,8 +973,9 @@ async function generateStudioItem(
   page: Page,
   labels: (string | RegExp)[],
   timeoutMs: number,
-  opts: { explainerVideo?: boolean } = {},
-): Promise<void> {
+  opts: { explainerVideo?: boolean; stage?: StageId; kickoff?: boolean } = {},
+): Promise<"complete" | "started"> {
+  await dismissStudioViewer(page);
   await dismissStudioCustomize(page);
   await dismissNotebookLmPopups(page);
   await openSourcesPanel(page);
@@ -860,16 +989,40 @@ async function generateStudioItem(
     await logVisibleButtonNames(page);
     throw new Error(`Studio 項目が見つかりません: ${labels[0]}`);
   }
+  await dismissSourceDeleteMenu(page);
 
-  const customize = await waitForAnyVisible(
+  let customize = await waitForAnyVisible(
     page,
     [
       page.getByRole("dialog"),
-      page.getByText(/をカスタマイズ/),
-      page.getByRole("button", { name: /生成/ }),
+      page.locator(".cdk-overlay-pane"),
+      page.getByRole("button", { name: /^生成$/ }),
+      page.getByRole("button", { name: /^作成$/ }),
     ],
-    10_000,
+    6_000,
   );
+  if (!customize) {
+    const chevron = page
+      .locator("button, [role='button']")
+      .filter({ hasText: labels[0] })
+      .filter({ hasText: /chevron_forward|chevron_right/i });
+    if (await chevron.last().isVisible({ timeout: 0 }).catch(() => false)) {
+      log("Studio: タイルの chevron をクリックして生成画面を開きます");
+      await chevron.last().click({ timeout: 5_000 }).catch(() => undefined);
+      await page.waitForTimeout(800);
+      await dismissSourceDeleteMenu(page);
+      customize = await waitForAnyVisible(
+        page,
+        [
+          page.getByRole("dialog"),
+          page.locator(".cdk-overlay-pane"),
+          page.getByRole("button", { name: /^生成$/ }),
+          page.getByRole("button", { name: /^作成$/ }),
+        ],
+        6_000,
+      );
+    }
+  }
   if (!customize) {
     warn("カスタマイズ画面 / 生成ボタンが見えません");
     await logVisibleButtonNames(page);
@@ -879,6 +1032,14 @@ async function generateStudioItem(
     await withTimeout(selectExplainerVideoFormat(page), 20_000, "動画形式の選択がタイムアウトしました").catch((e) => {
       warn(e instanceof Error ? e.message : String(e));
     });
+    const existing = scanStudioVideoOutputs(await studioCardTexts(page));
+    log(`Studio: 生成前の ${formatVideoScan(existing)}`);
+    if (!shouldKickoffVideo(existing)) {
+      log("既存の解説動画があるので生成は押しません");
+      await dismissStudioCustomize(page);
+      await dismissStudioViewer(page);
+      return "started";
+    }
   }
   const outputsBefore = await studioOutputCount(page);
   log(`Studio: 生成前の出力カード ${outputsBefore} 件`);
@@ -889,19 +1050,51 @@ async function generateStudioItem(
     throw new Error("Studio の生成ボタンを押せませんでした（カスタマイズ画面の右下「生成」）");
   }
 
+  if (opts.kickoff) {
+    const confirmUntil = Date.now() + 8_000;
+    while (Date.now() < confirmUntil) {
+      await clickFailedStudioRetry(page);
+      const t = await notebookBody(page);
+      const newOutput = (await studioOutputCount(page)) > outputsBefore;
+      if (newOutput && !textLooksLikeGenerating(t)) {
+        log("Studio: 生成完了とみなします（新しい出力カード）");
+        await openLatestStudioOutput(page);
+        if (opts.explainerVideo) {
+          log("Studio: 動画の長さ表示（ダウンロード可能）を待ちます");
+          if (!(await waitUntilVideoDurationVisible(page, 180_000))) {
+            warn("動画の長さ表示が出ませんでした。ダウンロードを試みます");
+          }
+        }
+        return "complete";
+      }
+      if (textLooksLikeStudioFailure(t)) {
+        throw new Error("Studio 生成が失敗したままです（再試行が出ています）");
+      }
+      await page.waitForTimeout(1_000);
+    }
+    await dismissStudioCustomize(page);
+    await dismissStudioViewer(page);
+    log(
+      `Studio: ${opts.stage ?? "項目"} の生成を開始したので、待ち中に他の Studio も始めます`,
+    );
+    return "started";
+  }
+
   const start = Date.now();
   let loggedWait = false;
+  let firstGeneratingAt = 0;
   let lastBeat = Date.now();
   while (Date.now() - start < timeoutMs) {
     await clickFailedStudioRetry(page);
     const t = await notebookBody(page);
-    const generating = /生成しています|Generating|動画を生成中/i.test(t);
+    const generating = textLooksLikeGenerating(t);
     if (textLooksLikeStudioFailure(t) && !generating && Date.now() - start > 45_000) {
       throw new Error("Studio 生成が失敗したままです（再試行が出ています）");
     }
     if (generating && !loggedWait) {
       log("Studio: 生成中です");
       loggedWait = true;
+      firstGeneratingAt = Date.now();
     }
     if (loggedWait && Date.now() - lastBeat > 60_000) {
       log("Studio: 生成待ちを継続中");
@@ -911,7 +1104,6 @@ async function generateStudioItem(
       warn("生成エラーらしき文言があります。継続して待ちます。");
     }
     const newOutput = (await studioOutputCount(page)) > outputsBefore;
-    // ページ上の「ダウンロード」はスライド成果物にもあるので、それだけでは完了にしない
     if (newOutput && !generating && Date.now() - start > 10_000) {
       log("Studio: 生成完了とみなします（新しい出力カード）");
       await openLatestStudioOutput(page);
@@ -921,13 +1113,21 @@ async function generateStudioItem(
           warn("動画の長さ表示が出ませんでした。ダウンロードを試みます");
         }
       }
-      return;
+      return "complete";
     }
     if (!loggedWait && !newOutput && Date.now() - start > STUDIO_START_STALL_MS) {
       await logVisibleButtonNames(page);
       throw new Error(
         "Studio 生成が始まっていません（生成待ちではなく操作失敗）。すぐやり直します",
       );
+    }
+    if (
+      opts.stage &&
+      loggedWait &&
+      Date.now() - firstGeneratingAt >= YIELD_AFTER_GENERATING_MS
+    ) {
+      log(`Studio: 生成は継続中。Chrome を他の論文へ明け渡します（${opts.stage}）`);
+      throw new GenerationWaitingError(opts.stage);
     }
     await page.waitForTimeout(2000);
   }
@@ -937,7 +1137,7 @@ async function generateStudioItem(
 async function openMenuOnCard(page: Page, anchor: ReturnType<Page["getByText"]>): Promise<boolean> {
   const card = anchor.locator("xpath=ancestor::*[.//button][1]");
   const inCard = card.getByRole("button", {
-    name: /その他の操作|その他|More options|More actions|メニュー/i,
+    name: /more_vert|more_horiz|その他の操作|その他|More options|More actions|メニュー/i,
   });
   if (await inCard.first().isVisible({ timeout: 0 }).catch(() => false)) {
     await inCard.first().click({ timeout: 5_000 });
@@ -958,7 +1158,7 @@ async function openMenuOnCard(page: Page, anchor: ReturnType<Page["getByText"]>)
 
 async function openStudioOutputMenu(page: Page): Promise<boolean> {
   await expandNotebookPanels(page);
-  const stamp = page.getByText(/\d+\s*(秒前|分前|時間前)/).first();
+  const stamp = page.getByText(STUDIO_RELATIVE_TIME).first();
   if (!(await stamp.isVisible({ timeout: 0 }).catch(() => false))) return false;
   return openMenuOnCard(page, stamp);
 }
@@ -968,19 +1168,49 @@ async function studioHasVideoOutput(page: Page): Promise<boolean> {
   return page.getByText(/\b\d{1,2}:\d{2}\b/).first().isVisible({ timeout: 0 }).catch(() => false);
 }
 
-async function studioHasExplainerVideoOutput(page: Page): Promise<boolean> {
+async function studioCardTexts(page: Page): Promise<string[]> {
   await expandNotebookPanels(page);
-  const duration = page.getByText(/\b\d{1,2}:\d{2}\b/).first();
-  if (!(await isVisibleNow(duration))) return false;
-  const t = (await innerTextNow(duration)).trim();
-  const m = /\b(\d{1,2}):(\d{2})\b/.exec(t);
-  if (!m) return true;
-  const sec = Number(m[1]) * 60 + Number(m[2]);
-  if (sec > 0 && sec < 120) {
-    log(`既存動画が ${m[1]}:${m[2]} のためショートとみなし、説明動画を作り直します`);
-    return false;
+  const rows: string[] = [];
+  const add = (text: string) => {
+    const t = text.replace(/\s+/g, " ").trim();
+    if (t && !rows.includes(t)) rows.push(t);
+  };
+  const stamps = page.getByText(STUDIO_RELATIVE_TIME);
+  const n = Math.min(await stamps.count().catch(() => 0), 16);
+  for (let i = 0; i < n; i++) {
+    const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
+    add(await card.innerText({ timeout: 2_000 }).catch(() => ""));
   }
-  return true;
+  const durations = page.getByText(/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/);
+  const d = Math.min(await durations.count().catch(() => 0), 8);
+  for (let i = 0; i < d; i++) {
+    const card = durations.nth(i).locator("xpath=ancestor::*[.//button][1]");
+    add(await card.innerText({ timeout: 2_000 }).catch(() => ""));
+    add(await durations.nth(i).innerText({ timeout: 1_000 }).catch(() => ""));
+  }
+  add(await notebookBody(page));
+  return rows;
+}
+
+async function scanPageVideoOutputs(page: Page): Promise<VideoKickoffScan> {
+  await revealStudioOutputs(page);
+  return scanStudioVideoOutputs(await studioCardTexts(page));
+}
+
+async function peekStudioVideoOutputs(page: Page): Promise<VideoKickoffScan> {
+  return scanPageVideoOutputs(page);
+}
+
+async function studioHasExplainerVideoOutput(page: Page): Promise<boolean> {
+  const scan = await scanPageVideoOutputs(page);
+  if (scan.explainerCount > 0) return true;
+  if (scan.shortCount > 0) {
+    const sec = scan.durationsSec.find((s) => s < 120) ?? 0;
+    const mm = Math.floor(sec / 60);
+    const ss = String(sec % 60).padStart(2, "0");
+    log(`既存動画が ${mm}:${ss} のためショートとみなし、説明動画を作り直します`);
+  }
+  return false;
 }
 
 async function openStudioVideoMenu(page: Page): Promise<boolean> {
@@ -1185,7 +1415,7 @@ async function openSlideDeck(page: Page): Promise<void> {
   ) {
     return;
   }
-  const stamps = page.getByText(/\d+\s*(秒前|分前|時間前)|たった今/);
+  const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = await stamps.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
     const stamp = stamps.nth(i);
@@ -1252,98 +1482,241 @@ async function waitUntilVideoDurationVisible(page: Page, timeoutMs: number): Pro
   return false;
 }
 
-async function saveMp4FromVideoElement(page: Page, destPath: string): Promise<boolean> {
-  const src = await page
-    .locator("video")
-    .first()
-    .evaluate((el) => {
-      const v = el as HTMLVideoElement;
-      return v.currentSrc || v.src || "";
-    })
-    .catch(() => "");
-  if (!src) {
-    warn("video 要素の src がありません");
-    return false;
+const VIDEO_DOWNLOAD_NAMES = [
+  /^download$/i,
+  /^ダウンロード$/,
+  /動画をダウンロード/,
+  /Download video/i,
+  /Download MP4/i,
+  /MP4 をダウンロード/,
+];
+
+async function sourceDeleteMenuOpen(page: Page): Promise<boolean> {
+  return page.getByText("ソースを削除").first().isVisible({ timeout: 0 }).catch(() => false);
+}
+
+async function dismissSourceDeleteMenu(page: Page): Promise<boolean> {
+  if (!(await sourceDeleteMenuOpen(page))) return false;
+  warn("ソースのメニューを開いてしまったので閉じます（動画のダウンロードではありません）");
+  await page.keyboard.press("Escape").catch(() => undefined);
+  await page.waitForTimeout(150);
+  if (await sourceDeleteMenuOpen(page)) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await page.getByRole("heading").first().click({ timeout: 2_000 }).catch(() => undefined);
+    await page.waitForTimeout(150);
   }
-  log(`動画 src を検出: ${src.slice(0, 96)}`);
-  try {
-    const respPromise = page.waitForResponse(
-      (r) => {
-        const ct = r.headers()["content-type"] ?? "";
-        return ct.includes("video/mp4") || /videoplayback/i.test(r.url());
-      },
-      { timeout: 90_000 },
-    );
-    await page.locator("video").first().evaluate((el) => {
-      const v = el as HTMLVideoElement;
-      v.currentTime = 0;
-      return v.play();
-    });
-    const resp = await respPromise;
-    const buf = Buffer.from(await resp.body());
-    if (buf.length > 10_000) {
-      writeFileSync(destPath, buf);
-      log(`保存: ${destPath}（network ${buf.length} bytes）`);
+  return true;
+}
+
+async function clickVideoHeaderDownload(page: Page): Promise<boolean> {
+  const names = [
+    /^download$/i,
+    /^file_download$/,
+    /^ダウンロード$/,
+    /動画をダウンロード/,
+    /Download video/i,
+  ];
+  for (const name of names) {
+    const btn = page.getByRole("button", { name });
+    if (await btn.first().isVisible({ timeout: 0 }).catch(() => false)) {
+      await btn.first().click({ timeout: 5_000 });
+      log("Studio: 動画プレーヤーのダウンロードをクリックしました");
+      await page.waitForTimeout(400);
       return true;
     }
-  } catch (e) {
-    const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0];
-    warn(`network からの MP4 取得に失敗: ${msg}`);
   }
-  try {
-    const res = await page.request.get(src, {
-      timeout: 600_000,
-      maxRedirects: 10,
-      headers: { "Accept-Encoding": "identity" },
+  return false;
+}
+
+/** tsx が関数に __name を付けるため、page.evaluate には文字列だけ渡す */
+async function clickExplainerCardOverflow(page: Page): Promise<boolean> {
+  const hit = await page
+    .evaluate(`(() => {
+      const label = (el) => ((el.innerText || "") + " " + (el.getAttribute("aria-label") || "")).replace(/\\s+/g, " ").trim();
+      const isOverflow = (t) => /more_vert|more_horiz/i.test(t) || /その他の操作|More options|More actions/i.test(t);
+      const explainerCardText = (el) => {
+        let cur = el;
+        for (let i = 0; i < 12 && cur; i++) {
+          const t = (cur.innerText || "").replace(/\\s+/g, " ").trim();
+          if (
+            t.length <= 280 &&
+            /\\d{1,2}:\\d{2}\\s*·\\s*(解説|Explainer|説明)/.test(t) &&
+            !/ソースを削除|ソース名を変更|ソースを追加/.test(t) &&
+            !(/\\btablet\\b|スライド資料|Slide deck/i.test(t))
+          ) {
+            return t;
+          }
+          const root = cur.getRootNode();
+          if (root && root.host && root !== document) { cur = root.host; continue; }
+          cur = cur.parentElement;
+        }
+        return "";
+      };
+      const found = [];
+      const walk = (root) => {
+        for (const el of root.querySelectorAll("button, [role='button']")) {
+          const t = label(el);
+          if (!isOverflow(t)) continue;
+          const ctx = explainerCardText(el);
+          if (!ctx) continue;
+          let near = false;
+          const video = document.querySelector("video");
+          if (video) {
+            const vr = video.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            near = er.left < vr.right + 80 && er.right > vr.left - 80 && er.top < vr.bottom + 80 && er.bottom > vr.top - 80;
+          }
+          const score = (ctx ? 2 : 0) + (near ? 1 : 0);
+          if (score > 0) found.push({ el, score });
+        }
+        for (const el of root.querySelectorAll("*")) {
+          if (el.shadowRoot) walk(el.shadowRoot);
+        }
+      };
+      walk(document);
+      found.sort((a, b) => b.score - a.score);
+      if (!found[0]) return "";
+      found[0].el.click();
+      return found[0].score > 1 ? "explainer" : "near";
+    })()`)
+    .catch((e) => {
+      warn(`解説カードメニュー: ${e instanceof Error ? e.message : e}`);
+      return "";
     });
-    if (res.ok()) {
-      const buf = Buffer.from(await res.body());
-      if (buf.length > 10_000) {
-        writeFileSync(destPath, buf);
-        log(`保存: ${destPath}（video URL ${buf.length} bytes）`);
-        return true;
-      }
+  if (hit) {
+    log(`Studio: 解説カードのその他メニューを開きました（${hit}）`);
+    await page.waitForTimeout(500);
+    if (await dismissSourceDeleteMenu(page)) return false;
+    return true;
+  }
+  const duration = page.getByText(/\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/).first();
+  if (await duration.isVisible({ timeout: 0 }).catch(() => false)) {
+    const box = await duration.boundingBox();
+    if (box) {
+      await page.mouse.click(box.x + box.width + 72, box.y + box.height / 2);
+      log("Studio: 解説カード右端をクリックしてメニューを開きます");
+      await page.waitForTimeout(500);
+      if (await dismissSourceDeleteMenu(page)) return false;
+      return true;
     }
-  } catch (e) {
-    const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0];
-    warn(`video URL の取得に失敗: ${msg}`);
+  }
+  return false;
+}
+
+async function clickLabeledControl(
+  page: Page,
+  kind: "download" | "overflow",
+): Promise<boolean> {
+  const hit = await page
+    .evaluate(
+      `(() => {
+      const which = ${JSON.stringify(kind)};
+      const download = (t) => {
+        const s = String(t).replace(/\\s+/g, " ").trim();
+        if (!s) return false;
+        if (/ノートブックを作成|ソースを追加|Google アプリ|ソースを削除/.test(s)) return false;
+        if (/\\bdownload\\b|file_download/i.test(s) || /ダウンロード/.test(s)) return true;
+        return /動画をダウンロード|Download video|Download MP4|MP4 をダウンロード/i.test(s);
+      };
+      const overflow = (t) => {
+        const s = String(t).replace(/\\s+/g, " ").trim();
+        return /more_vert|more_horiz/i.test(s) || /その他の操作|More options|More actions/i.test(s);
+      };
+      const pred = which === "download" ? download : overflow;
+      const nearVideo = (el) => {
+        const video = document.querySelector("video");
+        if (!video) return false;
+        const vr = video.getBoundingClientRect();
+        const er = el.getBoundingClientRect();
+        if (er.width < 2 || er.height < 2) return false;
+        const overlay = el.closest("[role='dialog'], .cdk-overlay-pane");
+        if (overlay && overlay.contains(video)) return true;
+        const pad = 80;
+        return er.left < vr.right + pad && er.right > vr.left - pad && er.top < vr.bottom + pad && er.bottom > vr.top - pad;
+      };
+      const walk = (root) => {
+        const els = Array.from(root.querySelectorAll("button, [role='button'], [role='menuitem']"));
+        const ranked = which === "overflow" ? els.filter(nearVideo) : els;
+        const seen = new Set();
+        for (const el of ranked) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const t = ((el.innerText || "") + " " + (el.getAttribute("aria-label") || "")).replace(/\\s+/g, " ").trim();
+          if (!pred(t)) continue;
+          el.click();
+          return true;
+        }
+        for (const el of root.querySelectorAll("*")) {
+          if (el.shadowRoot && walk(el.shadowRoot)) return true;
+        }
+        return false;
+      };
+      return walk(document);
+    })()`,
+    )
+    .catch(() => false);
+  if (hit) {
+    log(kind === "download" ? "Studio: ダウンロードをクリックしました" : "Studio: その他メニューを開きました");
+    await page.waitForTimeout(400);
+    if (kind === "overflow" && (await dismissSourceDeleteMenu(page))) return false;
+  }
+  return Boolean(hit);
+}
+
+async function clickNotebookLmVideoDownload(page: Page): Promise<boolean> {
+  if (await clickVideoHeaderDownload(page)) return true;
+  if (await clickLabeledControl(page, "download")) return true;
+  if (await clickFirstByName(page, VIDEO_DOWNLOAD_NAMES, { timeoutMs: 1_200 })) return true;
+  const openedOverflow =
+    (await clickExplainerCardOverflow(page)) || (await clickLabeledControl(page, "overflow"));
+  if (openedOverflow) {
+    if (await clickVideoHeaderDownload(page)) return true;
+    if (await clickLabeledControl(page, "download")) return true;
+    if (await clickFirstByName(page, VIDEO_DOWNLOAD_NAMES, { timeoutMs: 1_500 })) return true;
   }
   return false;
 }
 
 async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<void> {
-  const names = [/動画をダウンロード/, /Download video/i, /\bMP4\b/, /動画.*ダウンロード/];
-  if (!(await waitUntilVideoDurationVisible(page, 120_000))) {
-    warn("動画の長さ表示が出る前にダウンロードを試みます");
-  }
-
-  const play = page.getByRole("button", { name: /再生|Play/i });
-  if (await play.first().isVisible({ timeout: 0 }).catch(() => false)) {
-    await play.first().click({ timeout: 8_000 }).catch(() => undefined);
-    await page.waitForTimeout(1500);
-  } else {
-    const duration = page.getByText(/\b\d{1,2}:\d{2}\b/).first();
-    if (await duration.isVisible({ timeout: 0 }).catch(() => false)) {
-      await duration.click({ timeout: 8_000 }).catch(() => undefined);
-      await page.waitForTimeout(1500);
-    }
-  }
-  if (await saveMp4FromVideoElement(page, destPath)) return;
-
-  const clickMenuDownload = async () => {
-    await openStudioVideoMenu(page);
-    const ok = await clickFirstByName(page, names, { timeoutMs: 5_000 });
-    if (!ok) {
-      await logVisibleButtonNames(page);
-      throw new Error("動画カードのメニューにダウンロードがありません");
-    }
-  };
-  try {
-    await waitForDownloadTo(page, destPath, clickMenuDownload, 45_000);
-  } catch (e) {
-    warn(`メニューからの動画保存に失敗: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
-    throw e;
-  }
+  await withTimeout(
+    (async () => {
+      if (!(await waitUntilVideoDurationVisible(page, 5_000))) {
+        warn("動画の長さ表示が出る前にダウンロードを試みます");
+      }
+      const player = await page.locator("video").first().isVisible().catch(() => false);
+      if (!player) {
+        const duration = page.getByText(/\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/).first();
+        if (await duration.isVisible({ timeout: 0 }).catch(() => false)) {
+          await duration.click({ timeout: 3_000 }).catch(() => undefined);
+          await page.waitForTimeout(800);
+        }
+      }
+      log("NotebookLM のダウンロードから MP4 を保存します");
+      await waitForDownloadTo(
+        page,
+        destPath,
+        async () => {
+          const ok = await clickNotebookLmVideoDownload(page);
+          if (!ok) {
+            await logVisibleButtonNames(page);
+            throw new Error("NotebookLM の動画ダウンロードボタンが見つかりません");
+          }
+        },
+        90_000,
+        VIDEO_MIN_BYTES,
+      );
+      if (!isRealVideoFile(destPath)) {
+        try {
+          unlinkSync(destPath);
+        } catch {
+          /* 破棄できなくても次の取得で上書きする */
+        }
+        throw new Error("保存したファイルは MP4 ではありません（スライド PDF などを掴みました）");
+      }
+    })(),
+    100_000,
+    "動画保存が 100 秒を超えたので打ち切ります",
+  );
 }
 
 async function downloadCurrentArtifact(
@@ -1613,6 +1986,325 @@ async function saveStudioArtifactCsv(
   await exportCsvViaExtension(page, destPath);
 }
 
+function collectErrMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+async function unmarkStaleStudioStarts(page: Page, state: PaperState): Promise<void> {
+  const body = await notebookBody(page);
+  if (textLooksLikeGenerating(body)) {
+    log("Studio は生成中（sync / 生成しています）なので開始記録はそのままにします");
+    return;
+  }
+  if (generationStartIsRecent(state)) {
+    log("生成開始から間もないので、出力カードがまだ無くてもやり直ししません");
+    return;
+  }
+  if (hasStudioStarted(state, "nlm-slides") && !isCompleted(state, "nlm-slides")) {
+    const stamps = page.getByText(STUDIO_RELATIVE_TIME);
+    const n = Math.min(await stamps.count().catch(() => 0), 16);
+    let hasSlideCard = false;
+    for (let i = 0; i < n; i++) {
+      const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
+      const text = await card.innerText({ timeout: 2_000 }).catch(() => "");
+      if (isSlideDeckCardText(text)) {
+        hasSlideCard = true;
+        break;
+      }
+    }
+    if (!hasSlideCard) {
+      log("nlm-slides は開始記録があるが出力も生成中もないので、やり直しします");
+      unmarkStudioStarted(state, "nlm-slides");
+      if (state.waitingFor === "nlm-slides") state.waitingFor = "";
+      saveState(state);
+    }
+  }
+  if (hasStudioStarted(state, "nlm-video") && !isCompleted(state, "nlm-video")) {
+    const scan = await scanPageVideoOutputs(page);
+    if (scan.explainerCount + scan.shortCount === 0) {
+      log("nlm-video は開始記録があるが出力も生成中もないので、やり直しします");
+      unmarkStudioStarted(state, "nlm-video");
+      state.kickoffRetryAt = "";
+      if (state.waitingFor === "nlm-video") state.waitingFor = "";
+      saveState(state);
+    }
+  }
+}
+
+async function tryKickoffStudio(
+  page: Page,
+  state: PaperState,
+  stage: StageId,
+  labels: (string | RegExp)[],
+  timeoutMs: number,
+  extra: { explainerVideo?: boolean } = {},
+): Promise<"complete" | "started" | "skipped"> {
+  if (hasStudioStarted(state, stage)) {
+    log(`${stage} はすでに開始済み。待ち中に他の Studio を進めます`);
+    return "skipped";
+  }
+  log(`後で作成は使わず、${stage} を今すぐ生成します`);
+  try {
+    const r = await generateStudioItem(page, labels, timeoutMs, {
+      ...extra,
+      stage,
+      kickoff: true,
+    });
+    markStudioStarted(state, stage);
+    state.kickoffRetryAt = "";
+    state.kickoffRetryStage = "";
+    saveState(state);
+    return r;
+  } catch (e) {
+    if (e instanceof GenerationWaitingError) throw e;
+    warn(`${stage} の開始に失敗したので後でやり直します: ${collectErrMsg(e)}`);
+    state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
+    state.kickoffRetryStage = stage;
+    saveState(state);
+    return "skipped";
+  }
+}
+
+async function collectReadyStudio(
+  page: Page,
+  paperDir: string,
+  state: PaperState,
+  ctx: { skipVideoDownload: boolean },
+): Promise<void> {
+  if (!ctx.skipVideoDownload && !isCompleted(state, "nlm-slides")) {
+    const dest = join(paperDir, "slides.pdf");
+    try {
+      if (slidesArtifactReady(dest)) {
+        log(`既存のスライド PDF を使います: ${dest}`);
+        state.slidePdfPath = dest;
+        markCompleted(state, "nlm-slides");
+      } else if (await studioHasSlideDeckOutput(page)) {
+        if (existsSync(dest)) {
+          warn("既存 slides.pdf は NotebookLM 画面のため取り直します");
+          unlinkSync(dest);
+        }
+        log("既存のスライド出力から PDF を保存します");
+        await downloadStudioSlidePdf(page, dest);
+        if (slidesArtifactReady(dest)) {
+          state.slidePdfPath = dest;
+          markCompleted(state, "nlm-slides");
+        }
+      }
+    } catch (e) {
+      warn(`スライドの保存はまだできません: ${collectErrMsg(e)}`);
+    }
+  }
+
+  const videoDest = join(paperDir, "video.mp4");
+  if (artifactReady(videoDest, VIDEO_MIN_BYTES)) {
+    if (state.videoMp4Path !== videoDest) {
+      log(`既存の動画 MP4 を使います: ${videoDest}`);
+      state.videoMp4Path = videoDest;
+      saveState(state);
+    }
+    if (!state.completed.includes("nlm-video") && !state.completed.includes("done")) {
+      markCompleted(state, "nlm-video");
+    }
+  } else if (!ctx.skipVideoDownload) {
+    try {
+      if (await studioHasExplainerVideoOutput(page)) {
+        await dismissPointerBlockers(page);
+        const opened =
+          (await openStudioCardMatching(page, /\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/)) ||
+          (await clickFirstByName(page, [/play_arrow/, /再生/, /^Play$/i], { timeoutMs: 2_000 }));
+        if (opened) await page.waitForTimeout(1500);
+        const hasPlayer = await page.locator("video").first().isVisible().catch(() => false);
+        if (!hasPlayer) {
+          log("動画プレーヤーがまだ無いので保存は次の確認に回します");
+        } else {
+          log("既存の Studio 動画から MP4 を保存します（再生成しません）");
+          await downloadStudioVideoMp4(page, videoDest);
+          if (artifactReady(videoDest, VIDEO_MIN_BYTES)) {
+            state.videoMp4Path = videoDest;
+            saveState(state);
+            if (!state.completed.includes("nlm-video") && !state.completed.includes("done")) {
+              markCompleted(state, "nlm-video");
+            }
+          }
+        }
+      }
+    } catch (e) {
+      const msg = collectErrMsg(e);
+      if (/ダウンロードボタンが見つかりません|動画保存が /.test(msg)) ctx.skipVideoDownload = true;
+      warn(`動画の保存はまだできません: ${msg}`);
+    }
+  }
+
+  if (!isCompleted(state, "nlm-quiz")) {
+    const dest = join(paperDir, "quiz.csv");
+    try {
+      if (existsSync(dest) && statSync(dest).size > 80) {
+        state.quizCsvPath = dest;
+        markCompleted(state, "nlm-quiz");
+      } else if (await studioHasCardMatching(page, /クイズ/)) {
+        log("既存のクイズを開きます（再生成しません）");
+        if (!(await openStudioCardMatching(page, /クイズ/))) {
+          await clickFirstByName(page, [/^クイズ$/, /^Quiz$/i, /開く/, /Open/i]);
+        }
+        await page.waitForTimeout(1500);
+        await saveStudioArtifactCsv(page, dest, "quiz");
+        if (existsSync(dest)) {
+          state.quizCsvPath = dest;
+          markCompleted(state, "nlm-quiz");
+        }
+      }
+    } catch (e) {
+      warn(`クイズの保存はまだできません: ${collectErrMsg(e)}`);
+    }
+  }
+
+  if (!isCompleted(state, "nlm-flashcards")) {
+    const dest = join(paperDir, "vocab.csv");
+    try {
+      if (existsSync(dest) && statSync(dest).size > 80) {
+        state.vocabCsvPath = dest;
+        markCompleted(state, "nlm-flashcards");
+      } else if (await studioHasCardMatching(page, /フラッシュ|単語帳|Flashcard/i)) {
+        log("既存の単語帳を開きます（再生成しません）");
+        if (!(await openStudioCardMatching(page, /フラッシュ|単語帳|Flashcard/i))) {
+          await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
+        }
+        await page.waitForTimeout(1500);
+        await saveStudioArtifactCsv(page, dest, "flashcards");
+        if (existsSync(dest)) {
+          state.vocabCsvPath = dest;
+          markCompleted(state, "nlm-flashcards");
+        }
+      }
+    } catch (e) {
+      warn(`単語帳の保存はまだできません: ${collectErrMsg(e)}`);
+    }
+  }
+}
+
+async function runStudioParallel(
+  page: Page,
+  paperDir: string,
+  state: PaperState,
+  skipStudio: readonly StudioStageId[] = [],
+): Promise<void> {
+  await expandNotebookPanels(page);
+  await logStudioCardSummaries(page);
+  await unmarkStaleStudioStarts(page, state);
+
+  const want = (stage: StudioStageId) => !skipStudio.includes(stage);
+  if (skipStudio.length) {
+    log(`Studio 生成対象: ${formatStudioGenerateJa(requiredStudioStages(skipStudio))}`);
+  }
+
+  let videoScan: VideoKickoffScan | undefined;
+  const studioCollect = { skipVideoDownload: !want("nlm-video") };
+  const videoKickoffCooling =
+    want("nlm-video") &&
+    !isCompleted(state, "nlm-video") &&
+    !hasStudioStarted(state, "nlm-video") &&
+    state.kickoffRetryStage === "nlm-video" &&
+    (Date.parse(state.kickoffRetryAt || "") || 0) > Date.now();
+  if (want("nlm-video") && !isCompleted(state, "nlm-video") && !videoKickoffCooling) {
+    videoScan = await peekStudioVideoOutputs(page);
+    log(`動画スキャン: ${formatVideoScan(videoScan)}`);
+    if (!shouldKickoffVideo(videoScan)) {
+      log(`既存の解説動画があるので再生成しません（${formatVideoScan(videoScan)}）`);
+      markStudioStarted(state, "nlm-video");
+    }
+  } else if (videoKickoffCooling) {
+    log("nlm-video は開始クールダウン中のため、動画タイルは開きません");
+  }
+
+  await collectReadyStudio(page, paperDir, state, studioCollect);
+
+  const kick = async (
+    stage: StageId,
+    labels: (string | RegExp)[],
+    timeoutMs: number,
+    extra: { explainerVideo?: boolean } = {},
+  ): Promise<void> => {
+    const r = await tryKickoffStudio(page, state, stage, labels, timeoutMs, extra);
+    if (r === "complete") await collectReadyStudio(page, paperDir, state, studioCollect);
+  };
+
+  if (want("nlm-slides") && !isCompleted(state, "nlm-slides")) {
+    if (await studioHasSlideDeckOutput(page)) markStudioStarted(state, "nlm-slides");
+    else await kick("nlm-slides", [/スライド資料/, /Slide deck/i, /スライドデッキ/], SLIDE_MS);
+  }
+  if (want("nlm-video") && !isCompleted(state, "nlm-video")) {
+    const cooldown = Date.parse(state.kickoffRetryAt || "") || 0;
+    if (
+      state.kickoffRetryStage === "nlm-video" &&
+      cooldown > Date.now() &&
+      !hasStudioStarted(state, "nlm-video")
+    ) {
+      log(
+        `nlm-video の開始に失敗した直後なので、${new Date(cooldown).toISOString()} まで生成開始を飛ばします`,
+      );
+    } else {
+    videoScan = videoScan ?? (await scanPageVideoOutputs(page));
+    if (!shouldKickoffVideo(videoScan)) {
+      markStudioStarted(state, "nlm-video");
+    } else {
+      if (hasStudioStarted(state, "nlm-video") && videoScan.durationsSec.length === 0) {
+        const generating = textLooksLikeGenerating(await notebookBody(page));
+        if (generating) {
+          log("nlm-video の出力カードはまだ無いが生成中なので、開始は維持します");
+        } else {
+          log("nlm-video は開始記録があるが出力カードが無いので、生成をやり直します");
+          unmarkStudioStarted(state, "nlm-video");
+        }
+      }
+      await kick(
+        "nlm-video",
+        [/動画解説/, /Video overview/i, /^動画$/, /ビデオ概要/],
+        VIDEO_MS,
+        { explainerVideo: true },
+      );
+    }
+    }
+  }
+  if (want("nlm-quiz") && !isCompleted(state, "nlm-quiz")) {
+    if (await studioHasCardMatching(page, /クイズ/)) markStudioStarted(state, "nlm-quiz");
+    else await kick("nlm-quiz", [/^クイズ$/, /^Quiz$/i], QUIZ_MS);
+  }
+  if (want("nlm-flashcards") && !isCompleted(state, "nlm-flashcards")) {
+    if (await studioHasCardMatching(page, /フラッシュ|単語帳|Flashcard/i)) {
+      markStudioStarted(state, "nlm-flashcards");
+    } else {
+      await kick(
+        "nlm-flashcards",
+        [/フラッシュ/, /フラッシュカード/, /単語帳/, /Flashcard/i, /Flash cards/i],
+        QUIZ_MS,
+      );
+    }
+  }
+
+  await collectReadyStudio(page, paperDir, state, studioCollect);
+
+  if (want("nlm-video") && !isCompleted(state, "nlm-video")) {
+    videoScan = videoScan ?? (await scanPageVideoOutputs(page));
+    if (studioVideoGenerationDone(videoScan)) {
+      log(
+        `解説動画の生成は終わっているので、MP4 が無くても次の作業へ進みます（${formatVideoScan(videoScan)}）`,
+      );
+      markCompleted(state, "nlm-video");
+    }
+  }
+
+  await dismissPointerBlockers(page);
+  await dismissStudioViewer(page);
+
+  const pending = firstPendingStudioStage(state, skipStudio);
+  if (!pending) return;
+  if (!studioKickoffSettled(state, skipStudio)) {
+    throw new Error(`${pending} を開始できませんでした`);
+  }
+  const waitingStage = waitingStudioStage(state, skipStudio) ?? pending;
+  throw new GenerationWaitingError(waitingStage);
+}
+
 export async function runNotebookLm(
   page: Page,
   opts: {
@@ -1620,18 +2312,32 @@ export async function runNotebookLm(
     pdfPath: string;
     paperDir: string;
     state: PaperState;
+    skipSlidesVideo?: boolean;
+    studioSkip?: readonly StudioStageId[];
   },
 ): Promise<void> {
-  const { homeUrl, pdfPath, paperDir, state } = opts;
+  const { homeUrl, pdfPath, paperDir, state, skipSlidesVideo = false } = opts;
+  const skipStudio: readonly StudioStageId[] =
+    opts.studioSkip ?? (skipSlidesVideo ? ["nlm-slides", "nlm-video"] : []);
   forgetUnstableNotebook(state);
   const should = (id: Parameters<typeof isCompleted>[1]) => !isCompleted(state, id);
+  const wantStudio = (id: StudioStageId) => !skipStudio.includes(id);
+  const needVideoFile =
+    wantStudio("nlm-video") &&
+    !videoFileReady(paperDir, state.videoMp4Path) &&
+    (state.completed.includes("nlm-video") || state.completed.includes("done"));
+  const shouldStudio = (id: StudioStageId) => {
+    if (!wantStudio(id)) return false;
+    return should(id);
+  };
   if (
     !should("nlm-create") &&
     !should("nlm-upload") &&
-    !should("nlm-slides") &&
-    !should("nlm-video") &&
-    !should("nlm-quiz") &&
-    !should("nlm-flashcards")
+    !shouldStudio("nlm-slides") &&
+    !shouldStudio("nlm-video") &&
+    !shouldStudio("nlm-quiz") &&
+    !shouldStudio("nlm-flashcards") &&
+    !needVideoFile
   ) {
     return;
   }
@@ -1658,108 +2364,18 @@ export async function runNotebookLm(
       markCompleted(state, "nlm-upload");
     }
 
-    if (should("nlm-slides")) {
-      const dest = join(paperDir, "slides.pdf");
-      if (slidesArtifactReady(dest)) {
-        log(`既存のスライド PDF を使います: ${dest}`);
-      } else {
-        if (existsSync(dest)) {
-          warn("既存 slides.pdf は NotebookLM 画面のため取り直します");
-          unlinkSync(dest);
-        }
-        await ensureOnNotebook(page, state.notebooklmUrl);
-        await logStudioCardSummaries(page);
-        if (await studioHasSlideDeckOutput(page)) {
-          log("既存のスライド出力から PDF を保存します");
-        } else {
-          log("スライド出力が無いので Studio で生成します");
-          await generateStudioItem(
-            page,
-            [/スライド資料/, /Slide deck/i, /スライドデッキ/],
-            SLIDE_MS,
-          );
-        }
-        await downloadStudioSlidePdf(page, dest);
-        if (!existsSync(dest)) throw new Error("スライド PDF が保存されていません");
-      }
-      state.slidePdfPath = dest;
-      markCompleted(state, "nlm-slides");
-    }
-
-    if (should("nlm-video")) {
-      const dest = join(paperDir, "video.mp4");
-      if (artifactReady(dest, 100_000)) {
-        log(`既存の動画 MP4 を使います: ${dest}`);
-      } else {
-        await ensureOnNotebook(page, state.notebooklmUrl);
-        await expandNotebookPanels(page);
-        await waitForStudioOutputs(page, 8_000);
-        if (await studioHasExplainerVideoOutput(page)) {
-          log("既存の Studio 動画から MP4 を保存します（再生成しません）");
-        } else {
-          if (await page.getByRole("button", { name: /再試行|Retry/i }).first().isVisible().catch(() => false)) {
-            log("失敗した動画生成を再試行します");
-            await clickFailedStudioRetry(page);
-          }
-          log("後で作成は使わず、今すぐ生成します");
-          await generateStudioItem(
-            page,
-            [/動画解説/, /Video overview/i, /^動画$/, /ビデオ概要/],
-            VIDEO_MS,
-            { explainerVideo: true },
-          );
-        }
-        await downloadStudioVideoMp4(page, dest);
-        if (!existsSync(dest)) throw new Error("動画 MP4 が保存されていません");
-      }
-      state.videoMp4Path = dest;
-      markCompleted(state, "nlm-video");
-    }
-
-    if (should("nlm-quiz")) {
+    if (
+      shouldStudio("nlm-slides") ||
+      shouldStudio("nlm-video") ||
+      shouldStudio("nlm-quiz") ||
+      shouldStudio("nlm-flashcards") ||
+      needVideoFile
+    ) {
       await ensureOnNotebook(page, state.notebooklmUrl);
-      await expandNotebookPanels(page);
-      const dest = join(paperDir, "quiz.csv");
-      if (await openStudioCardMatching(page, /クイズ/)) {
-        log("既存のクイズを開きます（再生成しません）");
-      } else {
-        log("後で作成は使わず、今すぐ生成します");
-        await generateStudioItem(page, [/^クイズ$/, /^Quiz$/i], QUIZ_MS);
-        if (!(await openStudioCardMatching(page, /クイズ/))) {
-          await clickFirstByName(page, [/^クイズ$/, /^Quiz$/i, /開く/, /Open/i]);
-        }
-      }
-      await page.waitForTimeout(1500);
-      await saveStudioArtifactCsv(page, dest, "quiz");
-      if (!existsSync(dest)) throw new Error("クイズ CSV が保存されていません");
-      state.quizCsvPath = dest;
-      markCompleted(state, "nlm-quiz");
-    }
-
-    if (should("nlm-flashcards")) {
-      await ensureOnNotebook(page, state.notebooklmUrl);
-      await expandNotebookPanels(page);
-      const dest = join(paperDir, "vocab.csv");
-      if (await openStudioCardMatching(page, /フラッシュ|単語帳|Flashcard/i)) {
-        log("既存の単語帳を開きます（再生成しません）");
-      } else {
-        log("後で作成は使わず、今すぐ生成します");
-        await generateStudioItem(
-          page,
-          [/フラッシュ/, /フラッシュカード/, /単語帳/, /Flashcard/i, /Flash cards/i],
-          QUIZ_MS,
-        );
-        if (!(await openStudioCardMatching(page, /フラッシュ|単語帳|Flashcard/i))) {
-          await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
-        }
-      }
-      await page.waitForTimeout(1500);
-      await saveStudioArtifactCsv(page, dest, "flashcards");
-      if (!existsSync(dest)) throw new Error("単語帳 CSV が保存されていません");
-      state.vocabCsvPath = dest;
-      markCompleted(state, "nlm-flashcards");
+      await runStudioParallel(page, paperDir, state, skipStudio);
     }
   } catch (e) {
+    if (e instanceof GenerationWaitingError) throw e;
     await saveFailureShot(page, paperDir, "notebooklm");
     throw e;
   }

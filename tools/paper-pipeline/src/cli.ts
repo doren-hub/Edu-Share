@@ -3,27 +3,40 @@ import {
   closeBrowser,
   launchBrowser,
   pageAlive,
+  recoverStuckPage,
   type BrowserSession,
 } from "./browser.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
-import { listInboxPdfs } from "./inbox.ts";
+import { listInboxPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
 import { loadExistingFromEduShare, processOnePaper, repairSciSpaceCardMeta, repairSciSpaceRecordLinks } from "./pipeline.ts";
+import { formatStudioGenerateJa } from "./studio-select.ts";
+import { EXIT_WAITING } from "./waiting.ts";
 
 const MAX_RELAUNCH = 2;
+let activeSession: BrowserSession | null = null;
 
 async function relaunch(session: BrowserSession, cfg: AppConfig): Promise<BrowserSession> {
   await closeBrowser(session);
   log("ブラウザを再起動します");
-  return launchBrowser(cfg);
+  const next = await launchBrowser(cfg);
+  activeSession = next;
+  return next;
 }
 
 function installInterruptLogs(): void {
+  const stop = (sig: string) => {
+    logError(`プロセスが ${sig} で中断されました`);
+    const session = activeSession;
+    activeSession = null;
+    if (session) {
+      void closeBrowser(session).finally(() => process.exit(1));
+      return;
+    }
+    process.exit(1);
+  };
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
-    process.on(sig, () => {
-      logError(`プロセスが ${sig} で中断されました`);
-      process.exit(1);
-    });
+    process.on(sig, () => stop(sig));
   }
   process.on("uncaughtException", (e) => {
     logError(`未捕捉例外: ${firstLine(e)}`);
@@ -46,14 +59,25 @@ async function main(): Promise<void> {
   const cfg = loadConfig(overrides);
   assertConfigPaths(cfg);
   mkdirSync(cfg.workDir, { recursive: true });
-  const items = listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
+  const items = mergeInboxAndVideoRepair(
+    listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename),
+    [
+      ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
+      ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
+      ...(cfg.studioGenerateExplicit
+        ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
+        : []),
+    ],
+  );
   if (cfg.onlyFilename && items.length === 0) {
     log(`入力ディレクトリに ${cfg.onlyFilename} はありません（SciSpace リンク補修は作業フォルダを見ます）`);
   }
   log(`入力 ${cfg.inboxDir} の PDF ${items.length} 件`);
   log(`作業 ${cfg.workDir}`);
+  log(`Studio 生成: ${formatStudioGenerateJa(cfg.studioGenerate)}`);
 
   let session = await launchBrowser(cfg);
+  activeSession = session;
   const processed: string[] = [];
   const skipped: string[] = [];
   const failed: string[] = [];
@@ -62,6 +86,10 @@ async function main(): Promise<void> {
       session = await relaunch(session, cfg);
     }
     let existing = await loadExistingFromEduShare(session.page, cfg);
+    if (!(await recoverStuckPage(session.page))) {
+      warn("論文一覧のあとブラウザが応答しないため再起動します");
+      session = await relaunch(session, cfg);
+    }
     const repaired = await repairSciSpaceRecordLinks(session.page, cfg);
     processed.push(...repaired.updated);
     failed.push(...repaired.failed);
@@ -77,17 +105,20 @@ async function main(): Promise<void> {
       log(
         `SciSpace メタ補修: 更新 ${metaRepaired.updated.length} / 失敗 ${metaRepaired.failed.length}`,
       );
-      existing = await loadExistingFromEduShare(session.page, cfg);
+      if (items.length > 0) {
+        existing = await loadExistingFromEduShare(session.page, cfg);
+      }
     }
     for (const item of items) {
       log(`--- ${item.filename} ---`);
-      let r: "done" | "skipped" | "failed" = "failed";
+      let r: "done" | "skipped" | "failed" | "waiting" = "failed";
       for (let attempt = 0; attempt <= MAX_RELAUNCH; attempt++) {
         if (!(await pageAlive(session.page))) {
           warn(`${item.filename}: ブラウザ切断を検出したため再起動します`);
           session = await relaunch(session, cfg);
         }
         r = await processOnePaper(session.page, cfg, item, existing);
+        if (r === "waiting") break;
         if (r !== "failed" || (await pageAlive(session.page)) || attempt >= MAX_RELAUNCH) {
           break;
         }
@@ -98,7 +129,11 @@ async function main(): Promise<void> {
       }
       if (r === "done") processed.push(item.filename);
       else if (r === "skipped") skipped.push(item.filename);
-      else {
+      else if (r === "waiting") {
+        log(`${item.filename}: 生成待ちのため Chrome を明け渡します`);
+        process.exitCode = EXIT_WAITING;
+        break;
+      } else {
         failed.push(item.filename);
         if (cfg.stopOnError) break;
         if (!(await pageAlive(session.page))) {
@@ -113,10 +148,13 @@ async function main(): Promise<void> {
       await session.page.waitForTimeout(3000).catch(() => undefined);
     }
     await closeBrowser(session);
+    activeSession = null;
   }
 
   log(
-    `結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}`,
+    `結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}${
+      process.exitCode === EXIT_WAITING ? " / 生成待ち" : ""
+    }`,
   );
   if (failed.length) {
     logError(`失敗: ${failed.join(", ")}`);

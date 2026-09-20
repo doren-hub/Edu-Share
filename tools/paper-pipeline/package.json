@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/cli.ts",
+    "start": "tsx src/orchestrate.ts",
+    "worker": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/match.test.ts src/scispace-card.test.ts src/scispace-record-url.test.ts src/inbox.test.ts"
+    "test": "tsx --test src/match.test.ts src/scispace-card.test.ts src/scispace-record-url.test.ts src/inbox.test.ts src/schedule.test.ts src/state.test.ts src/studio-cards.test.ts src/studio-select.test.ts src/edushare-form.test.ts src/video-file.test.ts src/arxiv-abstract.test.ts"
   },
   "dependencies": {
+    "ffmpeg-static": "^5.3.0",
     "playwright": "^1.55.0"
   },
   "devDependencies": {

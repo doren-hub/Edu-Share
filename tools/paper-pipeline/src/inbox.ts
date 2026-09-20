@@ -10,7 +10,9 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import { fileStem } from "./match.ts";
-import { doneMarkerPath } from "./state.ts";
+import { doneMarkerPath, emptyState, loadState, type PaperState, type StudioStageId } from "./state.ts";
+import { missingStudioStages } from "./studio-select.ts";
+import { needsLocalVideoFile } from "./video-file.ts";
 
 export type InboxPdf = {
   filename: string;
@@ -90,4 +92,100 @@ export function moveInboxPdfToPaperDir(inboxPdfPath: string, paperDir: string): 
     unlinkSync(inboxPdfPath);
     return dest;
   }
+}
+
+function loadWorkPaper(workDir: string, name: string): { state: PaperState; paperDir: string } {
+  const paperDir = join(workDir, name);
+  const fallback = emptyState({
+    filename: `${name}.pdf`,
+    inboxPdfPath: join(paperDir, `${name}.pdf`),
+    paperDir,
+  });
+  return { state: loadState(paperDir, fallback), paperDir };
+}
+
+function workPdfPath(state: PaperState): string | undefined {
+  const absPath = existsSync(state.inboxPdfPath)
+    ? state.inboxPdfPath
+    : join(state.paperDir, state.filename);
+  return existsSync(absPath) ? absPath : undefined;
+}
+
+function toInboxPdf(state: PaperState, absPath: string): InboxPdf {
+  return {
+    filename: state.filename,
+    absPath,
+    stem: sanitizeDirName(fileStem(state.filename)),
+    paperDir: state.paperDir,
+  };
+}
+
+function listWorkDirs(workDir: string): string[] {
+  try {
+    return readdirSync(workDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+}
+
+/** inbox から移したあとも、MP4 が無い完了論文を worker が拾えるようにする */
+export function listVideoRepairPdfs(workDir: string, onlyFilename = ""): InboxPdf[] {
+  const out: InboxPdf[] = [];
+  for (const name of listWorkDirs(workDir)) {
+    const { state } = loadWorkPaper(workDir, name);
+    if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (!needsLocalVideoFile(state)) continue;
+    const absPath = workPdfPath(state);
+    if (!absPath) continue;
+    out.push(toInboxPdf(state, absPath));
+  }
+  return out.sort((a, b) => a.filename.localeCompare(b.filename, "en"));
+}
+
+/** --only で作業フォルダ側の PDF（Edu Share 済みを含む）を指定する */
+export function listWorkPdfs(workDir: string, onlyFilename: string): InboxPdf[] {
+  if (!onlyFilename) return [];
+  const out: InboxPdf[] = [];
+  for (const name of listWorkDirs(workDir)) {
+    const { state } = loadWorkPaper(workDir, name);
+    if (state.filename !== onlyFilename) continue;
+    const absPath = workPdfPath(state);
+    if (!absPath) continue;
+    out.push(toInboxPdf(state, absPath));
+  }
+  return out;
+}
+
+function isUploadedPaper(state: PaperState): boolean {
+  return Boolean(state.eduShareTestId || state.eduShareTestUrl || hasDoneMarker(state.paperDir));
+}
+
+/** Edu Share 済みで、指定 Studio の成果物がまだ無い論文 */
+export function listStudioFollowupPdfs(
+  workDir: string,
+  selected: readonly StudioStageId[],
+  onlyFilename = "",
+): InboxPdf[] {
+  if (selected.length === 0) return [];
+  const out: InboxPdf[] = [];
+  for (const name of listWorkDirs(workDir)) {
+    const { state } = loadWorkPaper(workDir, name);
+    if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (!isUploadedPaper(state)) continue;
+    if (missingStudioStages(state, selected).length === 0) continue;
+    const absPath = workPdfPath(state);
+    if (!absPath) continue;
+    out.push(toInboxPdf(state, absPath));
+  }
+  return out.sort((a, b) => a.filename.localeCompare(b.filename, "en"));
+}
+
+export function mergeInboxAndVideoRepair(
+  inbox: InboxPdf[],
+  repairs: InboxPdf[],
+): InboxPdf[] {
+  const seen = new Set(inbox.map((i) => i.filename));
+  return [...inbox, ...repairs.filter((r) => !seen.has(r.filename))];
 }

@@ -1,8 +1,8 @@
-import { existsSync, lstatSync, mkdirSync, readlinkSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "./config.ts";
-import { log } from "./log.ts";
+import { log, warn } from "./log.ts";
 
 export type BrowserSession = {
   context: BrowserContext;
@@ -24,7 +24,7 @@ export async function pageAlive(page: Page): Promise<boolean> {
   if (page.isClosed()) return false;
   try {
     await Promise.race([
-      page.evaluate(() => true),
+      page.evaluate("true"),
       new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error("pageAlive timeout")), 5_000);
       }),
@@ -35,9 +35,30 @@ export async function pageAlive(page: Page): Promise<boolean> {
   }
 }
 
+export async function recoverStuckPage(page: Page): Promise<boolean> {
+  if (page.isClosed()) return false;
+  if (await pageAlive(page)) return true;
+  warn("ページが応答しないため about:blank に戻します");
+  await page.goto("about:blank", { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => undefined);
+  return pageAlive(page);
+}
+
 export async function assertPageAlive(page: Page): Promise<void> {
-  if (!(await pageAlive(page))) {
-    throw new Error("ブラウザが閉じられています");
+  if (await recoverStuckPage(page)) return;
+  throw new Error("ブラウザが閉じられています");
+}
+
+function markChromeExitedCleanly(userDataDir: string): void {
+  const prefsPath = join(userDataDir, "Default", "Preferences");
+  if (!existsSync(prefsPath)) return;
+  try {
+    const prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as {
+      profile?: { exit_type?: string; exited_cleanly?: boolean };
+    };
+    prefs.profile = { ...prefs.profile, exit_type: "Normal", exited_cleanly: true };
+    writeFileSync(prefsPath, JSON.stringify(prefs));
+  } catch (e) {
+    warn(`Chrome の終了フラグを直せません: ${e instanceof Error ? e.message : e}`);
   }
 }
 
@@ -72,7 +93,12 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   mkdirSync(downloadsPath, { recursive: true });
   chromeDownloadsPath = downloadsPath;
   clearStaleChromeProfileLocks(cfg.chromeUserDataDir);
-  const args: string[] = ["--disable-blink-features=AutomationControlled"];
+  markChromeExitedCleanly(cfg.chromeUserDataDir);
+  const args: string[] = [
+    "--hide-crash-restore-bubble",
+    "--disable-session-crashed-bubble",
+    "--disable-infobars",
+  ];
   if (cfg.exportExtensionPath) {
     // disable-extensions-except は Chrome の PDF ビューアまで消すので使わない
     args.push(`--load-extension=${cfg.exportExtensionPath}`);
@@ -84,7 +110,7 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     acceptDownloads: true,
     downloadsPath,
     args,
-    ignoreDefaultArgs: ["--enable-automation"],
+    ignoreDefaultArgs: ["--enable-automation", "--enable-features=Translate", "--no-sandbox"],
   };
   let context: BrowserContext;
   try {

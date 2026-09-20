@@ -1,11 +1,18 @@
-import { existsSync } from "node:fs";
-import type { Page } from "playwright";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import type { Locator, Page } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
-import { isOtherIndustryValue, pickPaperIndustry } from "../match.ts";
-import { stripTldrSnippetNumbers } from "../scispace-card.ts";
-import { isCompleted, markCompleted, type PaperState } from "../state.ts";
+import { isOtherIndustryValue, pickPaperIndustry, type ExistingPaper } from "../match.ts";
+import { stripTldrSnippetNumbers, descriptionUsable } from "../scispace-card.ts";
+import {
+  fallbackAuthorName,
+  isAuthorRequiredError,
+  isDummyAuthorValue,
+  pickAuthorSelectValue,
+} from "../edushare-form.ts";
+import { isCompleted, markCompleted, type PaperState, type StudioStageId } from "../state.ts";
 import { fillIfVisible, saveFailureShot } from "../ui.ts";
+import { videoArtifactPath, videoFileReady, ensureUploadableVideo, VIDEO_UPLOAD_MAX_BYTES } from "../video-file.ts";
 
 function isDummySciSpacePaste(paste: string, filename: string): boolean {
   const t = paste.trim().toLowerCase();
@@ -60,7 +67,7 @@ async function gotoLoggedIn(page: Page, url: string, cfg: {
   email: string;
   password: string;
 }): Promise<void> {
-  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
   await pauseIfBlocked(page, "Edu Share");
   await maybeLoginEduShare(page, cfg.baseUrl, cfg.email, cfg.password);
   if (await onEduShareLoginPage(page)) return;
@@ -109,23 +116,33 @@ export async function collectExistingPapers(
   page: Page,
   baseUrl: string,
   auth: { email: string; password: string },
-): Promise<{ title: string; doi: string }[]> {
+): Promise<ExistingPaper[]> {
   await gotoLoggedIn(page, `${baseUrl}/tests/paper`, { baseUrl, ...auth });
   await page.waitForTimeout(800);
-  const titles = (await page.locator("h2").allTextContents())
-    .map((t) => t.trim())
-    .filter((t) => t && t !== "論文一覧");
+  const papers: ExistingPaper[] = [];
+  const cards = page.locator('a[href*="/tests/"]');
+  const n = await cards.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const href = ((await cards.nth(i).getAttribute("href").catch(() => "")) || "").trim();
+    const m = href.match(/\/tests\/([0-9a-f-]{8,})/i);
+    const title = ((await cards.nth(i).locator("h2").innerText().catch(() => "")) || "").trim();
+    if (!title && !m) continue;
+    papers.push({
+      title,
+      doi: "",
+      id: m?.[1],
+      url: m ? `${baseUrl.replace(/\/$/, "")}/tests/${m[1]}` : undefined,
+    });
+  }
+  const titles = papers.map((p) => p.title).filter(Boolean);
   const dois: string[] = [];
   const buttons = page.locator("button");
-  const n = await buttons.count();
-  for (let i = 0; i < n; i++) {
+  const bn = await buttons.count();
+  for (let i = 0; i < bn; i++) {
     const text = ((await buttons.nth(i).innerText().catch(() => "")) ?? "").trim();
     if (/^10\.\d{4,}\//.test(text)) dois.push(text);
   }
-  const papers: { title: string; doi: string }[] = [
-    ...titles.map((title) => ({ title, doi: "" })),
-    ...dois.map((doi) => ({ title: "", doi })),
-  ];
+  for (const doi of dois) papers.push({ title: "", doi });
   log(`Edu Share 論文一覧: タイトル ${titles.length} / DOI ${dois.length}`);
   return papers;
 }
@@ -170,6 +187,76 @@ async function ensureIndustry(page: Page, haystack: string): Promise<void> {
     return;
   }
   warn("業界を自動判定できませんでした。空のままアップロードします");
+}
+
+async function uploadFormAlert(page: Page): Promise<string> {
+  const loc = page
+    .locator(".bg-red-50, p.text-red-800, p.text-red-700")
+    .filter({ hasNotText: /このページを削除|削除中/ });
+  const n = await loc.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const el = loc.nth(i);
+    if (!(await el.isVisible({ timeout: 0 }).catch(() => false))) continue;
+    const t = ((await el.innerText().catch(() => "")) || "").trim();
+    if (!t || /このページを削除|削除中/.test(t)) continue;
+    return t.split("\n")[0]?.trim() || t;
+  }
+  return "";
+}
+
+async function ensurePaperAuthor(page: Page, state: PaperState): Promise<void> {
+  const select = page.locator("#paper-author-0");
+  if (!(await select.isVisible({ timeout: 0 }).catch(() => false))) {
+    await select.waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
+  }
+  if (!(await select.isVisible({ timeout: 0 }).catch(() => false))) {
+    warn("著者欄が見えないのでスキップ");
+    return;
+  }
+  const current = (await select.inputValue().catch(() => "")).trim();
+  if (current && current !== "その他" && !isDummyAuthorValue(current)) {
+    log(`著者（維持）: ${current}`);
+    return;
+  }
+  const values = await select.locator("option").evaluateAll((opts) =>
+    opts.map((o) => ((o as HTMLOptionElement).value ?? "").trim()),
+  );
+  const picked = pickAuthorSelectValue(values);
+  if (picked) {
+    await select.selectOption(picked);
+    log(`著者: ${picked}`);
+    return;
+  }
+  const name = fallbackAuthorName({
+    filesPaste: state.filesPaste,
+    title: state.title,
+    filename: state.filename,
+  });
+  await select.selectOption("その他");
+  await page.waitForTimeout(300);
+  const other = page.getByLabel(/著者 1（その他の内容）/);
+  await other.waitFor({ state: "visible", timeout: 5_000 });
+  await other.fill(name);
+  await other.blur();
+  await page.waitForTimeout(400);
+  log(`著者（その他）: ${name}`);
+}
+
+async function waitForEduSharePaperPage(page: Page, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastAlert = "";
+  while (Date.now() < deadline) {
+    if (/\/tests\/[0-9a-f-]{8,}/i.test(page.url()) && !/\/upload/.test(page.url())) return;
+    lastAlert = await uploadFormAlert(page);
+    if (lastAlert) throw new Error(lastAlert);
+    await page.waitForTimeout(500);
+  }
+  const leftover = lastAlert || (await uploadFormAlert(page));
+  throw new Error(
+    leftover
+      ? leftover
+      : `page.waitForURL: Timeout ${timeoutMs}ms exceeded（まだ ${page.url()}）`,
+  );
 }
 
 export async function runEduShareUpload(
@@ -237,9 +324,25 @@ export async function runEduShareUpload(
     }
 
     await ensureIndustry(page, [state.title, state.venue, state.tldr].filter(Boolean).join("\n"));
+    await ensurePaperAuthor(page, state);
 
-    await page.getByRole("button", { name: "アップロードして取り込み" }).click();
-    await page.waitForURL(/\/tests\/[0-9a-f-]{8,}/i, { timeout: 180_000 });
+    const submit = async () => {
+      await page.getByRole("button", { name: "アップロードして取り込み" }).click();
+    };
+    await submit();
+    try {
+      await waitForEduSharePaperPage(page, 180_000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isAuthorRequiredError(msg)) {
+        log("著者が未選択だったので入れて再送信します");
+        await ensurePaperAuthor(page, state);
+        await submit();
+        await waitForEduSharePaperPage(page, 180_000);
+      } else {
+        throw e;
+      }
+    }
     state.eduShareTestUrl = page.url();
     const m = page.url().match(/\/tests\/([0-9a-f-]{8,})/i);
     state.eduShareTestId = m?.[1] ?? "";
@@ -301,6 +404,113 @@ function paperSection(page: Page, heading: string) {
     .last();
 }
 
+function parseSummarizeEvaluate(raw: unknown): {
+  ok?: boolean;
+  body?: { summary?: string; error?: string };
+  summary?: string;
+} {
+  if (raw && typeof raw === "object") return raw as { ok?: boolean; body?: { summary?: string; error?: string }; summary?: string };
+  try {
+    return JSON.parse(String(raw || "{}")) as {
+      ok?: boolean;
+      body?: { summary?: string; error?: string };
+      summary?: string;
+    };
+  } catch {
+    return {};
+  }
+}
+
+async function fillReactTextarea(loc: Locator, value: string, label: string): Promise<boolean> {
+  const v = value.slice(0, 2000);
+  if (!(await loc.first().isVisible({ timeout: 0 }).catch(() => false))) {
+    warn(`${label} が見えないのでスキップ`);
+    return false;
+  }
+  const ok = await loc
+    .first()
+    .evaluate(
+      `(el) => {
+      const text = ${JSON.stringify(v)};
+      const node = el;
+      node.focus();
+      const proto = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
+      if (proto && proto.set) proto.set.call(node, text);
+      else node.value = text;
+      node.dispatchEvent(new Event("input", { bubbles: true }));
+      node.dispatchEvent(new Event("change", { bubbles: true }));
+      return node.value.slice(0, 40) === text.slice(0, 40);
+    }`,
+    )
+    .catch(() => false);
+  if (ok) return true;
+  if (!v.trim()) return false;
+  return fillIfVisible(loc, v, label);
+}
+
+async function patchEduShareDescription(
+  page: Page,
+  testId: string,
+  description: string | null,
+): Promise<boolean> {
+  const path = `/api/tests/${testId}`;
+  const raw = await page
+    .evaluate(
+      `(async () => {
+      const res = await fetch(${JSON.stringify(path)}, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: ${JSON.stringify(description)} }),
+      });
+      const text = await res.text();
+      try { return JSON.stringify({ ok: res.ok, status: res.status, body: JSON.parse(text) }); }
+      catch { return JSON.stringify({ ok: res.ok, status: res.status, body: { error: text.slice(0, 200) } }); }
+    })()`,
+    )
+    .catch((e) => JSON.stringify({ ok: false, body: { error: String(e) } }));
+  const parsed = parseSummarizeEvaluate(raw);
+  if (parsed.ok) return true;
+  warn(
+    `Edu Share: 説明の API 保存に失敗（${(parsed.body?.error || "不明").slice(0, 80)}）`,
+  );
+  return false;
+}
+
+async function fillTldrFromPdfSummarize(page: Page, state: PaperState): Promise<boolean> {
+  const id = (state.eduShareTestId || "").trim();
+  if (!id) return false;
+  log("Edu Share: PDF 要約 API で説明を作ります");
+  const path = `/api/tests/${id}/summarize`;
+  page.setDefaultTimeout(180_000);
+  const raw = await page
+    .evaluate(
+      `(async () => {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 170000);
+      try {
+        const res = await fetch(${JSON.stringify(path)}, { method: "POST", credentials: "include", signal: ac.signal });
+        const text = await res.text();
+        try { return JSON.stringify({ ok: res.ok, status: res.status, body: JSON.parse(text) }); }
+        catch { return JSON.stringify({ ok: res.ok, status: res.status, body: { error: text.slice(0, 200) } }); }
+      } finally { clearTimeout(timer); }
+    })()`,
+    )
+    .catch((e) => JSON.stringify({ ok: false, body: { error: String(e) } }));
+  page.setDefaultTimeout(30_000);
+  const parsed = parseSummarizeEvaluate(raw);
+  const summary = (parsed.body?.summary || parsed.summary || "").trim();
+  if (descriptionUsable(summary)) {
+    state.tldr = summary.slice(0, 2000);
+    log("Edu Share: PDF 要約を説明に入れました");
+    return true;
+  }
+  warn(
+    `Edu Share: PDF 要約 API が使えません（ok=${String(parsed.ok)} ${(parsed.body?.error || summary.slice(0, 60) || "不明").slice(0, 80)}）`,
+  );
+  return false;
+}
+
 export async function applySciSpaceMetaToPaperPage(
   page: Page,
   opts: { paperDir: string; state: PaperState },
@@ -308,8 +518,9 @@ export async function applySciSpaceMetaToPaperPage(
   const { paperDir, state } = opts;
   if (!state.eduShareTestUrl) throw new Error("Edu Share の論文 URL がありません");
   const paste = isDummySciSpacePaste(state.filesPaste, state.filename) ? "" : state.filesPaste.trim();
-  const tldr = stripTldrSnippetNumbers(state.tldr.trim());
-  const tldrOk = Boolean(tldr) && !/agent gallery|^home\b/i.test(tldr);
+  const rawTldr = state.tldr.trim();
+  const tldr = descriptionUsable(rawTldr) ? rawTldr : stripTldrSnippetNumbers(rawTldr);
+  let tldrOk = descriptionUsable(tldr);
 
   try {
     await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
@@ -360,13 +571,8 @@ export async function applySciSpaceMetaToPaperPage(
       await info.getByRole("button", { name: "編集する" }).click();
       await page.waitForTimeout(500);
     }
-    if (tldrOk) {
-      await fillIfVisible(
-        info.locator("label").filter({ hasText: "説明" }).locator("textarea"),
-        tldr.slice(0, 2000),
-        "資料情報の説明",
-      );
-    }
+    const descBox = info.locator("label").filter({ hasText: "説明" }).locator("textarea");
+    await descBox.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
     if (state.title.trim()) {
       await fillIfVisible(
         info.locator("label").filter({ hasText: "タイトル" }).locator("input"),
@@ -375,6 +581,44 @@ export async function applySciSpaceMetaToPaperPage(
       );
     }
     await ensureIndustry(page, [state.title, state.venue, tldr].filter(Boolean).join("\n"));
+    await ensurePaperAuthor(page, state);
+    if (!tldrOk && (await fillTldrFromPdfSummarize(page, state))) {
+      tldrOk = true;
+    }
+    if (!tldrOk) {
+      const sumBtn = page.getByRole("button", { name: /PDF内容を要約|要約中/ });
+      if (await sumBtn.first().isVisible({ timeout: 3_000 }).catch(() => false)) {
+        log("Edu Share: SciSpace の TL;DR が無いので PDF を要約します");
+        await sumBtn.first().click();
+        const until = Date.now() + 180_000;
+        while (Date.now() < until) {
+          const v = ((await descBox.inputValue().catch(() => "")) || "").trim();
+          if (descriptionUsable(v)) {
+            state.tldr = v.slice(0, 2000);
+            tldrOk = true;
+            log("Edu Share: PDF 要約を説明に入れました");
+            break;
+          }
+          await page.waitForTimeout(1500);
+        }
+        if (!descriptionUsable(state.tldr)) warn("Edu Share: PDF 要約が説明欄に入りませんでした");
+      } else {
+        warn("Edu Share: PDF内容を要約ボタンが見つかりません");
+      }
+    }
+    const desc = (tldrOk ? state.tldr.trim() || tldr : tldr).slice(0, 2000);
+    if (descriptionUsable(desc)) {
+      const filled = await fillReactTextarea(descBox, desc, "資料情報の説明");
+      if (!filled) warn("Edu Share: 説明欄に入力できませんでした");
+      else state.tldr = desc;
+    } else {
+      const current = ((await descBox.inputValue().catch(() => "")) || "").trim();
+      if (current && !descriptionUsable(current)) {
+        log("Edu Share: 説明欄の画面文言を消します");
+        await fillReactTextarea(descBox, "", "資料情報の説明");
+        state.tldr = "";
+      }
+    }
     await info.getByRole("button", { name: "変更を保存" }).click();
     const start = Date.now();
     while (Date.now() - start < 20_000) {
@@ -383,7 +627,14 @@ export async function applySciSpaceMetaToPaperPage(
       if (err) throw new Error(`資料情報の保存失敗: ${err}`);
       await page.waitForTimeout(400);
     }
-    log("Edu Share: 資料情報（説明・業界）を保存");
+    log(`Edu Share: 資料情報（説明・業界）を保存${descriptionUsable(state.tldr) ? "" : "（説明は空）"}`);
+    const testId = (state.eduShareTestId || "").trim();
+    if (testId) {
+      const want = descriptionUsable(state.tldr) ? state.tldr.slice(0, 2000) : null;
+      if (await patchEduShareDescription(page, testId, want)) {
+        log(want ? "Edu Share: 説明を API で確定しました" : "Edu Share: 説明を API で空にしました");
+      }
+    }
   } catch (e) {
     await saveFailureShot(page, paperDir, "edushare-scispace-meta");
     throw e;
@@ -428,6 +679,111 @@ async function importNotebookLmCsv(
   throw new Error(`${successText} のあと、取り込み済み件数がページに出ませんでした`);
 }
 
+async function paperHasRegisteredVideo(page: Page): Promise<boolean> {
+  const formBlock = page.locator("p").filter({ hasText: /^動画（MP4）$/ }).locator("xpath=..");
+  const formText = (await formBlock.first().innerText().catch(() => "")).replace(/\s+/g, " ");
+  if (/未登録/.test(formText)) return false;
+  if (/登録済み/.test(formText)) return true;
+  const body = await page.locator("body").innerText().catch(() => "");
+  return /動画（MP4）/.test(body);
+}
+
+async function postEduShareVideoApi(page: Page, testId: string, dest: string): Promise<void> {
+  const origin = new URL(page.url()).origin;
+  const buf = readFileSync(dest);
+  log(`Edu Share: 動画 API で登録します（${buf.length} bytes）`);
+  const res = await page.request.post(`${origin}/api/tests/${testId}/material/video`, {
+    multipart: {
+      file: {
+        name: dest.split("/").pop() || "video.mp4",
+        mimeType: "video/mp4",
+        buffer: buf,
+      },
+    },
+    timeout: 120_000,
+  });
+  if (!res.ok()) {
+    const text = (await res.text().catch(() => "")).slice(0, 400);
+    throw new Error(`Edu Share 動画 API ${res.status()}: ${text || "(空)"}`);
+  }
+}
+
+export async function attachEduShareVideo(page: Page, state: PaperState): Promise<boolean> {
+  if (!state.eduShareTestUrl) return false;
+  let dest = videoArtifactPath(state.paperDir, state.videoMp4Path);
+  if (!videoFileReady(state.paperDir, dest)) {
+    if (state.completed.includes("nlm-video")) {
+      warn("解説動画はあるが MP4 が無いので、Edu Share への動画登録はしません");
+    }
+    return false;
+  }
+  if (statSync(dest).size > VIDEO_UPLOAD_MAX_BYTES) {
+    log(`Edu Share: 動画 ${statSync(dest).size} bytes はストレージ上限超なので縮小します`);
+  }
+  const uploadPath = ensureUploadableVideo(dest);
+  if (uploadPath !== dest) {
+    log(`Edu Share: 動画を ${statSync(dest).size} → ${statSync(uploadPath).size} bytes に縮小しました`);
+  }
+  dest = uploadPath;
+  state.videoMp4Path = dest;
+  const onPaper =
+    /\/tests\//.test(page.url()) &&
+    Boolean(state.eduShareTestId) &&
+    page.url().includes(state.eduShareTestId);
+  if (!onPaper) {
+    await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
+  }
+  await expandSection(page, "NotebookLM");
+  if (await paperHasRegisteredVideo(page)) {
+    log("Edu Share: 動画 MP4 は登録済み");
+    return true;
+  }
+
+  if (state.eduShareTestId) {
+    try {
+      await postEduShareVideoApi(page, state.eduShareTestId, dest);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expandSection(page, "NotebookLM");
+      if (await paperHasRegisteredVideo(page)) {
+        log(`Edu Share: 動画 MP4 を登録しました（${statSync(dest).size} bytes）`);
+        return true;
+      }
+      warn("Edu Share: 動画 API は成功したが枠が見えません。ファイル入力で再試行します");
+    } catch (e) {
+      warn(`Edu Share 動画 API: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  let input = page.locator('input[type="file"][accept*="mp4"]').first();
+  if (!(await input.count())) {
+    const edit = page.getByRole("heading", { name: "NotebookLM", exact: true }).locator("..").getByRole(
+      "button",
+      { name: "編集する" },
+    );
+    if (await edit.first().isVisible({ timeout: 0 }).catch(() => false)) {
+      await edit.first().click({ timeout: 5_000 }).catch(() => undefined);
+      await page.waitForTimeout(400);
+    }
+    input = page.locator('input[type="file"][accept*="mp4"]').first();
+  }
+  if (!(await input.count())) {
+    throw new Error("Edu Share の動画 file input がありません");
+  }
+  await input.evaluate((el) => {
+    (el as HTMLInputElement).disabled = false;
+  }).catch(() => undefined);
+  log(`Edu Share: 動画ファイル入力で登録します（${statSync(dest).size} bytes）`);
+  await input.setInputFiles(dest);
+  const success = page.getByText("動画 MP4 を登録しました。");
+  const ok = await success.waitFor({ timeout: 60_000 }).then(() => true).catch(() => false);
+  if (!ok) {
+    const msg = (await page.getByRole("alert").innerText().catch(() => "")).trim();
+    throw new Error(`Edu Share の動画登録が完了しませんでした${msg ? `: ${msg}` : "（完了表示なし）"}`);
+  }
+  log(`Edu Share: 動画 MP4 を登録しました（${statSync(dest).size} bytes）`);
+  return true;
+}
+
 export async function runEduShareMaterials(
   page: Page,
   opts: {
@@ -442,7 +798,6 @@ export async function runEduShareMaterials(
   try {
     await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
     await expandSection(page, "NotebookLM");
-    const already = await page.locator("body").innerText().catch(() => "");
 
     if (state.quizCsvPath && existsSync(state.quizCsvPath)) {
       await importNotebookLmCsv(
@@ -472,15 +827,7 @@ export async function runEduShareMaterials(
         () => warn("スライド登録の完了表示がありません"),
       );
     }
-    if (state.videoMp4Path && existsSync(state.videoMp4Path) && !/動画（MP4）/.test(already)) {
-      await expandSection(page, "NotebookLM");
-      await page.locator('input[type="file"][accept*="mp4"]').first().setInputFiles(
-        state.videoMp4Path,
-      );
-      await page.getByText("動画 MP4 を登録しました。").waitFor({ timeout: 180_000 }).catch(() =>
-        warn("動画登録の完了表示がありません"),
-      );
-    }
+    await attachEduShareVideo(page, state);
 
     if (state.notebooklmUrl) {
       await expandSection(page, "NotebookLM");
@@ -510,9 +857,17 @@ export async function runEduShareMaterials(
 
 export async function verifyEduSharePaper(
   page: Page,
-  opts: { paperDir: string; state: PaperState },
+  opts: {
+    paperDir: string;
+    state: PaperState;
+    skipSlidesVideo?: boolean;
+    studioSkip?: readonly StudioStageId[];
+  },
 ): Promise<void> {
-  const { paperDir, state } = opts;
+  const { paperDir, state, skipSlidesVideo = false } = opts;
+  const skipVideo = opts.studioSkip?.includes("nlm-video") ?? skipSlidesVideo;
+  const skipQuiz = opts.studioSkip?.includes("nlm-quiz") ?? false;
+  const skipFlash = opts.studioSkip?.includes("nlm-flashcards") ?? false;
   if (isCompleted(state, "verify")) return;
   if (!state.eduShareTestUrl) throw new Error("Edu Share の論文 URL がありません");
 
@@ -528,7 +883,8 @@ export async function verifyEduSharePaper(
         await csvTab.click({ timeout: 5_000 }).catch(() => undefined);
         await page.waitForTimeout(300);
       }
-      if (await quizStart.first().isVisible({ timeout: 0 }).catch(() => false)) break;
+      if (!skipQuiz && (await quizStart.first().isVisible({ timeout: 0 }).catch(() => false))) break;
+      if (skipQuiz && skipFlash) break;
       if (Date.now() - lastBeat > 12_000) {
         log("確認: CSV 開始リンク待ち");
         lastBeat = Date.now();
@@ -543,32 +899,39 @@ export async function verifyEduSharePaper(
     if (!hasPdf) throw new Error("元 PDF の表示が見つかりません");
 
     const hasSlide = /スライド（PDF）/.test(body);
-    const hasVideo = /動画/.test(body);
+    const hasVideo = /動画（MP4）/.test(body);
     if (!hasSlide) warn("スライド枠が見つかりません");
     if (!hasVideo) warn("動画枠が見つかりません");
-
-    if (!(await quizStart.first().isVisible({ timeout: 0 }).catch(() => false))) {
-      const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=quiz";
-      log("確認: クイズ開始ボタンが無いので CSV プール URL を開きます");
-      await page.goto(take, { waitUntil: "domcontentloaded" });
-    } else {
-      await quizStart.first().click({ timeout: 8_000 });
+    if (state.completed.includes("nlm-video") && !hasVideo && !skipVideo) {
+      throw new Error("Edu Share に動画（MP4）がありません");
     }
-    await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
-    await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
+
+    if (!skipQuiz) {
+      if (!(await quizStart.first().isVisible({ timeout: 0 }).catch(() => false))) {
+        const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=quiz";
+        log("確認: クイズ開始ボタンが無いので CSV プール URL を開きます");
+        await page.goto(take, { waitUntil: "domcontentloaded" });
+      } else {
+        await quizStart.first().click({ timeout: 8_000 });
+      }
+      await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
+      await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
+    }
     const csvTab = page.getByRole("tab", { name: "NotebookLM CSV" });
     if (await csvTab.isVisible({ timeout: 0 }).catch(() => false)) {
       await csvTab.click({ timeout: 5_000 }).catch(() => undefined);
     }
-    const vocabAgain = page.locator('a[href*="csvPool=vocab"]');
-    if (await vocabAgain.first().isVisible({ timeout: 0 }).catch(() => false)) {
-      await vocabAgain.first().click({ timeout: 8_000 });
-    } else {
-      const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=vocab";
-      log("確認: 単語帳開始ボタンが無いので CSV プール URL を開きます");
-      await page.goto(take, { waitUntil: "domcontentloaded" });
+    if (!skipFlash) {
+      const vocabAgain = page.locator('a[href*="csvPool=vocab"]');
+      if (await vocabAgain.first().isVisible({ timeout: 0 }).catch(() => false)) {
+        await vocabAgain.first().click({ timeout: 8_000 });
+      } else {
+        const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=vocab";
+        log("確認: 単語帳開始ボタンが無いので CSV プール URL を開きます");
+        await page.goto(take, { waitUntil: "domcontentloaded" });
+      }
+      await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
     }
-    await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
 
     log("確認: PDF/スライド/動画と CSV テスト開始まで到達");
     markCompleted(state, "verify");
