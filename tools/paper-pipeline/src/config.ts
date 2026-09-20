@@ -1,6 +1,11 @@
 import { existsSync } from "node:fs";
 import { PACKAGE_ROOT, loadDotEnv, resolvePathMaybe } from "./env.ts";
-import { isStageId, type StageId } from "./state.ts";
+import { isStageId, type StageId, type StudioStageId } from "./state.ts";
+import {
+  parseStudioGenerateTokens,
+  skipStudioStages,
+  splitGenerateArg,
+} from "./studio-select.ts";
 
 export type AppConfig = {
   inboxDir: string;
@@ -16,6 +21,11 @@ export type AppConfig = {
   headed: boolean;
   onlyFilename: string;
   fromStage: StageId | null;
+  skipSlidesVideo: boolean;
+  /** 今回生成する Studio 項目。省略時は 4 種すべて */
+  studioGenerate: StudioStageId[];
+  studioSkip: readonly StudioStageId[];
+  studioGenerateExplicit: boolean;
 };
 
 export type CliOverrides = {
@@ -25,6 +35,8 @@ export type CliOverrides = {
   headed?: boolean;
   onlyFilename?: string;
   fromStage?: string;
+  skipSlidesVideo?: boolean;
+  generate?: string[];
 };
 
 function stripTrailingSlash(u: string): string {
@@ -43,6 +55,14 @@ export function parseArgv(argv: string[]): CliOverrides {
     else if (a === "--stop-on-error") out.stopOnError = true;
     else if (a === "--headless") out.headed = false;
     else if (a === "--headed") out.headed = true;
+    else if (a === "--skip-slides-video") out.skipSlidesVideo = true;
+    else if (a === "--generate") {
+      const tokens = splitGenerateArg(next());
+      if (tokens.length === 0) {
+        throw new Error("--generate には slides / video / quiz / flashcards / all を指定してください");
+      }
+      out.generate = [...(out.generate ?? []), ...tokens];
+    }
   }
   return out;
 }
@@ -65,6 +85,27 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
     fromStage = overrides.fromStage;
   }
   const ext = (process.env.NOTEBOOKLM_EXPORT_EXTENSION_PATH ?? "").trim();
+  const envGenerate = (process.env.STUDIO_GENERATE ?? process.env.GENERATE ?? "").trim();
+  const skipSlidesVideoFlag =
+    overrides.skipSlidesVideo === true ||
+    process.env.SKIP_SLIDES_VIDEO === "1" ||
+    process.env.SKIP_SLIDES_VIDEO === "true";
+  const generateTokens = [
+    ...(overrides.generate ?? []),
+    ...splitGenerateArg(envGenerate),
+  ];
+  const studioGenerateExplicit =
+    generateTokens.length > 0 || skipSlidesVideoFlag;
+  const studioGenerate = parseStudioGenerateTokens(
+    generateTokens.length > 0
+      ? generateTokens
+      : skipSlidesVideoFlag
+        ? ["quiz", "flashcards"]
+        : [],
+  );
+  const studioSkip = skipStudioStages(studioGenerate);
+  const skipSlidesVideo =
+    studioSkip.includes("nlm-slides") && studioSkip.includes("nlm-video");
   return {
     inboxDir: resolvePathMaybe(inbox.trim(), cwd),
     workDir: resolvePathMaybe(work.trim(), cwd),
@@ -90,6 +131,10 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
     headed: overrides.headed !== false,
     onlyFilename: (overrides.onlyFilename ?? "").trim(),
     fromStage,
+    skipSlidesVideo,
+    studioGenerate,
+    studioSkip,
+    studioGenerateExplicit,
   };
 }
 
@@ -99,7 +144,12 @@ export function helpText(): string {
 使い方:
   npm start
   npm start -- --inbox /path/pdfs --work /path/work
-  npm start -- --only paper.pdf --from sci-upload
+  npm start -- --only paper.pdf --from sci-meta
+  npm start -- --generate quiz,flashcards
+  npm start -- --only paper.pdf --generate slides,video
+  npm run worker -- --only paper.pdf
+
+npm start は呼び出し側です。1論文ずつ既存 worker を呼びます。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。Edu Share 済みの論文にも、足りない項目を後から生成できます。同じプロファイルで Chrome を同時には開きません。
 
 必須: PAPER_INBOX_DIR と PAPER_WORK_DIR（.env または引数）
 
@@ -107,9 +157,12 @@ export function helpText(): string {
   --inbox DIR          未処理 PDF のディレクトリ
   --work DIR           作業ディレクトリ（論文ごとのフォルダを作る）
   --only FILE.pdf      そのファイルだけ処理
-  --from STAGE         その段階から再開（--only と併用）
+  --from STAGE         その段階から再開（--only と併用、初回の worker のみ）
+  --generate ITEMS     生成するもの。カンマ区切りまたは繰り返し。all で全部
+                       slides / video / quiz / flashcards
   --stop-on-error      1件失敗で終了
   --headed / --headless
+  --skip-slides-video  --generate quiz,flashcards と同じ（互換）
 `;
 }
 

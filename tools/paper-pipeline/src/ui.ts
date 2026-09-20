@@ -4,6 +4,7 @@ import { extname, join } from "node:path";
 import type { Locator, Page } from "playwright";
 import { getChromeDownloadsPath } from "./browser.ts";
 import { log, warn } from "./log.ts";
+import { downloadNameLooksLikeVideo } from "./video-file.ts";
 
 export async function saveFailureShot(page: Page, paperDir: string, name: string): Promise<string> {
   const dir = join(paperDir, "failures");
@@ -135,12 +136,16 @@ export async function uploadViaChooserOrInput(
   }
 }
 
-function copyIfReady(src: string | null | undefined, destPath: string): boolean {
+function copyIfReady(
+  src: string | null | undefined,
+  destPath: string,
+  minBytes = 1_000,
+): boolean {
   if (!src || !existsSync(src)) return false;
   try {
-    if (statSync(src).size <= 1_000) return false;
+    if (statSync(src).size <= minBytes) return false;
     if (src !== destPath) copyFileSync(src, destPath);
-    return existsSync(destPath) && statSync(destPath).size > 1_000;
+    return existsSync(destPath) && statSync(destPath).size > minBytes;
   } catch {
     return false;
   }
@@ -204,6 +209,7 @@ export async function waitForDownloadTo(
   destPath: string,
   click: () => Promise<void>,
   timeoutMs: number,
+  minBytes = 1_000,
 ): Promise<string> {
   const dirs = downloadSearchDirs();
   const seen = new Map<string, number>();
@@ -217,9 +223,31 @@ export async function waitForDownloadTo(
     }
   }
   const t0 = Date.now();
+  const fromBrowser = page
+    .waitForEvent("download", { timeout: timeoutMs })
+    .then(async (download) => {
+      const name = download.suggestedFilename();
+      if (extname(destPath).toLowerCase() === ".mp4" && !downloadNameLooksLikeVideo(name)) {
+        await download.cancel().catch(() => undefined);
+        throw new Error(`動画ではなく ${name} が落ちたので破棄します`);
+      }
+      await download.saveAs(destPath);
+      log(`保存: ${destPath}（${name}）`);
+      return destPath;
+    })
+    .catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/動画ではなく /.test(msg)) throw e;
+      return "";
+    });
   await click();
   const ext = extname(destPath).toLowerCase();
   while (Date.now() - t0 < timeoutMs) {
+    const viaEvent = await Promise.race([
+      fromBrowser,
+      new Promise<string>((r) => setTimeout(() => r(""), 250)),
+    ]);
+    if (viaEvent) return viaEvent;
     for (const dir of dirs) {
       for (const n of readdirSync(dir)) {
         if (!n.toLowerCase().endsWith(ext) || n.endsWith(".crdownload")) continue;
@@ -230,7 +258,7 @@ export async function waitForDownloadTo(
         } catch {
           continue;
         }
-        if (st.size <= 1_000) continue;
+        if (st.size <= minBytes) continue;
         const prev = seen.get(p);
         const isNew = prev == null || st.size > prev || st.mtimeMs >= t0 - 1_000;
         if (!isNew) continue;
@@ -240,15 +268,14 @@ export async function waitForDownloadTo(
         } catch {
           continue;
         }
-        if (copyIfReady(p, destPath)) {
+        if (copyIfReady(p, destPath, minBytes)) {
           log(`保存: ${destPath}（${n}）`);
           return destPath;
         }
       }
     }
-    await new Promise((r) => setTimeout(r, 250));
   }
-  if (copyIfReady(destPath, destPath)) {
+  if (copyIfReady(destPath, destPath, minBytes)) {
     log(`保存: ${destPath}（既存ファイル）`);
     return destPath;
   }

@@ -5,10 +5,10 @@ const nextConfig: NextConfig = {
   experimental: {
     /** PDF など大きな multipart を Route Handler で受けるため（既定は小さめで FormData 解析が失敗することがある） */
     serverActions: {
-      bodySizeLimit: "50mb",
+      bodySizeLimit: "200mb",
     },
-    /** ミドルウェアを通るリクエストのボディ上限（アップロード API 用） */
-    middlewareClientMaxBodySize: "50mb",
+    /** ミドルウェアを通るリクエストのボディ上限（NotebookLM の MP4 は 50MB を超えることがある） */
+    middlewareClientMaxBodySize: "200mb",
   },
 };
 

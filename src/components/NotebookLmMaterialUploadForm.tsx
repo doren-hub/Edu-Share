@@ -64,10 +64,17 @@ export function NotebookLmMaterialUploadForm({
       }
 
       const path = notebooklmSlidePdfStoragePath(user.id, testId);
-      const { error: upErr } = await supabase.storage.from("pdfs").upload(path, file, {
+      const upload = supabase.storage.from("pdfs").upload(path, file, {
         upsert: true,
         contentType: "application/pdf",
       });
+      const timed = await Promise.race([
+        upload,
+        new Promise<{ error: { message: string } }>((resolve) =>
+          setTimeout(() => resolve({ error: { message: "アップロードが時間切れです（90秒）" } }), 90_000),
+        ),
+      ]);
+      const upErr = timed.error;
       if (upErr) {
         setError(`ストレージへのアップロードに失敗しました\n${upErr.message}`);
         return;
@@ -111,10 +118,17 @@ export function NotebookLmMaterialUploadForm({
       }
 
       const path = notebooklmVideoMp4StoragePath(user.id, testId);
-      const { error: upErr } = await supabase.storage.from("pdfs").upload(path, file, {
+      const upload = supabase.storage.from("pdfs").upload(path, file, {
         upsert: true,
         contentType: "video/mp4",
       });
+      const timed = await Promise.race([
+        upload,
+        new Promise<{ error: { message: string } }>((resolve) =>
+          setTimeout(() => resolve({ error: { message: "アップロードが時間切れです（90秒）" } }), 90_000),
+        ),
+      ]);
+      const upErr = timed.error;
       if (upErr) {
         setError(`ストレージへのアップロードに失敗しました\n${upErr.message}`);
         return;

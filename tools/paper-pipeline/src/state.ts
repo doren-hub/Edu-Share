@@ -2,13 +2,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const STAGES = [
+  "sci-upload",
   "nlm-create",
   "nlm-upload",
   "nlm-slides",
   "nlm-video",
   "nlm-quiz",
   "nlm-flashcards",
-  "sci-upload",
   "sci-meta",
   "edu-upload",
   "edu-materials",
@@ -17,6 +17,17 @@ export const STAGES = [
 ] as const;
 
 export type StageId = (typeof STAGES)[number];
+
+export const STUDIO_STAGES = [
+  "nlm-slides",
+  "nlm-video",
+  "nlm-quiz",
+  "nlm-flashcards",
+] as const;
+
+export type StudioStageId = (typeof STUDIO_STAGES)[number];
+
+export const SKIP_SLIDES_VIDEO_STAGES: readonly StudioStageId[] = ["nlm-slides", "nlm-video"];
 
 export type PaperState = {
   filename: string;
@@ -38,6 +49,13 @@ export type PaperState = {
   vocabCsvPath: string;
   skippedAlreadyUploaded: boolean;
   lastError: string;
+  waitingFor: StageId | "";
+  generationStartedAt: string;
+  studioStarted: StageId[];
+  /** 生成ボタン失敗などのあと、この時刻まで Studio 開始を飛ばす */
+  kickoffRetryAt: string;
+  /** kickoffRetryAt の対象段階。他の Studio は後回しにしない */
+  kickoffRetryStage: StageId | "";
 };
 
 export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath" | "paperDir">): PaperState {
@@ -61,6 +79,11 @@ export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath"
     vocabCsvPath: "",
     skippedAlreadyUploaded: false,
     lastError: "",
+    waitingFor: "",
+    generationStartedAt: "",
+    studioStarted: [],
+    kickoffRetryAt: "",
+    kickoffRetryStage: "",
   };
 }
 
@@ -77,7 +100,18 @@ export function loadState(paperDir: string, fallback: PaperState): PaperState {
   if (!existsSync(p)) return fallback;
   try {
     const parsed = JSON.parse(readFileSync(p, "utf8")) as Partial<PaperState>;
-    return { ...fallback, ...parsed, paperDir, inboxPdfPath: fallback.inboxPdfPath };
+    const studioStarted = Array.isArray(parsed.studioStarted)
+      ? parsed.studioStarted.filter((s): s is StageId => isStageId(s))
+      : [];
+    return {
+      ...fallback,
+      ...parsed,
+      studioStarted,
+      kickoffRetryStage:
+        parsed.kickoffRetryStage && isStageId(parsed.kickoffRetryStage) ? parsed.kickoffRetryStage : "",
+      paperDir,
+      inboxPdfPath: fallback.inboxPdfPath,
+    };
   } catch {
     return fallback;
   }
@@ -90,6 +124,57 @@ export function saveState(state: PaperState): void {
 
 export function markCompleted(state: PaperState, stage: StageId): void {
   if (!state.completed.includes(stage)) state.completed.push(stage);
+  if (state.waitingFor === stage) {
+    state.waitingFor = "";
+    state.generationStartedAt = "";
+  }
+  saveState(state);
+}
+
+export function hasStudioStarted(state: PaperState, stage: StageId): boolean {
+  return (state.studioStarted ?? []).includes(stage) || state.waitingFor === stage;
+}
+
+export function firstPendingStudioStage(
+  state: PaperState,
+  skip: readonly StudioStageId[] = [],
+): StudioStageId | undefined {
+  return STUDIO_STAGES.find((s) => !isCompleted(state, s) && !skip.includes(s));
+}
+
+export function waitingStudioStage(
+  state: PaperState,
+  skip: readonly StudioStageId[] = [],
+): StudioStageId | undefined {
+  return STUDIO_STAGES.find((s) => !isCompleted(state, s) && !skip.includes(s) && hasStudioStarted(state, s));
+}
+
+/** スライド・動画・クイズ・単語帳のうち、この論文で扱うもの */
+export function requiredStudioStages(skip: readonly StudioStageId[] = []): StudioStageId[] {
+  return STUDIO_STAGES.filter((s) => !skip.includes(s));
+}
+
+export function studioKickoffBegun(state: PaperState, skip: readonly StudioStageId[] = []): boolean {
+  return requiredStudioStages(skip).some((s) => isCompleted(state, s) || hasStudioStarted(state, s));
+}
+
+/** 4種それぞれが生成待ち（開始済み）か完了 */
+export function studioKickoffSettled(state: PaperState, skip: readonly StudioStageId[] = []): boolean {
+  return requiredStudioStages(skip).every((s) => isCompleted(state, s) || hasStudioStarted(state, s));
+}
+
+export function markStudioStarted(state: PaperState, stage: StageId): void {
+  if (!state.studioStarted) state.studioStarted = [];
+  if (!state.studioStarted.includes(stage)) state.studioStarted.push(stage);
+  saveState(state);
+}
+
+export function unmarkStudioStarted(state: PaperState, stage: StageId): void {
+  state.studioStarted = (state.studioStarted ?? []).filter((s) => s !== stage);
+  if (state.waitingFor === stage) {
+    state.waitingFor = "";
+    state.generationStartedAt = "";
+  }
   saveState(state);
 }
 

@@ -11,6 +11,7 @@ import {
 } from "@/lib/test-notebooklm-material-paths";
 
 export const runtime = "nodejs";
+export const maxDuration = 120;
 
 const MAX_BYTES = 200 * 1024 * 1024;
 
