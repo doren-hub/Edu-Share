@@ -534,6 +534,7 @@ export async function processOnePaper(
       studioSkip: cfg.studioSkip,
     });
 
+    state.lastError = "";
     moveInboxPdfToPaperDir(item.absPath, item.paperDir);
     markCompleted(state, "done");
     writeDoneMarker(item.paperDir);

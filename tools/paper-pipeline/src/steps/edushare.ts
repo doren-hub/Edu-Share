@@ -4,7 +4,14 @@ import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isOtherIndustryValue, pickPaperIndustry, type ExistingPaper } from "../match.ts";
 import { stripTldrSnippetNumbers, descriptionUsable, eduShareSciSpaceMetadataPaste } from "../scispace-card.ts";
-import { choosePaperAuthor, isAuthorRequiredError, notebookLmMaterialBlockIsRegistered } from "../edushare-form.ts";
+import {
+  choosePaperAuthor,
+  isAuthorRequiredError,
+  materialCarouselShowLabel,
+  paperMaterialIsRegistered,
+  SLIDE_MATERIAL_HEADING,
+  VIDEO_MATERIAL_HEADING,
+} from "../edushare-form.ts";
 import { isCompleted, markCompleted, markEduUploaded, unmarkEduUploaded, type PaperState, type StudioStageId } from "../state.ts";
 import { fillIfVisible, saveFailureShot } from "../ui.ts";
 import { videoArtifactPath, videoFileReady, ensureUploadableVideo, VIDEO_UPLOAD_MAX_BYTES } from "../video-file.ts";
@@ -741,22 +748,52 @@ async function importNotebookLmCsv(
   throw new Error(`${buttonName} の完了表示が出ませんでした`);
 }
 
+function exactHeading(heading: string): RegExp {
+  return new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+}
+
+async function paperHasViewerMaterialPane(
+  page: Page,
+  heading: typeof SLIDE_MATERIAL_HEADING | typeof VIDEO_MATERIAL_HEADING,
+): Promise<boolean> {
+  const showBtn = page.getByRole("button", { name: materialCarouselShowLabel(heading), exact: true });
+  if (await showBtn.count()) return true;
+  if (heading === SLIDE_MATERIAL_HEADING) {
+    if (await page.locator('iframe[title$="（スライド PDF）"]').count()) return true;
+  } else if (await page.locator('video[title$="（動画）"]').count()) {
+    return true;
+  }
+  // カルーセル見出しは span。編集フォームの見出しは p。
+  return (await page.locator("span").filter({ hasText: exactHeading(heading) }).count()) > 0;
+}
+
 async function paperHasRegisteredMaterial(
   page: Page,
-  heading: "スライド（PDF）" | "動画（MP4）",
+  heading: typeof SLIDE_MATERIAL_HEADING | typeof VIDEO_MATERIAL_HEADING,
 ): Promise<boolean> {
-  const formBlock = page.locator("p").filter({ hasText: heading, exact: true }).locator("xpath=..");
+  const hasViewerPane = await paperHasViewerMaterialPane(page, heading);
+  const formBlock = page.locator("p").filter({ hasText: exactHeading(heading) }).locator("xpath=..");
   const formText = (await formBlock.first().innerText().catch(() => "")).trim();
-  if (!formText) return false;
-  return notebookLmMaterialBlockIsRegistered(formText);
+  return paperMaterialIsRegistered({ formBlockText: formText, hasViewerPane });
 }
 
 async function paperHasRegisteredSlide(page: Page): Promise<boolean> {
-  return paperHasRegisteredMaterial(page, "スライド（PDF）");
+  return paperHasRegisteredMaterial(page, SLIDE_MATERIAL_HEADING);
 }
 
 async function paperHasRegisteredVideo(page: Page): Promise<boolean> {
-  return paperHasRegisteredMaterial(page, "動画（MP4）");
+  return paperHasRegisteredMaterial(page, VIDEO_MATERIAL_HEADING);
+}
+
+async function ingestStatusText(page: Page): Promise<string> {
+  return (
+    await page
+      .locator("span.rounded-full")
+      .filter({ hasText: /^(pending|processing|ready|failed)$/i })
+      .first()
+      .innerText()
+      .catch(() => "")
+  ).trim();
 }
 
 async function postEduShareSlideApi(page: Page, testId: string, dest: string): Promise<void> {
@@ -830,7 +867,7 @@ export async function attachEduShareSlide(page: Page, state: PaperState): Promis
     }
   }
 
-  const input = page.locator("p").filter({ hasText: "スライド（PDF）", exact: true }).locator("xpath=..").locator(
+  const input = page.locator("p").filter({ hasText: exactHeading(SLIDE_MATERIAL_HEADING) }).locator("xpath=..").locator(
     'input[type="file"]',
   );
   if (!(await input.count())) {
@@ -1032,33 +1069,29 @@ export async function verifyEduSharePaper(
     await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
     await expandSection(page, "NotebookLM");
     const quizStart = page.locator('a[href*="csvPool=quiz"]');
-    const ingestStatus = (
-      await page.locator("span.rounded-full").first().innerText().catch(() => "")
-    ).trim();
+    const ingestStatus = await ingestStatusText(page);
     if (/^(pending|processing)$/i.test(ingestStatus)) {
       const deadline = Date.now() + 180_000;
       log(`確認: PDF 取り込み待ち（${ingestStatus}）`);
       while (Date.now() < deadline) {
         await page.waitForTimeout(4_000);
         await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
-        const st = (
-          await page.locator("span.rounded-full").first().innerText().catch(() => "")
-        ).trim();
+        const st = await ingestStatusText(page);
         if (/^ready$/i.test(st)) break;
       }
+      await expandSection(page, "NotebookLM");
     }
-    const csvTab = page.getByRole("tab", { name: "NotebookLM CSV" });
-    if (await csvTab.isVisible({ timeout: 0 }).catch(() => false)) {
-      await csvTab.click({ timeout: 5_000 }).catch(() => undefined);
-      await page.waitForTimeout(400);
-    }
-    if (!skipQuiz) {
-      await quizStart.first().waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
-    }
+    await page.getByRole("heading", { name: "資料", exact: true }).waitFor({ state: "visible", timeout: 8_000 }).catch(
+      () => undefined,
+    );
+    await page.locator("span").filter({ hasText: /^元PDF$/ }).first().waitFor({ timeout: 5_000 }).catch(
+      () => undefined,
+    );
 
-    const body = await page.locator("body").innerText();
-
-    const hasPdf = /元PDF|新しいタブで開く/.test(body);
+    const hasPdf =
+      (await page.getByRole("button", { name: "元PDFを表示", exact: true }).count()) > 0 ||
+      (await page.locator("span").filter({ hasText: /^元PDF$/ }).count()) > 0 ||
+      /元PDF|新しいタブで開く/.test(await page.locator("body").innerText().catch(() => ""));
     if (!hasPdf) throw new Error("元 PDF の表示が見つかりません");
 
     const skipSlides = opts.studioSkip?.includes("nlm-slides") ?? skipSlidesVideo;
@@ -1076,6 +1109,15 @@ export async function verifyEduSharePaper(
     }
     if (!hasSlide) warn("スライドは未登録です");
     if (!hasVideo) warn("動画は未登録です");
+
+    const csvTab = page.getByRole("tab", { name: "NotebookLM CSV" });
+    if (await csvTab.isVisible({ timeout: 0 }).catch(() => false)) {
+      await csvTab.click({ timeout: 5_000 }).catch(() => undefined);
+      await page.waitForTimeout(400);
+    }
+    if (!skipQuiz) {
+      await quizStart.first().waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
+    }
 
     if (!skipQuiz) {
       if (!(await quizStart.first().isVisible({ timeout: 0 }).catch(() => false))) {

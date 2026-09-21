@@ -10,12 +10,29 @@ export function isDummyAuthorValue(v: string): boolean {
   return DUMMY_AUTHOR_VALUES.has(v.trim());
 }
 
+export const SLIDE_MATERIAL_HEADING = "スライド（PDF）";
+export const VIDEO_MATERIAL_HEADING = "動画（MP4）";
+
 /** NotebookLM スライド／動画ブロックの「登録済み / 未登録」 */
 export function notebookLmMaterialBlockIsRegistered(blockText: string): boolean {
   const t = blockText.replace(/\s+/g, " ").trim();
   if (/登録済み/.test(t)) return true;
   if (/未登録/.test(t)) return false;
   return false;
+}
+
+/** 資料カルーセルの切り替えボタン（「編集する」を開かなくても出る） */
+export function materialCarouselShowLabel(heading: string): string {
+  return `${heading}を表示`;
+}
+
+/** カルーセル枠があるか、編集フォームが登録済みなら載っている */
+export function paperMaterialIsRegistered(input: {
+  formBlockText: string;
+  hasViewerPane: boolean;
+}): boolean {
+  if (input.hasViewerPane) return true;
+  return notebookLmMaterialBlockIsRegistered(input.formBlockText);
 }
 
 function authorNamesMatch(a: string, b: string): boolean {
