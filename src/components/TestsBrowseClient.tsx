@@ -4,6 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { RecentTestsByCategory, TestList, type TestRow } from "@/components/TestList";
 import type { BookmarkMarks } from "@/lib/bookmarks";
+import {
+  paperMatchesStudyStatus,
+  type PaperStudyStatus,
+  type PaperStudyStatusMap,
+  PAPER_STUDY_STATUSES,
+  PAPER_STUDY_STATUS_LABEL,
+} from "@/lib/paper-study-status";
 import { normalizePaperAuthorsFromDb } from "@/lib/paper-authors";
 import { TESTS_LIST_PATHS } from "@/lib/tests-list-paths";
 
@@ -262,6 +269,9 @@ export function TestsBrowseClient({
   /** 過去問・論文を合わせて0件のとき（アップロード案内） */
   globalEmpty,
   bookmarkMarks,
+  showStudyStatus = false,
+  studyStatuses = {},
+  studyStatusError = null,
 }: {
   tests: TestRow[];
   category: TestsCategory;
@@ -269,13 +279,19 @@ export function TestsBrowseClient({
   showRecent?: boolean;
   globalEmpty: boolean;
   bookmarkMarks?: BookmarkMarks;
+  /** ログイン中の論文一覧。未ログインや過去問では出さない */
+  showStudyStatus?: boolean;
+  studyStatuses?: PaperStudyStatusMap;
+  studyStatusError?: string | null;
 }) {
   const [pastSchoolKey, setPastSchoolKey] = useState("");
   const [paperAuthor, setPaperAuthor] = useState("");
   const [paperIndustry, setPaperIndustry] = useState("");
   const [paperYear, setPaperYear] = useState("");
+  const [paperStudyStatus, setPaperStudyStatus] = useState<PaperStudyStatus | "">("");
   const [textSearch, setTextSearch] = useState("");
   const [paperSort, setPaperSort] = useState<PaperSortKey>("created_desc");
+  const [studyById, setStudyById] = useState<PaperStudyStatusMap>(studyStatuses);
 
   const pastSchoolOptions = usePastSchoolFilterOptions(tests, category);
   const paperIndustryOpts = usePaperIndustryOptions(tests, category);
@@ -333,8 +349,10 @@ export function TestsBrowseClient({
           : tests;
       }
     } else {
-      list = tests.filter((t) =>
-        matchesPaperAxisFilters(t, paperAuthor, paperIndustry, paperYear),
+      list = tests.filter(
+        (t) =>
+          matchesPaperAxisFilters(t, paperAuthor, paperIndustry, paperYear) &&
+          paperMatchesStudyStatus(studyById[t.id], paperStudyStatus),
       );
     }
     list = list.filter((t) => matchesTextSearch(t, textSearch, category));
@@ -349,6 +367,8 @@ export function TestsBrowseClient({
     paperAuthor,
     paperIndustry,
     paperYear,
+    paperStudyStatus,
+    studyById,
     textSearch,
     paperSort,
   ]);
@@ -356,7 +376,7 @@ export function TestsBrowseClient({
   const hasAxisFilter =
     category === "past_exam"
       ? pastSchoolKey !== ""
-      : Boolean(paperAuthor || paperIndustry || paperYear);
+      : Boolean(paperAuthor || paperIndustry || paperYear || paperStudyStatus);
   const hasTextFilter = textSearch.trim() !== "";
   const hasActiveFilters = hasAxisFilter || hasTextFilter;
 
@@ -365,7 +385,17 @@ export function TestsBrowseClient({
     setPaperAuthor("");
     setPaperIndustry("");
     setPaperYear("");
+    setPaperStudyStatus("");
     setTextSearch("");
+  }
+
+  function onStudyStatusChange(testId: string, status: PaperStudyStatus) {
+    setStudyById((prev) => {
+      const next = { ...prev };
+      if (status === "unconfirmed") delete next[testId];
+      else next[testId] = status;
+      return next;
+    });
   }
 
   const otherHref =
@@ -407,7 +437,7 @@ export function TestsBrowseClient({
               <div className="mb-4 rounded-xl border border-zinc-200 bg-zinc-50/60 p-4">
                 <div className="flex flex-col gap-4">
                   {category === "paper" ? (
-                    <div className="grid gap-3 sm:grid-cols-3">
+                    <div className={`grid gap-3 ${showStudyStatus ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`}>
                       <div className="flex min-w-0 flex-col gap-1">
                         <label htmlFor="paper-filter-industry" className="text-xs font-medium text-zinc-600">
                           業界
@@ -480,6 +510,28 @@ export function TestsBrowseClient({
                           ))}
                         </select>
                       </div>
+                      {showStudyStatus ? (
+                        <div className="flex min-w-0 flex-col gap-1">
+                          <label htmlFor="paper-filter-study-status" className="text-xs font-medium text-zinc-600">
+                            学習ステータス
+                          </label>
+                          <select
+                            id="paper-filter-study-status"
+                            className={`${selectClass} w-full`}
+                            value={paperStudyStatus}
+                            onChange={(e) =>
+                              setPaperStudyStatus(e.target.value as PaperStudyStatus | "")
+                            }
+                          >
+                            <option value="">すべて</option>
+                            {PAPER_STUDY_STATUSES.map((status) => (
+                              <option key={status} value={status}>
+                                {PAPER_STUDY_STATUS_LABEL[status]}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="flex max-w-lg flex-col gap-1">
@@ -556,6 +608,11 @@ export function TestsBrowseClient({
                 </div>
               </div>
 
+              {studyStatusError ? (
+                <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                  {studyStatusError}
+                </p>
+              ) : null}
               {displayedList.length === 0 ? (
                 <p className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-5 text-sm text-zinc-600">
                   条件に一致するテストがありません。絞り込み・検索をクリアするか、別の条件を試してください。
@@ -578,6 +635,9 @@ export function TestsBrowseClient({
                     showBookmarks={bookmarkMarks?.signedIn ?? false}
                     bookmarkedTestIds={bookmarkMarks?.testIds}
                     bookmarkCounts={bookmarkMarks?.counts}
+                    showStudyStatus={showStudyStatus}
+                    studyStatuses={studyById}
+                    onStudyStatusChange={onStudyStatusChange}
                   />
                 </>
               )}

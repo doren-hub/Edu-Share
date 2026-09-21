@@ -4,6 +4,8 @@ import { Fragment, type ReactNode } from "react";
 import type { BookmarkMarks } from "@/lib/bookmarks";
 import Link from "next/link";
 import { BookmarkMenu } from "@/components/BookmarkMenu";
+import { PaperStudyStatusSelect } from "@/components/PaperStudyStatusSelect";
+import type { PaperStudyStatus, PaperStudyStatusMap } from "@/lib/paper-study-status";
 import { PaperAuthorsCollapsible } from "@/components/PaperAuthorsCollapsible";
 import { PaperDoiInteractive } from "@/components/PaperDoiInteractive";
 import { paperAuthorNamesForDisplay } from "@/lib/paper-authors";
@@ -139,6 +141,9 @@ export function TestList({
   showBookmarks = false,
   bookmarkedTestIds = [],
   bookmarkCounts = {},
+  showStudyStatus = false,
+  studyStatuses,
+  onStudyStatusChange,
 }: {
   tests: TestRow[];
   /** セクション見出しで区分済みのとき、カード内の種別表示を省略 */
@@ -155,6 +160,10 @@ export function TestList({
   bookmarkedTestIds?: readonly string[];
   /** 教材がいくつのリストに入っているか */
   bookmarkCounts?: Readonly<Record<string, number>>;
+  /** ログイン中の論文一覧だけ。行が無い論文は未確認 */
+  showStudyStatus?: boolean;
+  studyStatuses?: PaperStudyStatusMap;
+  onStudyStatusChange?: (testId: string, status: PaperStudyStatus) => void;
 }) {
   const bookmarked = new Set(bookmarkedTestIds);
   if (!tests.length) {
@@ -216,25 +225,24 @@ export function TestList({
               {statusLabel}
             </span>
           );
+        const cardClass = compact
+          ? `relative rounded-lg border border-zinc-200 bg-zinc-50/40 px-3 py-2.5 transition hover:border-zinc-300 hover:bg-white${showBookmarks ? " pb-9" : ""}`
+          : `relative rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:border-zinc-300 hover:shadow${showBookmarks ? " pb-11" : ""}`;
         return (
-        <li key={t.id} className="relative">
-          <Link
-            href={`/tests/${t.id}`}
-            data-pdf-filename={t.pdf_filename?.trim() || undefined}
+        <li key={t.id} className={cardClass}>
+          <div
             className={
               compact
-                ? `block rounded-lg border border-zinc-200 bg-zinc-50/40 px-3 py-2.5 transition hover:border-zinc-300 hover:bg-white${showBookmarks ? " pb-9" : ""}`
-                : `block rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:border-zinc-300 hover:shadow${showBookmarks ? " pb-11" : ""}`
+                ? "flex items-start justify-between gap-2"
+                : "flex flex-wrap items-start justify-between gap-3"
             }
           >
-            <div
-              className={
-                compact
-                  ? "flex items-start justify-between gap-2"
-                  : "flex flex-wrap items-start justify-between gap-3"
-              }
+            <Link
+              href={`/tests/${t.id}`}
+              data-pdf-filename={t.pdf_filename?.trim() || undefined}
+              className="min-w-0 flex-1"
             >
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0">
                 <h2
                   className={
                     compact
@@ -262,15 +270,29 @@ export function TestList({
                   </p>
                 ) : null}
               </div>
-              <div className="flex shrink-0 flex-col items-end gap-1.5">
-                {statusBadge}
-                {showHints ? (
-                  <PaperMaterialHints t={t} compact={compact} />
-                ) : null}
-              </div>
+            </Link>
+            <div className="flex shrink-0 flex-col items-end gap-1.5">
+              {statusBadge}
+              {showHints ? (
+                <PaperMaterialHints t={t} compact={compact} />
+              ) : null}
+              {showStudyStatus && isPaper ? (
+                <PaperStudyStatusSelect
+                  testId={t.id}
+                  status={studyStatuses?.[t.id] ?? "unconfirmed"}
+                  onStatusChange={(next) => onStudyStatusChange?.(t.id, next)}
+                  variant="badge"
+                  compact={compact}
+                />
+              ) : null}
             </div>
+          </div>
             {!hideSourceInCard || !hideDocumentTypeInCard ? (
-              compact ? (
+              <Link
+                href={`/tests/${t.id}`}
+                className="block"
+              >
+              {compact ? (
                 <p
                   className={
                     (t.document_type ?? "past_exam") === "paper"
@@ -413,9 +435,9 @@ export function TestList({
                     </span>
                   ) : null}
                 </div>
-              )
+              )}
+              </Link>
             ) : null}
-          </Link>
           {showBookmarks ? (
             <div className={compact ? "absolute bottom-1.5 right-2 z-10" : "absolute bottom-3 right-4 z-10"}>
               <BookmarkMenu
