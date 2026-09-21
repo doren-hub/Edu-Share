@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   dropMissingPaperMaterialStoragePaths,
+  materialFileFromListing,
   paperMaterialPathIdsMissingFromListings,
   pdfsObjectExists,
   storageListingHasFile,
@@ -27,6 +28,25 @@ test("storageListingHasFile: 0バイトは無いものとして扱う", () => {
     true,
   );
   assert.equal(storageListingHasFile([{ name: "b.pdf" }], "a.pdf"), false);
+});
+
+test("materialFileFromListing: 論文PDFと同じサイズはスライドとみなさない", () => {
+  const files = [
+    { name: "t.pdf", metadata: { size: 80_000 } },
+    { name: "t-notebooklm-slide.pdf", metadata: { size: 80_000 } },
+    { name: "t-notebooklm-video.mp4", metadata: { size: 400_000 } },
+  ];
+  assert.equal(
+    materialFileFromListing(files, "t-notebooklm-slide.pdf", {
+      minBytes: 1_000,
+      notSameSizeAs: 80_000,
+    }),
+    false,
+  );
+  assert.equal(
+    materialFileFromListing(files, "t-notebooklm-video.mp4", { minBytes: 20_000 }),
+    true,
+  );
 });
 
 test("missingFromListings: ファイル欠落は確定、listing 失敗は未確認", () => {
@@ -67,125 +87,128 @@ test("missingFromListings: ファイル欠落は確定、listing 失敗は未確
   assert.deepEqual(unconfirmed.videoIds, []);
 });
 
-const PDF_HEAD = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x0a]);
-const VIDEO_HEAD = new Uint8Array([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 0]);
-
-function mockAdmin(names: string[]) {
+function mockAdmin(files: { name: string; size: number }[]) {
+  const updates: { id: string; values: Record<string, unknown> }[] = [];
   return {
+    updates,
     storage: {
       from: () => ({
         list: async () => ({
-          data: names.map((name) => ({ name, metadata: { size: 50_000 } })),
-          error: null,
-        }),
-        createSignedUrl: async (path: string) => ({
-          data: { signedUrl: `https://cdn.example/${path}` },
+          data: files.map(({ name, size }) => ({ name, metadata: { size } })),
           error: null,
         }),
       }),
     },
     from: () => ({
-      update: () => ({
-        in: async () => ({}),
+      update: (values: Record<string, unknown>) => ({
+        eq: async (_column: string, id: string) => {
+          updates.push({ id, values });
+          return {};
+        },
       }),
     }),
   };
 }
 
-function installFetch(
-  bodies: Record<string, { status: number; total: number; head: Uint8Array }>,
-) {
-  const orig = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    const key = Object.keys(bodies).find((k) => url.includes(k));
-    const hit = key ? bodies[key] : undefined;
-    if (!hit) {
-      return new Response(null, { status: 404 });
-    }
-    return new Response(hit.head, {
-      status: hit.status,
-      headers: {
-        "content-range": `bytes 0-${hit.head.length - 1}/${hit.total}`,
-        "content-length": String(hit.head.length),
-      },
-    });
-  }) as typeof fetch;
-  return () => {
-    globalThis.fetch = orig;
-  };
-}
-
 test("pdfsObjectExists: ディレクトリに論文PDFしか無いスライドパスは無い", async () => {
-  const restore = installFetch({});
-  try {
-    const exists = await pdfsObjectExists(
-      mockAdmin(["208bf347-1cc4-4f4f-9df7-35928369c31f.pdf"]),
-      "u/208bf347-1cc4-4f4f-9df7-35928369c31f-notebooklm-slide.pdf",
-      { kind: "slide", originalPdfPath: "u/208bf347-1cc4-4f4f-9df7-35928369c31f.pdf" },
-    );
-    assert.equal(exists, false);
-  } finally {
-    restore();
-  }
+  const exists = await pdfsObjectExists(
+    mockAdmin([{ name: "208bf347-1cc4-4f4f-9df7-35928369c31f.pdf", size: 537_039 }]),
+    "u/208bf347-1cc4-4f4f-9df7-35928369c31f-notebooklm-slide.pdf",
+    { kind: "slide", originalPdfPath: "u/208bf347-1cc4-4f4f-9df7-35928369c31f.pdf" },
+  );
+  assert.equal(exists, false);
 });
 
 test("pdfsObjectExists: 論文PDFと同じサイズのスライドは偽物", async () => {
-  const restore = installFetch({
-    "u/t-notebooklm-slide.pdf": { status: 206, total: 80_000, head: PDF_HEAD },
-    "u/t.pdf": { status: 206, total: 80_000, head: PDF_HEAD },
-  });
-  try {
-    const exists = await pdfsObjectExists(
-      mockAdmin(["t.pdf", "t-notebooklm-slide.pdf"]),
-      "u/t-notebooklm-slide.pdf",
-      { kind: "slide", originalPdfPath: "u/t.pdf" },
-    );
-    assert.equal(exists, false);
-  } finally {
-    restore();
-  }
+  const exists = await pdfsObjectExists(
+    mockAdmin([
+      { name: "t.pdf", size: 80_000 },
+      { name: "t-notebooklm-slide.pdf", size: 80_000 },
+    ]),
+    "u/t-notebooklm-slide.pdf",
+    { kind: "slide", originalPdfPath: "u/t.pdf" },
+  );
+  assert.equal(exists, false);
 });
 
-test("pdfsObjectExists: 別サイズのPDFスライドとftyp動画は有り", async () => {
-  const restore = installFetch({
-    "u/t-notebooklm-slide.pdf": { status: 206, total: 120_000, head: PDF_HEAD },
-    "u/t.pdf": { status: 206, total: 80_000, head: PDF_HEAD },
-    "u/t-notebooklm-video.mp4": { status: 206, total: 400_000, head: VIDEO_HEAD },
+test("pdfsObjectExists: 別サイズのスライドと十分な動画は有り", async () => {
+  const admin = mockAdmin([
+    { name: "t.pdf", size: 80_000 },
+    { name: "t-notebooklm-slide.pdf", size: 120_000 },
+    { name: "t-notebooklm-video.mp4", size: 400_000 },
+  ]);
+  const slide = await pdfsObjectExists(admin, "u/t-notebooklm-slide.pdf", {
+    kind: "slide",
+    originalPdfPath: "u/t.pdf",
   });
-  try {
-    const slide = await pdfsObjectExists(
-      mockAdmin(["t.pdf", "t-notebooklm-slide.pdf", "t-notebooklm-video.mp4"]),
-      "u/t-notebooklm-slide.pdf",
-      { kind: "slide", originalPdfPath: "u/t.pdf" },
-    );
-    const video = await pdfsObjectExists(
-      mockAdmin(["t.pdf", "t-notebooklm-slide.pdf", "t-notebooklm-video.mp4"]),
-      "u/t-notebooklm-video.mp4",
-      { kind: "video" },
-    );
-    assert.equal(slide, true);
-    assert.equal(video, true);
-  } finally {
-    restore();
-  }
+  const video = await pdfsObjectExists(admin, "u/t-notebooklm-video.mp4", {
+    kind: "video",
+  });
+  assert.equal(slide, true);
+  assert.equal(video, true);
 });
 
 test("dropMissing: 論文PDF以外が無い行はスライド・動画パスを外す", async () => {
-  const restore = installFetch({});
-  try {
-    const [row] = await dropMissingPaperMaterialStoragePaths(mockAdmin(["abc.pdf"]), [
+  const [row] = await dropMissingPaperMaterialStoragePaths(
+    mockAdmin([{ name: "abc.pdf", size: 50_000 }]),
+    [
       {
         id: "abc",
+        uploaded_by: "u",
         pdf_storage_path: "u/abc.pdf",
         notebooklm_slide_pdf_storage_path: "u/abc-notebooklm-slide.pdf",
         notebooklm_video_mp4_storage_path: "u/abc-notebooklm-video.mp4",
       },
-    ]);
-    assert.equal(row.notebooklm_slide_pdf_storage_path, null);
-    assert.equal(row.notebooklm_video_mp4_storage_path, null);
-  } finally {
-    restore();
-  }
+    ],
+  );
+  assert.equal(row.notebooklm_slide_pdf_storage_path, null);
+  assert.equal(row.notebooklm_video_mp4_storage_path, null);
 });
 
+test("dropMissing: listing にある実ファイルは DB パスが空でも戻す", async () => {
+  const admin = mockAdmin([
+    { name: "abc.pdf", size: 50_000 },
+    { name: "abc-notebooklm-slide.pdf", size: 200_000 },
+    { name: "abc-notebooklm-video.mp4", size: 400_000 },
+  ]);
+  const [row] = await dropMissingPaperMaterialStoragePaths(admin, [
+    {
+      id: "abc",
+      uploaded_by: "u",
+      pdf_storage_path: "u/abc.pdf",
+      notebooklm_slide_pdf_storage_path: null,
+      notebooklm_video_mp4_storage_path: null,
+    },
+  ]);
+  assert.equal(row.notebooklm_slide_pdf_storage_path, "u/abc-notebooklm-slide.pdf");
+  assert.equal(row.notebooklm_video_mp4_storage_path, "u/abc-notebooklm-video.mp4");
+  assert.equal(admin.updates.length, 1);
+  assert.equal(admin.updates[0]?.id, "abc");
+});
+
+test("dropMissing: listing 失敗時はパスを消さない", async () => {
+  const admin = {
+    storage: {
+      from: () => ({
+        list: async () => ({ data: null, error: { message: "fail" } }),
+      }),
+    },
+    from: () => ({
+      update: () => ({
+        eq: async () => {
+          throw new Error("should not persist");
+        },
+      }),
+    }),
+  };
+  const [row] = await dropMissingPaperMaterialStoragePaths(admin, [
+    {
+      id: "abc",
+      uploaded_by: "u",
+      notebooklm_slide_pdf_storage_path: "u/abc-notebooklm-slide.pdf",
+      notebooklm_video_mp4_storage_path: "u/abc-notebooklm-video.mp4",
+    },
+  ]);
+  assert.equal(row.notebooklm_slide_pdf_storage_path, "u/abc-notebooklm-slide.pdf");
+  assert.equal(row.notebooklm_video_mp4_storage_path, "u/abc-notebooklm-video.mp4");
+});

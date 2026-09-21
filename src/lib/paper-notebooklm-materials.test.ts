@@ -6,6 +6,7 @@ import {
   paperNotebookLmMaterialPresence,
   paperNotebookLmMaterialsComplete,
   paperNotebookLmMissingLabels,
+  toPaperBrowseListRow,
 } from "./paper-notebooklm-materials.ts";
 
 function mc(i: number) {
@@ -87,4 +88,61 @@ test("json string: 文字列で来てもプールとして読める", () => {
     notebooklm_video_mp4_storage_path: video,
   };
   assert.equal(paperNotebookLmMaterialsComplete(row), true);
+});
+
+test("list flags: 事前計算した boolean を優先し JSON は不要", () => {
+  assert.equal(
+    paperNotebookLmMaterialsComplete({
+      notebooklm_has_quiz_csv: true,
+      notebooklm_has_vocab_csv: true,
+      notebooklm_slide_pdf_storage_path: slide,
+      notebooklm_video_mp4_storage_path: video,
+    }),
+    true,
+  );
+  assert.equal(
+    paperNotebookLmMaterialPresence({
+      notebooklm_has_quiz_csv: false,
+      notebooklm_questions_json: quiz3,
+      notebooklm_slide_pdf_storage_path: slide,
+      notebooklm_video_mp4_storage_path: video,
+    }).quiz,
+    false,
+  );
+});
+
+test("toPaperBrowseListRow: JSON スライス3件でもフラグを立てる", () => {
+  const out = toPaperBrowseListRow({
+    id: "1",
+    title: "t",
+    nq0: quiz3[0],
+    nq1: quiz3[1],
+    nq2: quiz3[2],
+    nv0: vocab3[0],
+    nv1: vocab3[1],
+    nv2: vocab3[2],
+    notebooklm_slide_pdf_storage_path: slide,
+  });
+  assert.equal(out.notebooklm_has_quiz_csv, true);
+  assert.equal(out.notebooklm_has_vocab_csv, true);
+  assert.equal("nq0" in out, false);
+  assert.equal("nv2" in out, false);
+});
+
+test("toPaperBrowseListRow: JSON を落としてフラグだけ残す", () => {
+  const out = toPaperBrowseListRow({
+    id: "1",
+    title: "t",
+    notebooklm_questions_json: quiz3,
+    notebooklm_vocab_questions_json: vocab3,
+    notebooklm_slide_pdf_storage_path: slide,
+    pdf_storage_path: "u/1.pdf",
+    uploaded_by: "u",
+  });
+  assert.equal(out.notebooklm_has_quiz_csv, true);
+  assert.equal(out.notebooklm_has_vocab_csv, true);
+  assert.equal("notebooklm_questions_json" in out, false);
+  assert.equal("pdf_storage_path" in out, false);
+  assert.equal("uploaded_by" in out, false);
+  assert.equal(out.title, "t");
 });

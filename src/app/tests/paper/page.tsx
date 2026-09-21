@@ -2,12 +2,9 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
-import { reconcileExistingPaperMaterialFiles } from "@/lib/reconcile-paper-material-files";
-import {
-  TEST_BROWSE_PAPER_LIST_COLUMNS,
-  TEST_BROWSE_PAPER_LIST_COLUMNS_MIN,
-  TEST_BROWSE_PAPER_LIST_COLUMNS_NO_FILENAME,
-} from "@/lib/test-browse-select";
+import type { TestRow } from "@/components/TestList";
+import { toPaperBrowseListRow } from "@/lib/paper-notebooklm-materials";
+import { TEST_BROWSE_PAPER_LIST_COLUMNS } from "@/lib/test-browse-select";
 
 export const dynamic = "force-dynamic";
 
@@ -41,21 +38,9 @@ export default async function PaperTestsPage() {
     listQuery,
   ]);
 
-  let tests = listed.data;
-  if (listed.error && /pdf_filename|pdf_storage_path/i.test(listed.error.message ?? "")) {
-    const retry = await supabase
-      .from("tests")
-      .select(
-        /pdf_storage_path/i.test(listed.error.message ?? "")
-          ? TEST_BROWSE_PAPER_LIST_COLUMNS_MIN
-          : TEST_BROWSE_PAPER_LIST_COLUMNS_NO_FILENAME,
-      )
-      .eq("document_type", "paper")
-      .order("created_at", { ascending: false });
-    tests = retry.data;
-  }
+  const tests = (listed.data ?? []) as unknown as Record<string, unknown>[];
 
-  const list = await reconcileExistingPaperMaterialFiles(tests ?? []);
+  const list = tests.map((row) => toPaperBrowseListRow(row)) as TestRow[];
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;
 
   return (

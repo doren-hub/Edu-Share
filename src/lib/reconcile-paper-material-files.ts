@@ -1,8 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   dropMissingPaperMaterialStoragePaths,
-  paperHasNotebookLmSlidePath,
-  paperHasNotebookLmVideoPath,
   type PaperMaterialStorageRow,
 } from "@/lib/paper-notebooklm-storage";
 
@@ -15,19 +13,6 @@ export async function reconcileExistingPaperMaterialFiles<
     const admin = createAdminClient();
     return await dropMissingPaperMaterialStoragePaths(admin, rows);
   } catch {
-    const cleared = rows.map((r) => ({
-      ...r,
-      notebooklm_slide_pdf_storage_path: paperHasNotebookLmSlidePath(
-        r.notebooklm_slide_pdf_storage_path,
-      )
-        ? null
-        : r.notebooklm_slide_pdf_storage_path,
-      notebooklm_video_mp4_storage_path: paperHasNotebookLmVideoPath(
-        r.notebooklm_video_mp4_storage_path,
-      )
-        ? null
-        : r.notebooklm_video_mp4_storage_path,
-    }));
-    return cleared;
+    return rows;
   }
 }

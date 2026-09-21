@@ -40,6 +40,24 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: "PDFを表示できません" }, { status: 404 });
   }
 
+  const { data: signed, error: signErr } = await admin.storage
+    .from("pdfs")
+    .createSignedUrl(test.pdf_storage_path, 3600);
+
+  if (!signErr && signed?.signedUrl) {
+    const upstream = await fetch(signed.signedUrl);
+    if (upstream.ok && upstream.body) {
+      return new NextResponse(upstream.body, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": "inline",
+          "Cache-Control": "private, max-age=300",
+        },
+      });
+    }
+  }
+
   const { data: blob, error: dlErr } = await admin.storage
     .from("pdfs")
     .download(test.pdf_storage_path);

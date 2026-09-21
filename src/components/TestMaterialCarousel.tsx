@@ -7,6 +7,12 @@ export type MaterialCarouselPane =
   | { key: "slide"; label: string; slideSrc: string }
   | { key: "video"; label: string; videoSrc: string };
 
+function paneSrc(pane: MaterialCarouselPane): string {
+  if (pane.key === "pdf") return pane.pdfSrc;
+  if (pane.key === "slide") return pane.slideSrc;
+  return pane.videoSrc;
+}
+
 export function TestMaterialCarousel({
   title,
   panes,
@@ -16,6 +22,7 @@ export function TestMaterialCarousel({
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
+  const [loaded, setLoaded] = useState<Set<number>>(() => new Set([0]));
 
   const recomputeActive = useCallback(() => {
     const el = scrollerRef.current;
@@ -38,9 +45,24 @@ export function TestMaterialCarousel({
     };
   }, [recomputeActive]);
 
+  useEffect(() => {
+    setLoaded((prev) => {
+      if (prev.has(active)) return prev;
+      const next = new Set(prev);
+      next.add(active);
+      return next;
+    });
+  }, [active]);
+
   function scrollToIndex(i: number) {
     const el = scrollerRef.current;
     if (!el) return;
+    setLoaded((prev) => {
+      if (prev.has(i)) return prev;
+      const next = new Set(prev);
+      next.add(i);
+      return next;
+    });
     el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
   }
 
@@ -52,70 +74,58 @@ export function TestMaterialCarousel({
         ref={scrollerRef}
         className="flex snap-x snap-mandatory overflow-x-auto scroll-smooth rounded-lg border border-zinc-200 bg-zinc-100/80 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {panes.map((pane) => (
-          <div
-            key={pane.key}
-            className="w-full shrink-0 snap-center snap-always"
-            style={{ minWidth: "100%" }}
-          >
-            <div className="flex h-[min(75vh,880px)] flex-col bg-white">
-              <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 py-2">
-                <span className="text-xs font-medium text-zinc-700">{pane.label}</span>
-                {pane.key === "pdf" ? (
+        {panes.map((pane, i) => {
+          const ready = loaded.has(i);
+          return (
+            <div
+              key={pane.key}
+              className="w-full shrink-0 snap-center snap-always"
+              style={{ minWidth: "100%" }}
+            >
+              <div className="flex h-[min(75vh,880px)] flex-col bg-white">
+                <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <span className="text-xs font-medium text-zinc-700">{pane.label}</span>
                   <a
-                    href={pane.pdfSrc}
+                    href={paneSrc(pane)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-xs font-medium text-sky-800 underline hover:text-sky-950"
                   >
                     新しいタブで開く
                   </a>
-                ) : pane.key === "slide" ? (
-                  <a
-                    href={pane.slideSrc}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-medium text-sky-800 underline hover:text-sky-950"
-                  >
-                    新しいタブで開く
-                  </a>
-                ) : (
-                  <a
-                    href={pane.videoSrc}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-medium text-sky-800 underline hover:text-sky-950"
-                  >
-                    新しいタブで開く
-                  </a>
-                )}
-              </div>
-              <div className="min-h-0 flex-1">
-                {pane.key === "pdf" ? (
-                  <iframe
-                    title={`${title}（PDF）`}
-                    src={pane.pdfSrc}
-                    className="h-full min-h-[min(70vh,820px)] w-full bg-zinc-50"
-                  />
-                ) : pane.key === "slide" ? (
-                  <iframe
-                    title={`${title}（スライド PDF）`}
-                    src={pane.slideSrc}
-                    className="h-full min-h-[min(70vh,820px)] w-full bg-zinc-50"
-                  />
-                ) : (
-                  <video
-                    title={`${title}（動画）`}
-                    src={pane.videoSrc}
-                    controls
-                    playsInline
-                    className="h-full min-h-[min(70vh,820px)] w-full bg-black object-contain"
-                  />
-                )}
+                </div>
+                <div className="min-h-0 flex-1">
+                  {!ready ? (
+                    <div className="flex h-full min-h-[min(70vh,820px)] items-center justify-center bg-zinc-50 text-sm text-zinc-500">
+                      表示すると読み込みます
+                    </div>
+                  ) : pane.key === "pdf" ? (
+                    <iframe
+                      title={`${title}（PDF）`}
+                      src={pane.pdfSrc}
+                      className="h-full min-h-[min(70vh,820px)] w-full bg-zinc-50"
+                    />
+                  ) : pane.key === "slide" ? (
+                    <iframe
+                      title={`${title}（スライド PDF）`}
+                      src={pane.slideSrc}
+                      className="h-full min-h-[min(70vh,820px)] w-full bg-zinc-50"
+                    />
+                  ) : (
+                    <video
+                      title={`${title}（動画）`}
+                      src={pane.videoSrc}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="h-full min-h-[min(70vh,820px)] w-full bg-black object-contain"
+                    />
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {panes.length > 1 ? (
         <div className="flex flex-wrap items-center justify-between gap-2 px-1">

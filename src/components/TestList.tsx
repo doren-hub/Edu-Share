@@ -36,6 +36,8 @@ export type TestRow = {
   notebooklm_video_mp4_storage_path?: string | null;
   notebooklm_questions_json?: unknown;
   notebooklm_vocab_questions_json?: unknown;
+  notebooklm_has_quiz_csv?: boolean;
+  notebooklm_has_vocab_csv?: boolean;
 };
 
 function PaperMaterialHints({ t, compact }: { t: TestRow; compact: boolean }) {
@@ -410,7 +412,7 @@ export function TestList({
   );
 }
 
-const RECENT_TESTS_LIMIT = 5;
+export const RECENT_TESTS_LIMIT = 5;
 
 export type RecentTestsFilter = "all" | "past_exam" | "paper";
 
