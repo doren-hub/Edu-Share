@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
 import type { TestRow } from "@/components/TestList";
@@ -32,10 +33,11 @@ export default async function PaperTestsPage() {
     .eq("document_type", "paper")
     .order("created_at", { ascending: false });
 
-  const [{ count: pastCount }, { count: paperCount }, listed] = await Promise.all([
+  const [{ count: pastCount }, { count: paperCount }, listed, bookmarkMarks] = await Promise.all([
     pastCountQuery,
     paperCountQuery,
     listQuery,
+    loadBookmarkMarks(supabase),
   ]);
 
   const tests = (listed.data ?? []) as unknown as Record<string, unknown>[];
@@ -58,7 +60,12 @@ export default async function PaperTestsPage() {
         </p>
       </header>
       <Suspense fallback={<TestsBrowseFallback />}>
-        <TestsBrowseClient tests={list} category="paper" globalEmpty={globalEmpty} />
+        <TestsBrowseClient
+          tests={list}
+          category="paper"
+          globalEmpty={globalEmpty}
+          bookmarkMarks={bookmarkMarks}
+        />
       </Suspense>
     </div>
   );

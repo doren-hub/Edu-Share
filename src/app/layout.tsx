@@ -28,6 +28,9 @@ export default function RootLayout({
               <Link className="hover:text-zinc-950" href="/tests/paper">
                 論文
               </Link>
+              <Link className="hover:text-zinc-950" href="/bookmarks">
+                ブックマーク
+              </Link>
               <Link className="hover:text-zinc-950" href="/upload">
                 アップロード
               </Link>

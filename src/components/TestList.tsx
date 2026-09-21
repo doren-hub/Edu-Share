@@ -1,7 +1,9 @@
 "use client";
 
 import { Fragment, type ReactNode } from "react";
+import type { BookmarkMarks } from "@/lib/bookmarks";
 import Link from "next/link";
+import { BookmarkMenu } from "@/components/BookmarkMenu";
 import { PaperAuthorsCollapsible } from "@/components/PaperAuthorsCollapsible";
 import { PaperDoiInteractive } from "@/components/PaperDoiInteractive";
 import { paperAuthorNamesForDisplay } from "@/lib/paper-authors";
@@ -134,6 +136,9 @@ export function TestList({
   compact = false,
   /** 論文一覧: NotebookLM の CSV・スライド・動画の有無バッジ */
   showPaperMaterialHints = false,
+  showBookmarks = false,
+  bookmarkedTestIds = [],
+  bookmarkCounts = {},
 }: {
   tests: TestRow[];
   /** セクション見出しで区分済みのとき、カード内の種別表示を省略 */
@@ -145,7 +150,13 @@ export function TestList({
   /** true のとき余白・文字サイズを詰めた行（最近追加向け） */
   compact?: boolean;
   showPaperMaterialHints?: boolean;
+  /** ログイン中だけ、リストへの追加ボタンを出す */
+  showBookmarks?: boolean;
+  bookmarkedTestIds?: readonly string[];
+  /** 教材がいくつのリストに入っているか */
+  bookmarkCounts?: Readonly<Record<string, number>>;
 }) {
+  const bookmarked = new Set(bookmarkedTestIds);
   if (!tests.length) {
     return (
       <p
@@ -179,15 +190,41 @@ export function TestList({
           if (isPaper && !paperMaterialsComplete) return "準備中";
           return "受験可能";
         })();
+        const statusBadge =
+          t.processing_status === "ready" && t.processing_error ? (
+            <span
+              className={
+                compact
+                  ? "rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900"
+                  : "rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-900"
+              }
+            >
+              テキスト未抽出
+            </span>
+          ) : (
+            <span
+              className={
+                compact
+                  ? statusBadgeBlue
+                    ? "rounded-md bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-900"
+                    : "rounded-md bg-zinc-200/80 px-2 py-0.5 text-[11px] font-medium text-zinc-800"
+                  : statusBadgeBlue
+                    ? "rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-900"
+                    : "rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700"
+              }
+            >
+              {statusLabel}
+            </span>
+          );
         return (
-        <li key={t.id}>
+        <li key={t.id} className="relative">
           <Link
             href={`/tests/${t.id}`}
             data-pdf-filename={t.pdf_filename?.trim() || undefined}
             className={
               compact
-                ? "block rounded-lg border border-zinc-200 bg-zinc-50/40 px-3 py-2.5 transition hover:border-zinc-300 hover:bg-white"
-                : "block rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:border-zinc-300 hover:shadow"
+                ? `block rounded-lg border border-zinc-200 bg-zinc-50/40 px-3 py-2.5 transition hover:border-zinc-300 hover:bg-white${showBookmarks ? " pb-9" : ""}`
+                : `block rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:border-zinc-300 hover:shadow${showBookmarks ? " pb-11" : ""}`
             }
           >
             <div
@@ -226,33 +263,7 @@ export function TestList({
                 ) : null}
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1.5">
-                <div className="flex flex-wrap items-center justify-end gap-1">
-                  {t.processing_status === "ready" && t.processing_error ? (
-                    <span
-                      className={
-                        compact
-                          ? "rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900"
-                          : "rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-900"
-                      }
-                    >
-                      テキスト未抽出
-                    </span>
-                  ) : (
-                    <span
-                      className={
-                        compact
-                          ? statusBadgeBlue
-                            ? "rounded-md bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-900"
-                            : "rounded-md bg-zinc-200/80 px-2 py-0.5 text-[11px] font-medium text-zinc-800"
-                          : statusBadgeBlue
-                            ? "rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-900"
-                            : "rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700"
-                      }
-                    >
-                      {statusLabel}
-                    </span>
-                  )}
-                </div>
+                {statusBadge}
                 {showHints ? (
                   <PaperMaterialHints t={t} compact={compact} />
                 ) : null}
@@ -405,6 +416,15 @@ export function TestList({
               )
             ) : null}
           </Link>
+          {showBookmarks ? (
+            <div className={compact ? "absolute bottom-1.5 right-2 z-10" : "absolute bottom-3 right-4 z-10"}>
+              <BookmarkMenu
+                testId={t.id}
+                initialListCount={bookmarkCounts[t.id] ?? (bookmarked.has(t.id) ? 1 : 0)}
+                compact={compact}
+              />
+            </div>
+          ) : null}
         </li>
         );
       })}
@@ -420,9 +440,11 @@ export type RecentTestsFilter = "all" | "past_exam" | "paper";
 export function RecentTestsByCategory({
   tests,
   filter = "all",
+  bookmarkMarks,
 }: {
   tests: TestRow[];
   filter?: RecentTestsFilter;
+  bookmarkMarks?: BookmarkMarks;
 }) {
   const pastExams = tests.filter((t) => (t.document_type ?? "past_exam") !== "paper");
   const papers = tests.filter((t) => t.document_type === "paper");
@@ -473,7 +495,14 @@ export function RecentTestsByCategory({
               </span>
             </div>
             {recentPast.length > 0 ? (
-              <TestList tests={recentPast} hideDocumentTypeInCard compact />
+              <TestList
+                tests={recentPast}
+                hideDocumentTypeInCard
+                compact
+                showBookmarks={bookmarkMarks?.signedIn ?? false}
+                bookmarkedTestIds={bookmarkMarks?.testIds}
+                bookmarkCounts={bookmarkMarks?.counts}
+              />
             ) : (
               <p className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50/80 px-3 py-3 text-sm text-zinc-600">
                 過去問（学校）として登録されたテストはまだありません。
@@ -498,7 +527,14 @@ export function RecentTestsByCategory({
               </span>
             </div>
             {recentPapers.length > 0 ? (
-              <TestList tests={recentPapers} hideDocumentTypeInCard compact />
+              <TestList
+                tests={recentPapers}
+                hideDocumentTypeInCard
+                compact
+                showBookmarks={bookmarkMarks?.signedIn ?? false}
+                bookmarkedTestIds={bookmarkMarks?.testIds}
+                bookmarkCounts={bookmarkMarks?.counts}
+              />
             ) : (
               <p className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50/80 px-3 py-3 text-sm text-zinc-600">
                 論文として登録されたテストはまだありません。

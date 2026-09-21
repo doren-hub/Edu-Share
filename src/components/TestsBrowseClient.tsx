@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { RecentTestsByCategory, TestList, type TestRow } from "@/components/TestList";
+import type { BookmarkMarks } from "@/lib/bookmarks";
 import { normalizePaperAuthorsFromDb } from "@/lib/paper-authors";
 import { TESTS_LIST_PATHS } from "@/lib/tests-list-paths";
 
@@ -260,12 +261,14 @@ export function TestsBrowseClient({
   showRecent = false,
   /** 過去問・論文を合わせて0件のとき（アップロード案内） */
   globalEmpty,
+  bookmarkMarks,
 }: {
   tests: TestRow[];
   category: TestsCategory;
   /** true のときのみ「最近追加」を表示（過去問・論文の専用ページでは使わない） */
   showRecent?: boolean;
   globalEmpty: boolean;
+  bookmarkMarks?: BookmarkMarks;
 }) {
   const [pastSchoolKey, setPastSchoolKey] = useState("");
   const [paperAuthor, setPaperAuthor] = useState("");
@@ -384,7 +387,7 @@ export function TestsBrowseClient({
       </nav>
 
       {showRecent && !globalEmpty ? (
-        <RecentTestsByCategory tests={tests} filter={category} />
+        <RecentTestsByCategory tests={tests} filter={category} bookmarkMarks={bookmarkMarks} />
       ) : null}
 
       <div className="space-y-4">
@@ -572,6 +575,9 @@ export function TestsBrowseClient({
                     tests={displayedList}
                     hideDocumentTypeInCard
                     showPaperMaterialHints={category === "paper"}
+                    showBookmarks={bookmarkMarks?.signedIn ?? false}
+                    bookmarkedTestIds={bookmarkMarks?.testIds}
+                    bookmarkCounts={bookmarkMarks?.counts}
                   />
                 </>
               )}
