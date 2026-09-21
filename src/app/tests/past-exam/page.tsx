@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
 import { TEST_BROWSE_COLUMNS } from "@/lib/test-browse-select";
@@ -28,11 +29,13 @@ export default async function PastExamTestsPage() {
     .or("document_type.eq.past_exam,document_type.is.null")
     .order("created_at", { ascending: false });
 
-  const [{ count: pastCount }, { count: paperCount }, { data: tests }] = await Promise.all([
-    pastCountQuery,
-    paperCountQuery,
-    listQuery,
-  ]);
+  const [{ count: pastCount }, { count: paperCount }, { data: tests }, bookmarkMarks] =
+    await Promise.all([
+      pastCountQuery,
+      paperCountQuery,
+      listQuery,
+      loadBookmarkMarks(supabase),
+    ]);
 
   const list = tests ?? [];
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;
@@ -52,7 +55,12 @@ export default async function PastExamTestsPage() {
         </p>
       </header>
       <Suspense fallback={<TestsBrowseFallback />}>
-        <TestsBrowseClient tests={list} category="past_exam" globalEmpty={globalEmpty} />
+        <TestsBrowseClient
+          tests={list}
+          category="past_exam"
+          globalEmpty={globalEmpty}
+          bookmarkMarks={bookmarkMarks}
+        />
       </Suspense>
     </div>
   );

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { createClient } from "@/lib/supabase/server";
 import { TestsMaterialHub } from "@/components/TestsMaterialHub";
 import {
@@ -54,11 +55,13 @@ export default async function Home() {
     { count: paperN },
     { data: recentPast },
     listedPapers,
+    bookmarkMarks,
   ] = await Promise.all([
     pastCountQuery,
     paperCountQuery,
     recentPastQuery,
     recentPaperQuery,
+    loadBookmarkMarks(supabase),
   ]);
 
   const paperRows = (listedPapers.data ?? []) as unknown as Record<string, unknown>[];
@@ -86,7 +89,7 @@ export default async function Home() {
         <TestsMaterialHub pastN={pastN ?? 0} paperN={paperN ?? 0} />
       </section>
 
-      <RecentTestsByCategory tests={list} filter="all" />
+      <RecentTestsByCategory tests={list} filter="all" bookmarkMarks={bookmarkMarks} />
     </div>
   );
 }

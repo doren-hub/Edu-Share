@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { BookmarkMenu } from "@/components/BookmarkMenu";
 import { TestDeleteButton } from "@/components/TestDeleteButton";
 import { TestMetadataEditor } from "@/components/TestMetadataEditor";
 import { QuestionPerformanceSection } from "@/components/QuestionPerformanceSection";
@@ -20,6 +21,7 @@ import {
   type MaterialCarouselPane,
 } from "@/components/TestMaterialCarousel";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { createClient } from "@/lib/supabase/server";
 import { reconcileExistingPaperMaterialFiles } from "@/lib/reconcile-paper-material-files";
 import { canStartNewAutoQuiz, countDocumentChunksForTest } from "@/lib/document-chunks";
@@ -181,9 +183,10 @@ export default async function TestDetailPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
-  const [loaded, authRes] = await Promise.all([
+  const [loaded, authRes, bookmarkMarks] = await Promise.all([
     loadTestDetailRow(supabase, id),
     supabase.auth.getUser(),
+    loadBookmarkMarks(supabase),
   ]);
 
   if (!loaded) notFound();
@@ -448,9 +451,22 @@ export default async function TestDetailPage({
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+      <div className="relative rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
+        {isPaper ? (
+          <div className="absolute right-8 top-8 z-10 flex flex-col items-end gap-2">
+            {user ? (
+              <BookmarkMenu
+                testId={test.id}
+                initialListCount={bookmarkMarks.counts[test.id] ?? 0}
+              />
+            ) : null}
+            <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
+              {test.processing_status}
+            </span>
+          </div>
+        ) : null}
+        <div className={isPaper ? undefined : "flex flex-wrap items-start justify-between gap-4"}>
+          <div className={isPaper ? "pr-24" : undefined}>
             <h1 className="text-3xl font-semibold tracking-tight text-zinc-950">
               {test.title}
             </h1>
@@ -460,9 +476,19 @@ export default async function TestDetailPage({
               </p>
             ) : null}
           </div>
-          <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
-            {test.processing_status}
-          </span>
+          {isPaper ? null : (
+            <div className="flex flex-col items-end gap-2">
+              <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
+                {test.processing_status}
+              </span>
+              {user ? (
+                <BookmarkMenu
+                  testId={test.id}
+                  initialListCount={bookmarkMarks.counts[test.id] ?? 0}
+                />
+              ) : null}
+            </div>
+          )}
         </div>
 
         <dl className="mt-6 grid gap-3 text-sm text-zinc-700 sm:grid-cols-2">
