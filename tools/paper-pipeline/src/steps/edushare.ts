@@ -351,18 +351,56 @@ export async function runEduShareUpload(
 }
 
 async function expandSection(page: Page, heading: string): Promise<void> {
-  const box = page.getByRole("heading", { name: heading, exact: true }).locator("..");
+  const box = paperSection(page, heading);
+  await box.scrollIntoViewIfNeeded().catch(() => undefined);
   const closeBtn = box.getByRole("button", { name: "閉じる" });
   if (await closeBtn.isVisible({ timeout: 0 }).catch(() => false)) return;
   const edit = box.getByRole("button", { name: "編集する" });
   if (await edit.isVisible({ timeout: 0 }).catch(() => false)) {
     await edit.click({ timeout: 5_000 });
-    await page.waitForTimeout(400);
+    await closeBtn.waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
   }
 }
 
-export async function saveSciSpaceUrlOnEduShare(page: Page, state: PaperState): Promise<void> {
-  if (!state.eduShareTestUrl || !state.scispaceUrl) return;
+async function fillReactControl(loc: Locator, value: string, label: string): Promise<boolean> {
+  if (!(await loc.first().isVisible({ timeout: 0 }).catch(() => false))) {
+    warn(`${label} が見えないのでスキップ`);
+    return false;
+  }
+  const ok = await loc
+    .first()
+    .evaluate((el, text) => {
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
+      el.focus();
+      const proto = Object.getOwnPropertyDescriptor(
+        el instanceof HTMLTextAreaElement
+          ? window.HTMLTextAreaElement.prototype
+          : window.HTMLInputElement.prototype,
+        "value",
+      );
+      if (proto?.set) proto.set.call(el, text);
+      else el.value = text;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return el.value === text;
+    }, value)
+    .catch(() => false);
+  if (ok) return true;
+  if (!value.trim()) return false;
+  return fillIfVisible(loc, value, label);
+}
+
+async function saveExternalUrlOnEduShare(
+  page: Page,
+  state: PaperState,
+  opts: {
+    heading: "NotebookLM" | "SciSpace";
+    url: string;
+    dataField: string;
+    logLabel: string;
+  },
+): Promise<void> {
+  if (!state.eduShareTestUrl || !opts.url) return;
   const onPaper =
     /\/tests\//.test(page.url()) &&
     Boolean(state.eduShareTestId) &&
@@ -370,27 +408,57 @@ export async function saveSciSpaceUrlOnEduShare(page: Page, state: PaperState): 
   if (!onPaper) {
     await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
   }
-  await expandSection(page, "SciSpace");
-  const sciInput = page.locator('input[type="url"][placeholder*="scispace.com"]');
-  if (!(await sciInput.first().isVisible({ timeout: 0 }).catch(() => false))) {
-    const edit = page.getByRole("heading", { name: "SciSpace", exact: true }).locator("..").getByRole(
-      "button",
-      { name: "編集する" },
-    );
-    if (await edit.first().isVisible({ timeout: 0 }).catch(() => false)) {
-      await edit.first().click({ timeout: 5_000 });
-      await page.waitForTimeout(400);
-    }
+  const box = paperSection(page, opts.heading);
+  await expandSection(page, opts.heading);
+  const urlInput = box.locator(
+    `input[data-field="${opts.dataField}"], input[placeholder*="${opts.heading === "NotebookLM" ? "notebook" : "scispace"}"]`,
+  );
+  if (!(await urlInput.first().isVisible({ timeout: 0 }).catch(() => false))) {
+    await expandSection(page, opts.heading);
   }
-  const filled = await fillIfVisible(sciInput, state.scispaceUrl, "SciSpace URL");
+  await urlInput.first().waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
+  const filled = await fillReactControl(urlInput, opts.url, opts.logLabel);
   if (!filled) {
-    warn(`SciSpace URL 欄を開けません url=${page.url().slice(0, 80)}`);
+    warn(`${opts.logLabel} 欄を開けません url=${page.url().slice(0, 80)}`);
+    if (state.eduShareTestId) {
+      const field =
+        opts.dataField === "notebooklm-notebook-url"
+          ? "notebooklm_notebook_url"
+          : "scispace_project_url";
+      const ok = await patchEduShareJson(page, state.eduShareTestId, { [field]: opts.url });
+      if (ok) log(`Edu Share: ${opts.logLabel}を API で保存 ${opts.url}`);
+    }
     return;
   }
-  await page.getByRole("button", { name: "リンクを保存" }).first().click({ timeout: 8_000 });
-  await page.getByText("保存しました。").first().waitFor({ timeout: 15_000 }).catch(() => undefined);
+  await box.getByRole("button", { name: "リンクを保存" }).click({ timeout: 8_000 });
+  const saved = await box
+    .getByText("保存しました。")
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!saved && state.eduShareTestId) {
+    const field =
+      opts.dataField === "notebooklm-notebook-url"
+        ? "notebooklm_notebook_url"
+        : "scispace_project_url";
+    const ok = await patchEduShareJson(page, state.eduShareTestId, { [field]: opts.url });
+    if (ok) {
+      log(`Edu Share: ${opts.logLabel}を API で保存 ${opts.url}`);
+      return;
+    }
+  }
   await page.waitForTimeout(400);
-  log(`Edu Share: SciSpace 個別リンクを保存 ${state.scispaceUrl}`);
+  log(`Edu Share: ${opts.logLabel}を保存 ${opts.url}`);
+}
+
+export async function saveSciSpaceUrlOnEduShare(page: Page, state: PaperState): Promise<void> {
+  await saveExternalUrlOnEduShare(page, state, {
+    heading: "SciSpace",
+    url: state.scispaceUrl,
+    dataField: "scispace-project-url",
+    logLabel: "SciSpace 個別リンク",
+  });
 }
 
 function paperSection(page: Page, heading: string) {
@@ -418,30 +486,40 @@ function parseSummarizeEvaluate(raw: unknown): {
 }
 
 async function fillReactTextarea(loc: Locator, value: string, label: string): Promise<boolean> {
-  const v = value.slice(0, 2000);
-  if (!(await loc.first().isVisible({ timeout: 0 }).catch(() => false))) {
-    warn(`${label} が見えないのでスキップ`);
-    return false;
-  }
-  const ok = await loc
-    .first()
+  return fillReactControl(loc, value.slice(0, 2000), label);
+}
+
+async function patchEduShareJson(
+  page: Page,
+  testId: string,
+  body: Record<string, unknown>,
+): Promise<boolean> {
+  const path = `/api/tests/${testId}`;
+  const raw = await page
     .evaluate(
-      `(el) => {
-      const text = ${JSON.stringify(v)};
-      const node = el;
-      node.focus();
-      const proto = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
-      if (proto && proto.set) proto.set.call(node, text);
-      else node.value = text;
-      node.dispatchEvent(new Event("input", { bubbles: true }));
-      node.dispatchEvent(new Event("change", { bubbles: true }));
-      return node.value.slice(0, 40) === text.slice(0, 40);
-    }`,
+      async (args: { path: string; body: Record<string, unknown> }) => {
+        const res = await fetch(args.path, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(args.body),
+        });
+        const text = await res.text();
+        try {
+          return JSON.stringify({ ok: res.ok, status: res.status, body: JSON.parse(text) });
+        } catch {
+          return JSON.stringify({
+            ok: res.ok,
+            status: res.status,
+            body: { error: text.slice(0, 200) },
+          });
+        }
+      },
+      { path, body },
     )
-    .catch(() => false);
-  if (ok) return true;
-  if (!v.trim()) return false;
-  return fillIfVisible(loc, v, label);
+    .catch((e) => JSON.stringify({ ok: false, body: { error: String(e) } }));
+  const parsed = parseSummarizeEvaluate(raw);
+  return Boolean(parsed.ok);
 }
 
 async function patchEduShareDescription(
@@ -449,28 +527,9 @@ async function patchEduShareDescription(
   testId: string,
   description: string | null,
 ): Promise<boolean> {
-  const path = `/api/tests/${testId}`;
-  const raw = await page
-    .evaluate(
-      `(async () => {
-      const res = await fetch(${JSON.stringify(path)}, {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: ${JSON.stringify(description)} }),
-      });
-      const text = await res.text();
-      try { return JSON.stringify({ ok: res.ok, status: res.status, body: JSON.parse(text) }); }
-      catch { return JSON.stringify({ ok: res.ok, status: res.status, body: { error: text.slice(0, 200) } }); }
-    })()`,
-    )
-    .catch((e) => JSON.stringify({ ok: false, body: { error: String(e) } }));
-  const parsed = parseSummarizeEvaluate(raw);
-  if (parsed.ok) return true;
-  warn(
-    `Edu Share: 説明の API 保存に失敗（${(parsed.body?.error || "不明").slice(0, 80)}）`,
-  );
-  return false;
+  const ok = await patchEduShareJson(page, testId, { description });
+  if (!ok) warn("Edu Share: 説明の API 保存に失敗");
+  return ok;
 }
 
 async function fillTldrFromPdfSummarize(page: Page, state: PaperState): Promise<boolean> {
@@ -924,15 +983,12 @@ export async function runEduShareMaterials(
     }
 
     if (state.notebooklmUrl) {
-      await expandSection(page, "NotebookLM");
-      const urlInput = page.getByPlaceholder("https://notebooklm.google.com/");
-      await fillIfVisible(urlInput, state.notebooklmUrl, "NotebookLM URL");
-      await page.getByRole("heading", { name: "NotebookLM" }).locator("..").getByRole(
-        "button",
-        { name: "リンクを保存" },
-      ).click();
-      await page.getByText("保存しました。").first().waitFor({ timeout: 15_000 }).catch(() => undefined);
-      await page.waitForTimeout(400);
+      await saveExternalUrlOnEduShare(page, state, {
+        heading: "NotebookLM",
+        url: state.notebooklmUrl,
+        dataField: "notebooklm-notebook-url",
+        logLabel: "NotebookLM リンク",
+      });
     }
 
     await applySciSpaceMetaToPaperPage(page, { paperDir, state });
