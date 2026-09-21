@@ -15,6 +15,7 @@ import {
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
   isSlideDeckCardText,
+  isPresenterSlideFormatText,
   textLooksLikeGenerating,
 } from "./studio-cards.ts";
 
@@ -111,6 +112,28 @@ test("Studio タイルの sync は生成中とみなす", () => {
     textLooksLikeGenerating("tablet スライド資料 chevron_forward subscriptions 動画解説 chevron_forward"),
     false,
   );
+});
+
+test("スライド形式はプレゼンターを選び、詳細や両方含む親は除外", () => {
+  assert.equal(isPresenterSlideFormatText("プレゼンターのスライド"), true);
+  assert.equal(
+    isPresenterSlideFormatText(
+      "プレゼンターのスライド 重要なポイントをわかりやすく示したビジュアルスライドで、話す内容をサポートします。",
+    ),
+    true,
+  );
+  assert.equal(isPresenterSlideFormatText("Presenter Slides"), true);
+  assert.equal(isPresenterSlideFormatText("Presenter's slides"), true);
+  assert.equal(isPresenterSlideFormatText("詳細なスライド"), false);
+  assert.equal(isPresenterSlideFormatText("Detailed Deck"), false);
+  assert.equal(isPresenterSlideFormatText("Detailed slides"), false);
+  assert.equal(
+    isPresenterSlideFormatText(
+      "詳細なスライド 全文と詳細を含む包括的なスライド プレゼンターのスライド 重要なポイント",
+    ),
+    false,
+  );
+  assert.equal(isPresenterSlideFormatText("生成"), false);
 });
 
 test("compact なスライドカードは再生成しない", () => {

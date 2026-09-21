@@ -36,6 +36,7 @@ import {
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
   isSlideDeckCardText,
+  isPresenterSlideFormatText,
   textLooksLikeGenerating,
   type VideoKickoffScan,
 } from "../studio-cards.ts";
@@ -980,6 +981,70 @@ async function selectExplainerVideoFormat(page: Page): Promise<void> {
   else warn("説明動画の形式ボタンが見つかりません。ショートが選ばれたままの可能性があります");
 }
 
+async function studioCustomizeRoot(page: Page): Promise<Locator | null> {
+  const dialog = page.getByRole("dialog");
+  const overlay = page.locator(".cdk-overlay-pane");
+  if (await isVisibleNow(dialog)) return dialog.first();
+  if (await isVisibleNow(overlay)) return overlay.last();
+  return null;
+}
+
+async function openStudioCustomizeIfNeeded(page: Page): Promise<Locator | null> {
+  const open = await studioCustomizeRoot(page);
+  if (open) return open;
+  const customizeBtns = page.getByRole("button", { name: /カスタマイズ|Customize/i });
+  const n = Math.min(await customizeBtns.count().catch(() => 0), 12);
+  for (let i = 0; i < n; i++) {
+    const btn = customizeBtns.nth(i);
+    if (!(await isVisibleNow(btn))) continue;
+    const text = `${await innerTextNow(btn, 0)} ${await attrNow(btn, "aria-label")}`;
+    if (isChatCustomizeLabel(text)) continue;
+    log("Studio: カスタマイズを開いて形式を選びます");
+    await btn.click({ timeout: 3_000 }).catch(() => undefined);
+    await page.waitForTimeout(800);
+    break;
+  }
+  return studioCustomizeRoot(page);
+}
+
+async function selectPresenterSlideFormat(page: Page): Promise<void> {
+  log("スライド形式: プレゼンターのスライドを探します");
+  const root = await openStudioCustomizeIfNeeded(page);
+  if (!root) {
+    warn("スライド形式: カスタマイズダイアログが無いので形式選択を飛ばします");
+    return;
+  }
+  const groups = [
+    root.getByText(/プレゼンターのスライド|Presenter Slides|Presenter'?s slides/i),
+    root.getByRole("radio"),
+    root.getByRole("tab"),
+    root.getByRole("button"),
+    root.locator("[role='option']"),
+  ];
+  for (const group of groups) {
+    const n = Math.min(await group.count().catch(() => 0), 40);
+    for (let i = 0; i < n; i++) {
+      const el = group.nth(i);
+      if (!(await isVisibleNow(el))) continue;
+      const text = `${await innerTextNow(el, 0)} ${await attrNow(el, "aria-label")}`
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!isPresenterSlideFormatText(text)) continue;
+      await el.click({ timeout: 5_000 });
+      log(`スライド形式: プレゼンターのスライドを選びました（${text.slice(0, 40)}）`);
+      await page.waitForTimeout(500);
+      return;
+    }
+  }
+  const clicked = await clickFirstByName(
+    page,
+    [/プレゼンターのスライド/, /Presenter Slides/i, /Presenter'?s slides/i],
+    { timeoutMs: 4_000 },
+  );
+  if (clicked) log("スライド形式: プレゼンターのスライドをクリックしました");
+  else warn("プレゼンターのスライドが見つかりません。詳細なスライドのまま生成する可能性があります");
+}
+
 async function generateStudioItem(
   page: Page,
   labels: (string | RegExp)[],
@@ -1060,6 +1125,11 @@ async function generateStudioItem(
       await dismissStudioViewer(page);
       return "started";
     }
+    await withTimeout(selectPresenterSlideFormat(page), 20_000, "スライド形式の選択がタイムアウトしました").catch(
+      (e) => {
+        warn(e instanceof Error ? e.message : String(e));
+      },
+    );
   }
   const outputsBefore = await studioOutputCount(page);
   log(`Studio: 生成前の出力カード ${outputsBefore} 件`);
