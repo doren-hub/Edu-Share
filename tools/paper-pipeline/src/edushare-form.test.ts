@@ -8,7 +8,11 @@ import {
   isAuthorRequiredError,
   isDummyAuthorValue,
   notebookLmMaterialBlockIsRegistered,
+  paperMaterialIsRegistered,
   pickAuthorSelectValue,
+  materialCarouselShowLabel,
+  SLIDE_MATERIAL_HEADING,
+  VIDEO_MATERIAL_HEADING,
 } from "./edushare-form.ts";
 
 test("pickAuthorSelectValue: 空とその他を飛ばして実名を返す", () => {
@@ -42,6 +46,43 @@ test("notebookLmMaterialBlockIsRegistered: 未登録を登録済みと取り違�
     true,
   );
   assert.equal(notebookLmMaterialBlockIsRegistered("スライド（PDF）"), false);
+});
+
+test("paperMaterialIsRegistered: カルーセル枠があればフォームが閉じていても登録済み", () => {
+  assert.equal(
+    paperMaterialIsRegistered({ formBlockText: "", hasViewerPane: true }),
+    true,
+  );
+  assert.equal(
+    paperMaterialIsRegistered({
+      formBlockText: "スライド（PDF）\n未登録",
+      hasViewerPane: true,
+    }),
+    true,
+  );
+  assert.equal(
+    paperMaterialIsRegistered({
+      formBlockText: "スライド（PDF）\n登録済み",
+      hasViewerPane: false,
+    }),
+    true,
+  );
+  assert.equal(
+    paperMaterialIsRegistered({
+      formBlockText: "スライド（PDF）\n未登録",
+      hasViewerPane: false,
+    }),
+    false,
+  );
+  assert.equal(
+    paperMaterialIsRegistered({ formBlockText: "", hasViewerPane: false }),
+    false,
+  );
+});
+
+test("materialCarouselShowLabel: カルーセルの aria-label", () => {
+  assert.equal(materialCarouselShowLabel(SLIDE_MATERIAL_HEADING), "スライド（PDF）を表示");
+  assert.equal(materialCarouselShowLabel(VIDEO_MATERIAL_HEADING), "動画（MP4）を表示");
 });
 
 test("choosePaperAuthor: デモ著者は捨てて Files 貼り付けの先頭名を入れる", () => {
