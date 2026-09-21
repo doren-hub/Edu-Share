@@ -56,64 +56,56 @@ import {
 import { PaperAuthorsCollapsible } from "@/components/PaperAuthorsCollapsible";
 import { normalizePaperAuthorsFromDb } from "@/lib/paper-authors";
 import { normalizePaperDoiDisplay, paperDoiHref } from "@/lib/paper-doi";
+import {
+  TEST_DETAIL_LINK_COLUMNS,
+  TEST_DETAIL_SELECT_VARIANTS,
+  looksLikeMissingColumnError,
+  mergeLinkColumns,
+  withOptionalMaterialFields,
+} from "@/lib/test-detail-select";
 
-/** マイグレーション未適用時は資料用列が無く select が失敗する → 列なしで再取得する */
-const TEST_DETAIL_BASE_SELECT =
-  "id,title,description,source_name,processing_status,processing_error,created_at,document_type,exam_department,exam_subject,exam_period,industry,publication_year,paper_doi,paper_venue,paper_authors,uploaded_by,quiz_source,notebooklm_questions_json,notebooklm_vocab_questions_json";
+export const dynamic = "force-dynamic";
 
-const TEST_DETAIL_MATERIAL_COLS =
-  "notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_notebook_url,scispace_project_url,pdf_filename";
+async function overlayLinkColumns(row: Record<string, unknown>, id: string) {
+  try {
+    const admin = createAdminClient();
+    const extra = await admin
+      .from("tests")
+      .select(TEST_DETAIL_LINK_COLUMNS)
+      .eq("id", id)
+      .single();
+    if (extra.data) {
+      return mergeLinkColumns(
+        row,
+        extra.data as {
+          notebooklm_notebook_url?: string | null;
+          scispace_project_url?: string | null;
+        },
+      );
+    }
+  } catch {
+    // service role 未設定時はユーザー SELECT の結果を使う
+  }
+  return row;
+}
 
 async function loadTestDetailRow(
   supabase: Awaited<ReturnType<typeof createClient>>,
   id: string,
 ) {
-  const full = `${TEST_DETAIL_BASE_SELECT},${TEST_DETAIL_MATERIAL_COLS}`;
-  const first = await supabase.from("tests").select(full).eq("id", id).single();
-  if (first.data) return first.data;
-
-  const msg = (first.error?.message ?? "").toLowerCase();
-  const looksLikeMissingMaterialColumn =
-    msg.includes("notebooklm_slide_pdf_storage_path") ||
-    msg.includes("notebooklm_video_mp4_storage_path") ||
-    msg.includes("notebooklm_notebook_url") ||
-    msg.includes("scispace_project_url") ||
-    msg.includes("pdf_filename") ||
-    msg.includes("quiz_source") ||
-    msg.includes("notebooklm_questions_json") ||
-    msg.includes("notebooklm_vocab_questions_json") ||
-    msg.includes("paper_authors") ||
-    msg.includes("paper_doi") ||
-    msg.includes("paper_venue") ||
-    msg.includes("schema cache") ||
-    (msg.includes("column") && msg.includes("does not exist"));
-
-  if (first.error && looksLikeMissingMaterialColumn) {
-    const second = await supabase
-      .from("tests")
-      .select(TEST_DETAIL_BASE_SELECT)
-      .eq("id", id)
-      .single();
-    if (second.data) {
-      return {
-        ...second.data,
-        notebooklm_slide_pdf_storage_path:
-          (second.data as { notebooklm_slide_pdf_storage_path?: string | null })
-            .notebooklm_slide_pdf_storage_path ?? null,
-        notebooklm_video_mp4_storage_path:
-          (second.data as { notebooklm_video_mp4_storage_path?: string | null })
-            .notebooklm_video_mp4_storage_path ?? null,
-        notebooklm_notebook_url:
-          (second.data as { notebooklm_notebook_url?: string | null }).notebooklm_notebook_url ??
-          null,
-        scispace_project_url:
-          (second.data as { scispace_project_url?: string | null }).scispace_project_url ?? null,
-        pdf_filename:
-          (second.data as { pdf_filename?: string | null }).pdf_filename ?? null,
-      };
+  let row: Record<string, unknown> | null = null;
+  for (const cols of TEST_DETAIL_SELECT_VARIANTS) {
+    const res = await supabase.from("tests").select(cols).eq("id", id).single();
+    if (res.data) {
+      row = res.data as Record<string, unknown>;
+      break;
+    }
+    if (!res.error || !looksLikeMissingColumnError(res.error.message ?? "")) {
+      return null;
     }
   }
-  return null;
+  if (!row) return null;
+  return withOptionalMaterialFields(await overlayLinkColumns(row, id));
 }
 
 const MATERIAL_SIGN_TTL_SEC = 3600;
@@ -368,6 +360,8 @@ export default async function TestDetailPage({
   const [materialFiles] = await reconcileExistingPaperMaterialFiles([
     {
       id: test.id,
+      uploaded_by: (test as { uploaded_by?: string | null }).uploaded_by ?? null,
+      pdf_storage_path: (test as { pdf_storage_path?: string | null }).pdf_storage_path ?? null,
       notebooklm_slide_pdf_storage_path: slidePathRaw || null,
       notebooklm_video_mp4_storage_path: videoPathRaw || null,
     },
@@ -571,15 +565,14 @@ export default async function TestDetailPage({
                 </div>
               ) : null}
             </div>
-            {user ? (
-              <div className="mt-4 space-y-3">
+            <div className="mt-4 space-y-3">
                 <NotebookLmSection
                   testId={test.id}
-                  enabled
+                  enabled={Boolean(user)}
                   initialNotebookUrl={notebookLmNotebookUrl || null}
-                  canEditNotebookUrl={user.id === test.uploaded_by}
+                  canEditNotebookUrl={Boolean(user?.id && user.id === test.uploaded_by)}
                   materialUpload={
-                    user.id === test.uploaded_by ? (
+                    user?.id === test.uploaded_by ? (
                       <NotebookLmMaterialUploadForm
                         testId={test.id}
                         hasSlidePdf={Boolean(slidePath)}
@@ -588,7 +581,7 @@ export default async function TestDetailPage({
                     ) : null
                   }
                   csvUpload={
-                    user.id === test.uploaded_by ? (
+                    user?.id === test.uploaded_by ? (
                       <NotebookLmCsvUploadForm
                         existingTestId={test.id}
                         defaultTitle={test.title}
@@ -602,10 +595,10 @@ export default async function TestDetailPage({
                 <SciSpaceSection
                   testId={test.id}
                   initialProjectUrl={scispaceProjectUrl || null}
-                  canEditProjectUrl={user.id === test.uploaded_by}
+                  canEditProjectUrl={Boolean(user?.id && user.id === test.uploaded_by)}
                   documentType={isPaper ? "paper" : "past_exam"}
                   paperMetaInitial={
-                    isPaper && user.id === test.uploaded_by
+                    isPaper && user?.id === test.uploaded_by
                       ? {
                           title: test.title,
                           paperAuthors: normalizePaperAuthorsFromDb(
@@ -629,17 +622,18 @@ export default async function TestDetailPage({
                       : null
                   }
                 />
-                <TestMaterialCarousel title={test.title} panes={materialPanes} />
+                {user ? (
+                  <TestMaterialCarousel title={test.title} panes={materialPanes} />
+                ) : (
+                  <p className="text-sm text-zinc-600">
+                    PDFを表示するには{" "}
+                    <Link className="font-medium underline" href="/auth/login">
+                      ログイン
+                    </Link>{" "}
+                    してください。
+                  </p>
+                )}
               </div>
-            ) : (
-              <p className="mt-4 text-sm text-zinc-600">
-                PDFを表示するには{" "}
-                <Link className="font-medium underline" href="/auth/login">
-                  ログイン
-                </Link>{" "}
-                してください。
-              </p>
-            )}
           </section>
         ) : null}
 

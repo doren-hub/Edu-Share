@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { NOTEBOOKLM_APP_URL, NOTEBOOKLM_SOURCES_HELP_URL } from "@/lib/notebooklm";
+import { applyUrlInputPaste } from "@/lib/pasted-url";
 
 type PrepareJson = {
   signedUrl?: string;
@@ -161,6 +162,7 @@ export function NotebookLmSection({
             </span>
           )}
         </div>
+        {canEditNotebookUrl ? (
         <div className="shrink-0">
           <button
             type="button"
@@ -170,6 +172,7 @@ export function NotebookLmSection({
             {showDetails ? "閉じる" : "編集する"}
           </button>
         </div>
+        ) : null}
       </div>
 
       {showDetails ? (
@@ -243,11 +246,16 @@ export function NotebookLmSection({
             {canEditNotebookUrl ? (
               <div className="mt-2 space-y-2">
                 <input
-                  type="url"
+                  type="text"
                   inputMode="url"
-                  placeholder="https://notebooklm.google.com/…"
+                  autoComplete="url"
+                  spellCheck={false}
+                  data-field="notebooklm-notebook-url"
+                  aria-label="ノートブックのリンク"
+                  placeholder="https://notebook.google.com/notebook/…"
                   value={notebookUrlDraft}
                   onChange={(e) => setNotebookUrlDraft(e.target.value)}
+                  onPaste={(e) => applyUrlInputPaste(e, setNotebookUrlDraft)}
                   className="w-full rounded border border-violet-200 bg-white px-2 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400"
                 />
                 <div className="flex flex-wrap gap-2">

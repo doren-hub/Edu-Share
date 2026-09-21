@@ -6,6 +6,7 @@ import {
   SciSpacePaperMetadataPaste,
   type SciSpacePaperMetadataInitial,
 } from "@/components/SciSpacePaperMetadataPaste";
+import { applyUrlInputPaste } from "@/lib/pasted-url";
 import type { DocumentType } from "@/lib/types";
 import { SCISPACE_CHAT_PDF_URL } from "@/lib/scispace";
 
@@ -133,6 +134,7 @@ export function SciSpaceSection({
             </span>
           ) : null}
         </div>
+        {canEditProjectUrl ? (
         <div className="shrink-0">
           <button
             type="button"
@@ -142,6 +144,7 @@ export function SciSpaceSection({
             {showDetails ? "閉じる" : "編集する"}
           </button>
         </div>
+        ) : null}
       </div>
 
       {showDetails ? (
@@ -173,11 +176,16 @@ export function SciSpaceSection({
             {canEditProjectUrl ? (
               <div className="mt-2 space-y-2">
                 <input
-                  type="url"
+                  type="text"
                   inputMode="url"
-                  placeholder="https://scispace.com/…"
+                  autoComplete="url"
+                  spellCheck={false}
+                  data-field="scispace-project-url"
+                  aria-label="SciSpace のページ URL"
+                  placeholder="https://scispace.com/records/…"
                   value={urlDraft}
                   onChange={(e) => setUrlDraft(e.target.value)}
+                  onPaste={(e) => applyUrlInputPaste(e, setUrlDraft)}
                   className="w-full rounded border border-sky-200 bg-white px-2 py-1.5 text-xs text-zinc-900 placeholder:text-zinc-400"
                 />
                 <div className="flex flex-wrap gap-2">
