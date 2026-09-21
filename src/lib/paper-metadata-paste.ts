@@ -52,6 +52,7 @@ function stripUiNoise(line: string): string {
     "",
   );
   t = t.replace(/\s*Show less\s*$/iu, "");
+  t = t.replace(/Show less\s*$/iu, "");
   t = t.replace(/\s*Show more\s*$/iu, "");
   return t.trim();
 }

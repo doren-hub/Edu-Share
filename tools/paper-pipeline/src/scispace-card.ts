@@ -193,7 +193,7 @@ export function rawFilesCardPaste(raw: string, filename: string): string {
   const compact = isolated.replace(/\s+/g, " ").trim().toLowerCase();
   if (compact === stem || compact === filename.toLowerCase()) return "";
   if (looksLikeSciSpaceNav(isolated) && isolated.length < 80) return "";
-  return isolated.slice(0, 4000);
+  return preferExpandedAuthorPaste(isolated.slice(0, 4000));
 }
 
 /** Edu Share 済みなのに Files 行が無い／タイトル・著者だけに加工されている */
@@ -206,9 +206,43 @@ export function needsRawFilesPaste(state: {
   return !rawFilesCardPaste(state.filesPaste ?? "", state.filename);
 }
 
+/** Files 行が空・省略著者・年著者行無しなら取り直す */
+export function needsSciSpaceCardRecapture(state: {
+  filename: string;
+  filesPaste?: string;
+  eduShareTestUrl?: string;
+}): boolean {
+  if (!state.filename || !state.eduShareTestUrl?.trim()) return false;
+  if (needsRawFilesPaste(state)) return true;
+  const paste = state.filesPaste ?? "";
+  if (filesRowHasTruncatedAuthors(paste)) return true;
+  const card = extractSciSpaceCardMeta(paste, state.filename);
+  if (isJunkVenueLine(card.venue)) return true;
+  if (!card.yearAuthorLine) return true;
+  return false;
+}
+
 /** SciSpace カードの "...+N More" は著者が省略されている */
 export function filesRowHasTruncatedAuthors(paste: string): boolean {
-  return /(?:\.{2,3}|\u2026)\s*\+\s*\d+\s*More\b/i.test(paste.replace(/\s+/g, " "));
+  const t = paste.replace(/\s+/g, " ");
+  if (/Show\s*Less/i.test(t)) return false;
+  return /(?:\.{2,3}|\u2026)\s*\+\s*\d+\s*More\b/i.test(t);
+}
+
+/** Files の "+N More" チップそのもの。年著者セル全体ではない */
+export function isFilesAuthorMoreLabel(text: string): boolean {
+  return /^(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\s*$/i.test(text.replace(/\s+/g, " ").trim());
+}
+
+/** 展開後の DOM に残った "...+N More" を捨て、Show Less 側を残す */
+export function preferExpandedAuthorPaste(paste: string): string {
+  const lines = paste.replace(/\r\n/g, "\n").split("\n");
+  const hasShowLess = lines.some((l) => /Show\s*Less/i.test(l));
+  if (!hasShowLess) return paste;
+  return lines
+    .map((l) => l.replace(/(?:\.{2,3}|\u2026)\s*\+\s*\d+\s*More\b/gi, "").replace(/[ \t]{2,}/g, " "))
+    .filter((l) => !/^\s*\+\s*\d+\s*More\s*$/i.test(l.trim()))
+    .join("\n");
 }
 
 export function containsForeignPdf(raw: string, filename: string): boolean {
@@ -218,6 +252,20 @@ export function containsForeignPdf(raw: string, filename: string): boolean {
     const stem = l.replace(/\.pdf$/i, "").trim().toLowerCase();
     return stem !== name && !lineNamesThisFile(l, filename);
   });
+}
+
+export function replaceYearAuthorLine(paste: string, yearAuthorLine: string): string {
+  const line = yearAuthorLine.trim();
+  if (!line) return paste;
+  const lines = paste.replace(/\r\n/g, "\n").split("\n");
+  const idx = lines.findIndex((l) => Boolean(parseYearAuthor(l)) || filesRowHasTruncatedAuthors(l));
+  if (idx >= 0) {
+    lines[idx] = line;
+    return lines.join("\n");
+  }
+  const fileIdx = lines.findIndex((l) => /\.pdf$/i.test(l.trim()));
+  lines.splice((fileIdx >= 0 ? fileIdx : 0) + 2, 0, line);
+  return lines.join("\n");
 }
 
 export function parseYearAuthor(line: string): { year: string; authors: string } | null {
@@ -246,21 +294,29 @@ function pickTitle(lines: string[], filename: string): string {
   );
 }
 
+function isJunkVenueLine(s: string): boolean {
+  return /^(null|undefined|none|n\/a|-)$/i.test(s.trim());
+}
+
 function pickVenue(lines: string[], filename: string, title: string): string {
   const skip = new Set([filename, title].filter(Boolean));
+  const leftover: string[] = [];
   for (const s of lines) {
-    if (skip.has(s) || looksLikeSciSpaceNav(s) || looksLikeCitationTitle(s) || parseYearAuthor(s)) continue;
+    if (skip.has(s) || looksLikeSciSpaceNav(s) || parseYearAuthor(s)) continue;
     if (/\.pdf$/i.test(s)) continue;
     if (/^(this paper|the paper|本研究|本論文)\b/i.test(s)) continue;
+    if (isJunkVenueLine(s)) continue;
     if (s.length > 80) continue;
     if (isTldrBodyLine(s)) continue;
     if (VENUE_HINT.test(s) || looksLikeVenueLine(s)) return s;
+    if (looksLikeCitationTitle(s) && s.length > 60) continue;
+    leftover.push(s);
   }
-  return "";
+  return leftover[0] ?? "";
 }
 
 const TLDR_OPENER =
-  /\b(?:this paper|the paper|本研究|本論文|examines|presents|addresses|explores|discusses|investigates|reviews|proposes|we (?:present|study|show|investigate))\b/i;
+  /\b(?:this paper|the paper|本研究|本論文|examines|presents|addresses|explores|discusses|investigates|proposes|we (?:present|study|show|investigate))\b/i;
 
 /** Files 右列の TL;DR 本文。メタ情報（タイトル・著者・年・掲載・DOI）ではない */
 export function isTldrBodyLine(s: string): boolean {
@@ -296,7 +352,7 @@ export function eduShareSciSpaceMetadataPaste(paste: string, filename: string): 
   const out = metadataPasteFromCard(card, filename);
   if (!out) return "";
   if (!card.yearAuthorLine && titleLooksLikeFilename(card.title, filename)) return "";
-  if (isTldrBodyLine(out)) return "";
+  if (isTldrBodyLine(out) && !card.yearAuthorLine && !card.venue) return "";
   return out;
 }
 

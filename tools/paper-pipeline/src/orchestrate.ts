@@ -19,7 +19,7 @@ import { hasHarvestableWork } from "./harvest.ts";
 import { currentNotebookQuotaPause, EXIT_QUOTA, waitUntilNotebookQuotaAllows } from "./notebook-quota.ts";
 import { EXIT_WAITING, recheckDelayMs } from "./waiting.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
-import { needsRawFilesPaste } from "./scispace-card.ts";
+import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
 import { formatStudioGenerateArg, formatStudioGenerateJa } from "./studio-select.ts";
 
@@ -104,7 +104,7 @@ function initialStatus(
   const kickoffSettled = studioKickoffSettled(state, skip);
   const harvestable = hasHarvestableWork(state, selected);
   if (hasDoneMarker(item.paperDir)) {
-    if (needsLocalVideoFile(state) || needsRawFilesPaste(state)) {
+    if (needsLocalVideoFile(state) || needsSciSpaceCardRecapture(state)) {
       return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: true };
     }
     return { status: "done", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: false };

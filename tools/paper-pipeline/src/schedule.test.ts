@@ -217,6 +217,27 @@ test("pickNextJob: 4種済みの収穫（verify 等）を未着手の生成よ�
   ];
   assert.deepEqual(pickNextJob(jobs, 100), { kind: "run", id: "verify.pdf" });
 });
+test("pickNextJob: 利用量待ちでは Files 貼り付け補修を inbox の収穫より先に回す", () => {
+  const jobs = [
+    job({
+      id: "inbox-harvest.pdf",
+      mtime: 1,
+      harvestable: true,
+      source: "inbox",
+    }),
+    job({
+      id: "paste.pdf",
+      mtime: 50,
+      harvestable: true,
+      source: "repair",
+    }),
+  ];
+  assert.deepEqual(pickNextJob(jobs, 100, { generationBlocked: true }), {
+    kind: "run",
+    id: "paste.pdf",
+  });
+});
+
 test("pickNextJob: 利用量待ちなら生成ロックを外して収穫できる論文を回す", () => {
   const jobs = [
     job({

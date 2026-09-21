@@ -5,6 +5,8 @@ import {
   filesTabClickAllowed,
   looksLikeSciSpaceChatHome,
   looksLikeSciSpaceFilesTable,
+  filesListNeedsLoadMore,
+  isFilesListSearchHint,
 } from "./scispace-files-view.ts";
 
 const homeDump =
@@ -48,6 +50,25 @@ test("ファイル名検索 0 件でも Files 表（タブを押さない）", (
   ].join("\n");
   assert.equal(looksLikeSciSpaceFilesTable(emptyFilter), true);
   assert.equal(looksLikeSciSpaceChatHome(emptyFilter), false);
+});
+
+test("Files 検索は列設定とチャット欄を避ける", () => {
+  assert.equal(isFilesListSearchHint("search Search files"), true);
+  assert.equal(isFilesListSearchHint("text Search columns"), false);
+  assert.equal(isFilesListSearchHint("text Give me any task on this folder composer"), false);
+});
+
+test("先頭 15 件と Load More がある一覧はページ送りが要る", () => {
+  const partial = [
+    "Upload PDFs",
+    "Files (51)",
+    "2601.18699v2.pdf",
+    "Uploaded on 20 Sep 2026",
+    "Showing 15 of 51 files",
+    "Load More",
+  ].join("\n");
+  assert.equal(filesListNeedsLoadMore(partial), true);
+  assert.equal(filesListNeedsLoadMore(filesTable), false);
 });
 
 test("Files タブは選択済みや連打では押さない", () => {
