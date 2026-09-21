@@ -2,7 +2,14 @@ import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { TestsMaterialHub } from "@/components/TestsMaterialHub";
 import { RecentTestsByCategory } from "@/components/TestList";
-import { TEST_BROWSE_COLUMNS } from "@/lib/test-browse-select";
+import { reconcileExistingPaperMaterialFiles } from "@/lib/reconcile-paper-material-files";
+import {
+  TEST_BROWSE_PAPER_LIST_COLUMNS,
+  TEST_BROWSE_PAPER_LIST_COLUMNS_MIN,
+  TEST_BROWSE_PAPER_LIST_COLUMNS_NO_FILENAME,
+} from "@/lib/test-browse-select";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   description:
@@ -14,12 +21,25 @@ const sectionShell =
 
 export default async function Home() {
   const supabase = await createClient();
-  const { data: tests } = await supabase
+  const listed = await supabase
     .from("tests")
-    .select(TEST_BROWSE_COLUMNS)
+    .select(TEST_BROWSE_PAPER_LIST_COLUMNS)
     .order("created_at", { ascending: false });
 
-  const list = tests ?? [];
+  let tests = listed.data;
+  if (listed.error && /pdf_filename|pdf_storage_path/i.test(listed.error.message ?? "")) {
+    const retry = await supabase
+      .from("tests")
+      .select(
+        /pdf_storage_path/i.test(listed.error.message ?? "")
+          ? TEST_BROWSE_PAPER_LIST_COLUMNS_MIN
+          : TEST_BROWSE_PAPER_LIST_COLUMNS_NO_FILENAME,
+      )
+      .order("created_at", { ascending: false });
+    tests = retry.data;
+  }
+
+  const list = await reconcileExistingPaperMaterialFiles(tests ?? []);
   const pastN = list.filter((t) => (t.document_type ?? "past_exam") !== "paper").length;
   const paperN = list.filter((t) => t.document_type === "paper").length;
 

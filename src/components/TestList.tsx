@@ -164,15 +164,17 @@ export function TestList({
       {tests.map((t) => {
         const statusReadyOk =
           t.processing_status === "ready" && !t.processing_error;
-        const paperMaterialsComplete =
-          showPaperMaterialHints && paperNotebookLmMaterialsComplete(t);
-        const statusBadgeBlue = statusReadyOk && paperMaterialsComplete;
+        const isPaper = (t.document_type ?? "past_exam") === "paper";
+        const paperMaterialsComplete = paperNotebookLmMaterialsComplete(t);
+        const statusBadgeBlue =
+          statusReadyOk && isPaper && paperMaterialsComplete;
+        const showHints = showPaperMaterialHints || isPaper;
         const statusLabel = (() => {
           if (t.processing_status === "ready" && t.processing_error) {
             return "テキスト未抽出";
           }
           if (t.processing_status !== "ready") return t.processing_status;
-          if (showPaperMaterialHints && !paperMaterialsComplete) return "準備中";
+          if (isPaper && !paperMaterialsComplete) return "準備中";
           return "受験可能";
         })();
         return (
@@ -249,7 +251,7 @@ export function TestList({
                     </span>
                   )}
                 </div>
-                {showPaperMaterialHints ? (
+                {showHints ? (
                   <PaperMaterialHints t={t} compact={compact} />
                 ) : null}
               </div>
