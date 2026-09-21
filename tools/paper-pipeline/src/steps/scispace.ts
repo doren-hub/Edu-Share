@@ -12,19 +12,23 @@ import {
   isolateSciSpaceCardText,
   rawFilesCardPaste,
   filesRowHasTruncatedAuthors,
+  preferExpandedAuthorPaste,
+  replaceYearAuthorLine,
   stripTldrSnippetNumbers,
   titleLooksLikeFilename,
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
-import { arxivIdFromFilename, fetchArxivAbstract } from "../arxiv-abstract.ts";
+import { arxivIdFromFilename, fetchArxivAbstract, fetchArxivAtom, parseArxivAtomAuthors, parseArxivAtomYear } from "../arxiv-abstract.ts";
 import {
   canonicalSciSpaceRecordUrl,
   isSciSpaceRecordUrl,
   pickSciSpaceRecordUrl,
 } from "../scispace-record-url.ts";
 import {
+  filesListNeedsLoadMore,
   filesTabClickAllowed,
+  isFilesListSearchHint,
   looksLikeSciSpaceChatHome,
   looksLikeSciSpaceFilesTable,
 } from "../scispace-files-view.ts";
@@ -267,7 +271,7 @@ async function setFilesSearch(page: Page, folderUrl: string, query: string): Pro
           inputs = Array.from(root.querySelectorAll("input")).filter((inp) => {
             if (!vis(inp)) return false;
             const hint = `${inp.type} ${inp.placeholder} ${inp.getAttribute("aria-label") ?? ""} ${inp.className}`;
-            if (/chat|ask|message|prompt|composer/i.test(hint)) return false;
+            if (/chat|ask|message|prompt|composer|column/i.test(hint)) return false;
             return inp.type === "search" || inp.type === "text" || /search|filter|find|検索|file|folder/i.test(hint);
           });
           if (inputs.length) break;
@@ -294,19 +298,109 @@ async function setFilesSearch(page: Page, folderUrl: string, query: string): Pro
   return true;
 }
 
+async function closeFilesColumnSettings(page: Page): Promise<void> {
+  const heading = page.getByRole("heading", { name: /Column Settings/i }).first();
+  const searchCols = page.getByPlaceholder(/Search columns/i).first();
+  const open =
+    (await heading.isVisible({ timeout: 300 }).catch(() => false)) ||
+    (await searchCols.isVisible({ timeout: 200 }).catch(() => false));
+  if (!open) return;
+  log("SciSpace: Column Settings を閉じます");
+  await page.keyboard.press("Escape").catch(() => undefined);
+  await sleep(250);
+}
+
+async function revealFilesToolbarSearch(page: Page): Promise<void> {
+  const sort = page.getByRole("button", { name: /^Sort$/i }).first();
+  if (!(await sort.isVisible({ timeout: 500 }).catch(() => false))) return;
+  const sortBox = await sort.boundingBox().catch(() => null);
+  const inputs = page.locator("input:visible");
+  const n = await inputs.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const box = await inputs.nth(i).boundingBox().catch(() => null);
+    if (!box) continue;
+    const hint = [
+      (await inputs.nth(i).getAttribute("type").catch(() => "")) || "",
+      (await inputs.nth(i).getAttribute("placeholder").catch(() => "")) || "",
+      (await inputs.nth(i).getAttribute("aria-label").catch(() => "")) || "",
+    ].join(" ");
+    if (/column|chat|composer/i.test(hint)) continue;
+    const nearSort = Boolean(sortBox && Math.abs(box.y - sortBox.y) < 90 && box.x >= sortBox.x - 40);
+    if (nearSort) return;
+  }
+  const opened = await page
+    .evaluate(() => {
+      const vis = (el: Element) => {
+        const s = window.getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return s.visibility !== "hidden" && s.display !== "none" && r.width > 2 && r.height > 2;
+      };
+      const sortBtn = Array.from(document.querySelectorAll("button, [role='button']")).find(
+        (el) => vis(el) && /^Sort$/i.test((el.textContent || "").replace(/\s+/g, " ").trim()),
+      );
+      if (!sortBtn) return "no-sort";
+      const sortBox = sortBtn.getBoundingClientRect();
+      const toolbar = sortBtn.parentElement ?? document.body;
+      const candidates = Array.from(toolbar.querySelectorAll("button, [role='button'], [aria-label]"));
+      const search = candidates.find((el) => {
+        if (!vis(el) || el === sortBtn) return false;
+        const r = el.getBoundingClientRect();
+        if (Math.abs(r.top - sortBox.top) > 24) return false;
+        if (r.left < sortBox.right - 4 || r.left > sortBox.right + 88) return false;
+        const label = `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""} ${(el.textContent || "").trim()}`;
+        if (/column|setting|export|sort|quality|language/i.test(label)) return false;
+        if (/search|検索|filter|find/i.test(label)) return true;
+        return (el.textContent || "").trim() === "" && r.width <= 48 && r.height <= 48;
+      });
+      if (!search) return "no-btn";
+      (search as HTMLElement).click();
+      return "clicked";
+    })
+    .catch(() => "err");
+  if (opened === "clicked") {
+    log("SciSpace: Files の検索欄を開きます");
+    await sleep(400);
+  }
+}
+
+async function loadMoreFilesUntilName(page: Page, filename: string, title = ""): Promise<boolean> {
+  if (await filesNameVisible(page, filename, title)) return true;
+  for (let i = 0; i < 12; i++) {
+    const more = page.getByRole("button", { name: /^Load More$/i }).first();
+    if (!(await more.isVisible({ timeout: 400 }).catch(() => false))) break;
+    log(`SciSpace: Files の Load More を押します (${i + 1})`);
+    await more.click({ timeout: 4_000 }).catch(() => undefined);
+    await sleep(1_100);
+    if (await filesNameVisible(page, filename, title)) return true;
+  }
+  return filesNameVisible(page, filename, title);
+}
+
 async function fillFilesListSearch(page: Page, folderUrl: string, query: string): Promise<boolean> {
+  await closeFilesColumnSettings(page);
+  await revealFilesToolbarSearch(page);
   const sort = page.getByRole("button", { name: /^Sort$/i }).first();
   if (await sort.isVisible({ timeout: 800 }).catch(() => false)) {
     const sortBox = await sort.boundingBox().catch(() => null);
     const inputs = page.locator("input:visible");
     const n = await inputs.count().catch(() => 0);
     for (let i = 0; i < n; i++) {
-      const box = await inputs.nth(i).boundingBox().catch(() => null);
+      const el = inputs.nth(i);
+      const box = await el.boundingBox().catch(() => null);
       if (!box) continue;
+      const hint = [
+        (await el.getAttribute("type").catch(() => "")) || "",
+        (await el.getAttribute("placeholder").catch(() => "")) || "",
+        (await el.getAttribute("aria-label").catch(() => "")) || "",
+      ].join(" ");
+      if (!isFilesListSearchHint(hint) && !/^(search|text)$/i.test(hint.trim().split(/\s+/)[0] ?? "")) {
+        continue;
+      }
+      if (/column/i.test(hint)) continue;
       const nearSort = Boolean(sortBox && Math.abs(box.y - sortBox.y) < 90 && box.x >= sortBox.x - 40);
       const inFilesHeader = box.x > 220 && box.y > 70 && box.y < 320;
       if (!nearSort && !inFilesHeader) continue;
-      await inputs.nth(i).fill(query).catch(() => undefined);
+      await el.fill(query).catch(() => undefined);
       await sleep(900);
       if (await isNotebooksFilesView(page, folderUrl)) return true;
       warn("SciSpace: 一覧検索で Files を出たので戻ります");
@@ -329,32 +423,133 @@ async function filesNameVisible(page: Page, filename: string, title = ""): Promi
   return false;
 }
 
-async function expandFilesRowAuthors(page: Page, filename: string, title = ""): Promise<void> {
+async function filesRowAuthorsExpanded(page: Page, filename: string, title = ""): Promise<boolean> {
   const needles = [filename, filename.replace(/\.pdf$/i, ""), title].filter((s) => s.trim().length >= 4);
-  const clicked = await page
+  return page
     .evaluate((needles: string[]) => {
-      const moreRe = /(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i;
-      const nodes = Array.from(document.querySelectorAll("button, a, span, div, [role='button']"));
-      const hit = nodes.find((el) => {
-        const compact = ((el as HTMLElement).innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-        if (!moreRe.test(compact) || /show less/i.test(compact)) return false;
-        if (compact.length > 160) return false;
-        let cur: HTMLElement | null = el as HTMLElement;
-        for (let i = 0; i < 14 && cur; i++) {
-          const row = (cur.innerText || "").replace(/\s+/g, " ");
-          if (needles.some((n) => n && row.includes(n))) return true;
-          cur = cur.parentElement;
-        }
-        return false;
+      const vis = (el: Element) => {
+        const s = window.getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) !== 0 && r.width > 2 && r.height > 2;
+      };
+      const nodes = Array.from(document.querySelectorAll("a, span, div, p, td, li, h2, h3, button, [role='button']"));
+      const nameEl = nodes.find((el) => {
+        if (!vis(el)) return false;
+        const t = ((el as HTMLElement).innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        return needles.some((n) => n && (t === n || t.endsWith(n) || t.includes(n)));
       }) as HTMLElement | undefined;
-      if (!hit) return false;
-      hit.click();
-      return true;
+      if (!nameEl) return false;
+      let cur: HTMLElement | null = nameEl;
+      for (let i = 0; i < 14 && cur; i++) {
+        const row = (cur.innerText || "").replace(/\s+/g, " ");
+        if (/Show\s*Less/i.test(row) && needles.some((n) => n && row.includes(n))) return true;
+        cur = cur.parentElement;
+      }
+      return false;
     }, needles)
     .catch(() => false);
-  if (!clicked) return;
+}
+
+async function expandFilesRowAuthors(page: Page, filename: string, title = ""): Promise<boolean> {
+  const needles = [filename, filename.replace(/\.pdf$/i, ""), title].filter((s) => s.trim().length >= 4);
+  if (await filesRowAuthorsExpanded(page, filename, title)) return true;
+  const clicked = await page
+    .evaluate((needles: string[]) => {
+      const vis = (el: Element) => {
+        const s = window.getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) !== 0 && r.width > 2 && r.height > 2;
+      };
+      const moreOnly = /^(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\s*$/i;
+      const nodes = Array.from(document.querySelectorAll("a, span, div, p, td, li, h2, h3, button, [role='button']"));
+      const nameHits = nodes.filter((el) => {
+        if (!vis(el)) return false;
+        const t = ((el as HTMLElement).innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        return needles.some((n) => n && (t === n || t.endsWith(n) || t.includes(n))) && t.length < 180;
+      }) as HTMLElement[];
+      nameHits.sort((a, b) => {
+        const ta = ((a.innerText || a.textContent || "").length);
+        const tb = ((b.innerText || b.textContent || "").length);
+        return ta - tb;
+      });
+      const nameEl = nameHits[0];
+      if (!nameEl) return "no-name";
+      let row: HTMLElement | null = nameEl;
+      for (let i = 0; i < 14 && row && row !== document.body; i++) {
+        const t = (row.innerText || "").replace(/\s+/g, " ");
+        if (/\+\s*\d+\s*More\b/i.test(t) || /Show\s*Less/i.test(t)) break;
+        row = row.parentElement;
+      }
+      if (!row) return "no-row";
+      if (/Show\s*Less/i.test(row.innerText || "")) return "already";
+
+      const onlys = Array.from(row.querySelectorAll("button, a, span, div, [role='button']")).filter((el) => {
+        if (!vis(el)) return false;
+        const t = ((el as HTMLElement).innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        return moreOnly.test(t);
+      }) as HTMLElement[];
+      onlys.sort((a, b) => {
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        return ra.width * ra.height - rb.width * rb.height;
+      });
+      if (onlys[0]) {
+        onlys[0].click();
+        return "clicked-el";
+      }
+
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const text = node.textContent || "";
+        const m = text.match(/\+\s*\d+\s*More/i);
+        if (!m || m.index == null) continue;
+        const range = document.createRange();
+        range.setStart(node, m.index);
+        range.setEnd(node, m.index + m[0].length);
+        const rect = range.getBoundingClientRect();
+        if (rect.width < 2 || rect.height < 2) continue;
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) as HTMLElement | null;
+        if (!top) continue;
+        top.click();
+        return "clicked-point";
+      }
+      return "no-ctrl";
+    }, needles)
+    .catch(() => "err");
+
+  if (clicked === "already") return true;
+  let didClick = clicked === "clicked-el" || clicked === "clicked-point";
+  if (!didClick) {
+    const name = page.getByText(filename, { exact: false }).first();
+    const nameBox = await name.boundingBox().catch(() => null);
+    if (nameBox) {
+      const loc = page.getByText(/\+\s*\d+\s*More/i);
+      const n = Math.min(await loc.count().catch(() => 0), 24);
+      for (let i = 0; i < n; i++) {
+        const box = await loc.nth(i).boundingBox().catch(() => null);
+        if (!box) continue;
+        if (Math.abs(box.y + box.height / 2 - (nameBox.y + nameBox.height / 2)) > 72) continue;
+        await loc
+          .nth(i)
+          .click({
+            timeout: 2_000,
+            position: { x: Math.max(4, box.width - 10), y: Math.max(2, Math.min(box.height / 2, box.height - 2)) },
+          })
+          .catch(() => undefined);
+        didClick = true;
+        break;
+      }
+    }
+  }
+  if (!didClick) return false;
   log("SciSpace: 省略著者（+N More）を展開します");
-  await sleep(700);
+  const until = Date.now() + 4_000;
+  while (Date.now() < until) {
+    if (await filesRowAuthorsExpanded(page, filename, title)) return true;
+    await sleep(200);
+  }
+  return filesRowAuthorsExpanded(page, filename, title);
 }
 
 async function scrollFilesForName(page: Page, filename: string, title = ""): Promise<boolean> {
@@ -364,14 +559,16 @@ async function scrollFilesForName(page: Page, filename: string, title = ""): Pro
     await firstPdf.hover().catch(() => undefined);
     await sleep(200);
   }
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 8; i++) {
     if (await filesNameVisible(page, filename, title)) return true;
     await page.mouse.wheel(0, 900);
     await sleep(160);
   }
-  return filesNameVisible(page, filename, title);}
+  return filesNameVisible(page, filename, title);
+}
 
 async function filterFilesList(page: Page, folderUrl: string, filename: string, title = ""): Promise<void> {
+  await closeFilesColumnSettings(page);
   if (!(await isNotebooksFilesView(page, folderUrl))) {
     await restoreFolderFilesTable(page, folderUrl);
   }
@@ -394,7 +591,16 @@ async function filterFilesList(page: Page, folderUrl: string, filename: string, 
   }
   await fillFilesListSearch(page, folderUrl, "");
   await sleep(400);
-  await scrollFilesForName(page, filename, title);}
+  await closeFilesColumnSettings(page);
+  const listing = await pageText(page);
+  if (
+    filesListNeedsLoadMore(listing) ||
+    (await page.getByRole("button", { name: /^Load More$/i }).first().isVisible({ timeout: 400 }).catch(() => false))
+  ) {
+    if (await loadMoreFilesUntilName(page, filename, title)) return;
+  }
+  await scrollFilesForName(page, filename, title);
+}
 
 type FilesCardCandidates = { texts: string[]; dois: string[] };
 
@@ -710,12 +916,24 @@ export async function captureSciSpaceCardMeta(
     log("SciSpace: Files の TL;DR 列をコピーします");
     let filesTldr = "";
     const until = Date.now() + 60_000;
+    let missingNameStreak = 0;
     while (Date.now() < until) {
       if (!(await isNotebooksFilesView(page, folderUrl))) {
         await restoreFolderFilesTable(page, folderUrl);
       }
       if (!(await filesNameVisible(page, filename, state.title))) {
         await filterFilesList(page, folderUrl, filename, state.title);
+        if (!(await filesNameVisible(page, filename, state.title))) {
+          missingNameStreak += 1;
+          if (missingNameStreak >= 2) {
+            warn(`SciSpace: Files に ${filename} が見つからないので TL;DR 待ちを打ち切ります`);
+            break;
+          }
+        } else {
+          missingNameStreak = 0;
+        }
+      } else {
+        missingNameStreak = 0;
       }
       await expandFilesRowAuthors(page, filename, state.title);
       filesTldr = await readFilesRowTldr(page, filename);
@@ -763,6 +981,12 @@ export async function captureSciSpaceCardMeta(
       }
       filesTldr = await readFilesColumnTldr(page, filename);
     }
+    if (!(await filesNameVisible(page, filename, state.title))) {
+      state.lastError = `SciSpace Files に ${filename} が見つかりません`;
+      warn(state.lastError);
+      saveState(state);
+      return;
+    }
     await expandFilesRowAuthors(page, filename, state.title);
     const found = await collectFilesCardCandidates(page, filename, state.title);
     let filesPaste = "";
@@ -785,15 +1009,22 @@ export async function captureSciSpaceCardMeta(
       await expandFilesRowAuthors(page, filename, state.title);
       const again = await collectFilesCardCandidates(page, filename, state.title);
       for (const t of again.texts) {
-        const next = rawFilesCardPaste(t, filename);
+        const next = preferExpandedAuthorPaste(rawFilesCardPaste(t, filename));
         if (next && !filesRowHasTruncatedAuthors(next)) {
           filesPaste = next;
           break;
         }
+        if (next && next.length > filesPaste.length) filesPaste = next;
       }
+      filesPaste = preferExpandedAuthorPaste(filesPaste);
     }
     if (filesRowHasTruncatedAuthors(filesPaste)) {
-      warn("SciSpace: 著者の +N More を展開できなかったので、省略表記のまま貼ります");
+      const filled = await fillTruncatedAuthorsFromArxiv(filesPaste, filename);
+      if (!filesRowHasTruncatedAuthors(filled)) {
+        filesPaste = filled;
+      } else {
+        warn("SciSpace: 著者の +N More を展開できなかったので、省略表記のまま貼ります");
+      }
     }
     applyExtractedCard(state, filename, extractSciSpaceCardMeta(filesPaste, filename), found.dois);
     if (descriptionUsable(filesTldr) || tldrUsable(filesTldr)) {
@@ -838,9 +1069,26 @@ export async function captureSciSpaceCardMeta(
   }
 }
 
+async function fillTruncatedAuthorsFromArxiv(paste: string, filename: string): Promise<string> {
+  const id = arxivIdFromFilename(filename);
+  if (!id) return paste;
+  log(`SciSpace: arXiv の著者一覧で省略を補います (${id})`);
+  const xml = await fetchArxivAtom(id);
+  const authors = parseArxivAtomAuthors(xml);
+  if (authors.length < 2) return paste;
+  const ya = extractSciSpaceCardMeta(paste, filename);
+  const year = ya.publicationYear || parseArxivAtomYear(xml);
+  if (!year) return paste;
+  const sep = (ya.yearAuthorLine.match(/[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]/) ?? ["⋅"])[0]!;
+  const line = `${year}${sep}${authors.join(", ")}`;
+  log(`SciSpace: arXiv 著者 ${authors.length} 名を Files 行に入れます`);
+  return replaceYearAuthorLine(paste, line);
+}
+
 function sciSpaceMetaStillIncomplete(state: PaperState, filename: string): boolean {
   if (titleLooksLikeFilename(state.title, filename)) return true;
   if (!state.filesPaste.trim()) return true;
+  if (filesRowHasTruncatedAuthors(state.filesPaste)) return true;
   return false;
 }
 

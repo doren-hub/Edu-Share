@@ -8,7 +8,11 @@ import {
   normalizeFilesRowText,
   rawFilesCardPaste,
   needsRawFilesPaste,
+  needsSciSpaceCardRecapture,
   filesRowHasTruncatedAuthors,
+  isFilesAuthorMoreLabel,
+  preferExpandedAuthorPaste,
+  replaceYearAuthorLine,
   eduShareSciSpaceMetadataPaste,
   pickBestSciSpaceCardText,
   sciSpaceExtractionLooksLikeChrome,
@@ -136,6 +140,76 @@ test("eduShareSciSpaceMetadataPaste: TL;DR とアップロード行だけなら�
   assert.equal(eduShareSciSpaceMetadataPaste(row, "42c1add0da9312ee.pdf"), "");
 });
 
+test("extractSciSpaceCardMeta: 雑誌名が arXiv 以外でも掲載に残す", () => {
+  const row = [
+    "Eternal86.pdf",
+    "ETERNALLY EXISTING SELF-REPRODUCING CHAOTIC INFLATIONARY UNIVERSE",
+    "1986\u22c5A.D. Linde",
+    "PHYSICS LETTERS B",
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+  ].join("\n");
+  const card = extractSciSpaceCardMeta(row, "Eternal86.pdf");
+  assert.equal(card.venue, "PHYSICS LETTERS B");
+  assert.match(eduShareSciSpaceMetadataPaste(row, "Eternal86.pdf"), /PHYSICS LETTERS B/);
+  const commun = [
+    "1103899181.pdf",
+    "Particle Creation by Black Holes",
+    "1975\u22c5S. W. Hawking",
+    "Commun. math. Phys.",
+    "PDF UPLOAD",
+    "Uploaded on 18 Sep 2026",
+  ].join("\n");
+  assert.equal(extractSciSpaceCardMeta(commun, "1103899181.pdf").venue, "Commun. math. Phys.");
+  const everett = [
+    "everett1957.pdf",
+    '"Relative State" Formulation of Quantum Mechanics',
+    "1957\u22c5Hugh Everett, III",
+    "Reviews of Modern Physics",
+    "PDF UPLOAD",
+    "Uploaded on 20 Sep 2026",
+  ].join("\n");
+  assert.match(eduShareSciSpaceMetadataPaste(everett, "everett1957.pdf"), /Reviews of Modern Physics/);
+});
+
+test("needsSciSpaceCardRecapture: 省略著者・年著者無しは取り直す", () => {
+  assert.equal(
+    needsSciSpaceCardRecapture({
+      filename: "2601.15300v1.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/z",
+      filesPaste:
+        "2601.15300v1.pdf\nA title\n2026⋅Weiwei Wang, Jiyong Min...+1 More\narXiv\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+    }),
+    true,
+  );
+  assert.equal(
+    needsSciSpaceCardRecapture({
+      filename: "2307.09009v3.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/x",
+      filesPaste:
+        "2307.09009v3.pdf\nThe First Law of Robotics Revisited: A New Perspective on Autonomous Systems\n2024⋅DOI⋅A. K. Dewdney\nnull\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+    }),
+    false,
+  );
+  assert.equal(
+    needsSciSpaceCardRecapture({
+      filename: "0709.2257v2.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/g",
+      filesPaste: "Uber das Gravitationsfeld eines Massenpunktes\narXiv:0709.2257v2 [gr-qc] 29 Sep 2007",
+    }),
+    true,
+  );
+  assert.equal(
+    needsSciSpaceCardRecapture({
+      filename: "Eternal86.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/e",
+      filesPaste:
+        "Eternal86.pdf\nETERNALLY EXISTING SELF-REPRODUCING CHAOTIC INFLATIONARY UNIVERSE\n1986⋅A.D. Linde\nPHYSICS LETTERS B\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+    }),
+    false,
+  );
+});
+
 test("needsRawFilesPaste: タイトル・著者だけの貼り付けは取り直す", () => {
   assert.equal(
     needsRawFilesPaste({
@@ -179,11 +253,41 @@ test("filesRowHasTruncatedAuthors: +N More と展開後", () => {
     true,
   );
   assert.equal(
+    filesRowHasTruncatedAuthors("2026⋅Jingxuan Chen, Mohammad Taher Pilehvar...+1 More"),
+    true,
+  );
+  assert.equal(
     filesRowHasTruncatedAuthors(
       "2025 · Vardhan Dongre, Ryan A. Rossi, Viet Dac Lai, David Seunghyun Yoon, Dilek Hakkani-Tür, Trung Bui Show Less",
     ),
     false,
   );
+  assert.equal(
+    filesRowHasTruncatedAuthors(
+      "2026⋅Jingxuan Chen, Mohammad Taher Pilehvar...+1 More\n2026⋅Jingxuan Chen, Mohammad Taher Pilehvar, Third Author Show Less",
+    ),
+    false,
+  );
+  assert.equal(isFilesAuthorMoreLabel("+1 More"), true);
+  assert.equal(isFilesAuthorMoreLabel("...+4 More"), true);
+  assert.equal(isFilesAuthorMoreLabel("2026⋅Jingxuan Chen...+1 More"), false);
+  const mixed = [
+    "2603.22608v2.pdf",
+    "Understanding LLM Performance Degradation",
+    "2026⋅Jingxuan Chen, Mohammad Taher Pilehvar...+1 More",
+    "2026⋅Jingxuan Chen, Mohammad Taher Pilehvar, Third Author Show Less",
+    "arXiv",
+  ].join("\n");
+  const preferred = preferExpandedAuthorPaste(mixed);
+  assert.match(preferred, /Third Author Show Less/);
+  assert.doesNotMatch(preferred, /\+1 More/);
+  const filled = replaceYearAuthorLine(
+    "2603.22608v2.pdf\nUnderstanding LLM Performance Degradation\n2026⋅Jingxuan Chen, Mohammad Taher Pilehvar...+1 More\narXiv",
+    "2026⋅Jingxuan Chen, Mohammad Taher Pilehvar, Third Author",
+  );
+  assert.match(filled, /Third Author/);
+  assert.doesNotMatch(filled, /\+1 More/);
+  assert.equal(filesRowHasTruncatedAuthors(filled), false);
 });
 
 test("Files カードは TL;DR のあと隣のタイトルを混ぜない", () => {

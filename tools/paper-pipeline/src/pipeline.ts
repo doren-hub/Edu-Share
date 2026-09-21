@@ -44,7 +44,7 @@ import { runNotebookLm } from "./steps/notebooklm.ts";
 import { captureSciSpaceCardMeta, captureSciSpaceRecordUrl, runSciSpaceMeta, runSciSpaceUpload } from "./steps/scispace.ts";
 import {
   descriptionUsable,
-  needsRawFilesPaste,
+  needsSciSpaceCardRecapture,
   sciSpaceTldrLooksLikeChrome,
   sciSpaceTitleLooksLikeChrome,
   tldrUsable,
@@ -196,7 +196,7 @@ export async function repairSciSpaceCardMeta(
     const state = loadState(paperDir, fallback);
     if (cfg.onlyFilename && state.filename !== cfg.onlyFilename) continue;
     if (!state.eduShareTestUrl || !state.filename) continue;
-    if (!needsRawFilesPaste(state)) continue;
+    if (!needsSciSpaceCardRecapture(state)) continue;
     log(`--- SciSpace メタ補修 ${state.filename} ---`);
     const before = {
       title: state.title,
@@ -263,7 +263,11 @@ export async function repairSciSpaceCardMeta(
         `${state.filename}: メタを更新 title=${state.title.slice(0, 80)}`,
       );
       await applySciSpaceMetaToPaperPage(page, { paperDir, state });
-      state.lastError = "";
+      if (needsSciSpaceCardRecapture(state) && /Files に .+ が見つかりません/.test(state.lastError)) {
+        log(`${state.filename}: Files に無いので後回しにします`);
+      } else {
+        state.lastError = "";
+      }
       if (isSciSpaceRecordUrl(state.scispaceUrl)) {
         markCompleted(state, "sci-meta");
       }
@@ -346,8 +350,12 @@ export async function processOnePaper(
     } catch {
       /* 無ければ続行 */
     }
-  } else if (hasDoneMarker(item.paperDir) && needsRawFilesPaste(state)) {
-    log(`${item.filename}: 完了済みだが Files 行が未貼り付けなので SciSpace メタを取り直します`);
+  } else if (hasDoneMarker(item.paperDir) && needsSciSpaceCardRecapture(state)) {
+    if (/Files に .+ が見つかりません/.test(state.lastError)) {
+      log(`${item.filename}: Files に無いので SciSpace メタ取り直しは後回しにします`);
+      return "skipped";
+    }
+    log(`${item.filename}: 完了済みだが SciSpace メタが不足なので取り直します`);
     clearStage(state, "done");
     saveState(state);
     try {

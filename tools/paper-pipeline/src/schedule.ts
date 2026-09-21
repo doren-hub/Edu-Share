@@ -28,6 +28,14 @@ function byInboxOrder(a: SchedJob, b: SchedJob): number {
   return a.id.localeCompare(b.id, "en");
 }
 
+function byHarvestOrder(a: SchedJob, b: SchedJob): number {
+  const bySource = Number(a.source === "inbox") - Number(b.source === "inbox");
+  if (bySource !== 0) return bySource;
+  const byAttempts = (a.attempts ?? 0) - (b.attempts ?? 0);
+  if (byAttempts !== 0) return byAttempts;
+  return byInboxOrder(a, b);
+}
+
 function byReadyOrder(a: SchedJob, b: SchedJob): number {
   const byAttempts = (a.attempts ?? 0) - (b.attempts ?? 0);
   if (byAttempts !== 0) return byAttempts;
@@ -54,7 +62,7 @@ export function pickNextJob(
           j.harvestable &&
           (j.status === "ready" || (j.status === "waiting" && j.nextCheckAt <= now)),
       )
-      .sort(byReadyOrder);
+      .sort(byHarvestOrder);
     if (runnable[0]) return { kind: "run", id: runnable[0].id };
     const waitingHarvest = jobs.filter((j) => j.harvestable && j.status === "waiting");
     if (waitingHarvest[0]) {

@@ -13,7 +13,8 @@ function isDummySciSpacePaste(paste: string, filename: string): boolean {
   const t = paste.trim().toLowerCase();
   if (!t) return true;
   const stem = filename.replace(/\.pdf$/i, "").toLowerCase();
-  return t === stem || t === filename.toLowerCase();
+  if (t === stem || t === filename.toLowerCase()) return true;
+  return /\b(?:a\.\s*k\.\s*dewdney|a\.\s*einstein|albert einstein)\b/i.test(paste);
 }
 
 async function uploadFormReady(page: Page): Promise<boolean> {

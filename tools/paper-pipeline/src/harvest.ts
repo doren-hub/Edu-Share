@@ -1,6 +1,6 @@
 import { isCompleted, studioKickoffBegun, studioKickoffSettled, type PaperState, type StudioStageId } from "./state.ts";
 import { missingStudioStages, studioArtifactReady } from "./studio-select.ts";
-import { rawFilesCardPaste } from "./scispace-card.ts";
+import { needsSciSpaceCardRecapture, rawFilesCardPaste } from "./scispace-card.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
 
 export function hasAnyStudioArtifact(
@@ -29,6 +29,7 @@ export function hasHarvestableWork(
   if (needsLocalVideoFile(state)) return true;
   if (!isCompleted(state, "sci-upload")) return true;
   if (!isCompleted(state, "sci-meta") || !rawFilesCardPaste(state.filesPaste, state.filename)) return true;
+  if (needsSciSpaceCardRecapture(state)) return true;
   if (hasAnyStudioArtifact(state, selected)) {
     if (!isCompleted(state, "edu-upload")) return true;
     if (missingEduUploads(state, selected).length > 0) return true;
@@ -56,6 +57,7 @@ export function shouldSkipNotebookVisit(
   if (!isCompleted(state, "sci-meta") || !rawFilesCardPaste(state.filesPaste, state.filename)) {
     return true;
   }
+  if (needsSciSpaceCardRecapture(state)) return true;
   if (opts.skipKickoff && hasAnyStudioArtifact(state, selected)) return true;
   if (selected.length > 0 && selected.every((s) => isCompleted(state, s))) return true;
   return false;

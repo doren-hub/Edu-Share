@@ -25,6 +25,20 @@ export function looksLikeSciSpaceFilesTable(text: string): boolean {
   return false;
 }
 
+/** 先頭 15 件だけ出して Load More がある Files 表。スクロールでは残りが出ない */
+export function filesListNeedsLoadMore(text: string): boolean {
+  const t = text.replace(/\s+/g, " ");
+  if (!/\bLoad More\b/i.test(t)) return false;
+  return /Showing\s+\d+\s+of\s+\d+\s+files/i.test(t);
+}
+
+/** Files ツールバーのファイル名検索。Column Settings / チャット欄は使わない */
+export function isFilesListSearchHint(hint: string): boolean {
+  const h = hint.replace(/\s+/g, " ");
+  if (/chat|ask|message|prompt|composer|column/i.test(h)) return false;
+  return /search|filter|find|検索|file|folder/i.test(h);
+}
+
 export function looksLikeSciSpaceChatHome(text: string): boolean {
   const t = text.replace(/\s+/g, " ");
   const hits = [/\bNew Chat\b/i, /\bHome\b/, /\bAgent Gallery\b/i, /\bChat with PDF\b/i].filter((r) =>

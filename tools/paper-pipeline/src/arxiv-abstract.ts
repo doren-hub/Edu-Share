@@ -20,11 +20,35 @@ export function parseArxivAtomSummary(xml: string): string {
     .trim();
 }
 
-export async function fetchArxivAbstract(id: string): Promise<string> {
+export function parseArxivAtomAuthors(xml: string): string[] {
+  const names: string[] = [];
+  const re = /<author>\s*<name>([\s\S]*?)<\/name>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml))) {
+    const n = m[1]
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (n) names.push(n);
+  }
+  return names;
+}
+
+export function parseArxivAtomYear(xml: string): string {
+  const m = xml.match(/<published>(\d{4})/i) || xml.match(/<updated>(\d{4})/i);
+  return m?.[1] ?? "";
+}
+
+export async function fetchArxivAtom(id: string): Promise<string> {
   const key = id.trim();
   if (!key) return "";
   const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(key)}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) return "";
-  return parseArxivAtomSummary(await res.text());
+  return res.text();
+}
+
+export async function fetchArxivAbstract(id: string): Promise<string> {
+  return parseArxivAtomSummary(await fetchArxivAtom(id));
 }
