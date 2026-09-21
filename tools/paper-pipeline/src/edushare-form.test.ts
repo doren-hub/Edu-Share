@@ -7,6 +7,7 @@ import {
   fallbackAuthorName,
   isAuthorRequiredError,
   isDummyAuthorValue,
+  notebookLmMaterialBlockIsRegistered,
   pickAuthorSelectValue,
 } from "./edushare-form.ts";
 
@@ -29,6 +30,18 @@ test("pickAuthorSelectValue: デモの A. Einstein は使わない", () => {
 test("isDummyAuthorValue: デモの Dewdney も実著者ではない", () => {
   assert.equal(isDummyAuthorValue("A. K. Dewdney"), true);
   assert.equal(isDummyAuthorValue("Vardhan Dongre"), false);
+});
+
+test("notebookLmMaterialBlockIsRegistered: 未登録を登録済みと取り違えない", () => {
+  assert.equal(
+    notebookLmMaterialBlockIsRegistered("スライド（PDF）\n未登録"),
+    false,
+  );
+  assert.equal(
+    notebookLmMaterialBlockIsRegistered("動画（MP4）\n登録済み"),
+    true,
+  );
+  assert.equal(notebookLmMaterialBlockIsRegistered("スライド（PDF）"), false);
 });
 
 test("choosePaperAuthor: デモ著者は捨てて Files 貼り付けの先頭名を入れる", () => {

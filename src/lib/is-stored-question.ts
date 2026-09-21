@@ -1,4 +1,4 @@
-import type { StoredQuestion } from "@/lib/types";
+import type { StoredQuestion } from "./types.ts";
 
 export function isStoredQuestionLike(x: unknown): x is StoredQuestion {
   if (!x || typeof x !== "object") return false;

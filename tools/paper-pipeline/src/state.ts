@@ -184,6 +184,11 @@ export function markEduUploaded(state: PaperState, stage: StudioStageId): void {
   saveState(state);
 }
 
+export function unmarkEduUploaded(state: PaperState, stage: StudioStageId): void {
+  state.eduUploaded = (state.eduUploaded ?? []).filter((s) => s !== stage);
+  saveState(state);
+}
+
 export function unmarkStudioStarted(state: PaperState, stage: StageId): void {
   state.studioStarted = (state.studioStarted ?? []).filter((s) => s !== stage);
   if (state.waitingFor === stage) {

@@ -2,7 +2,14 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
-import { TEST_BROWSE_COLUMNS, TEST_BROWSE_PAPER_LIST_COLUMNS } from "@/lib/test-browse-select";
+import { reconcileExistingPaperMaterialFiles } from "@/lib/reconcile-paper-material-files";
+import {
+  TEST_BROWSE_PAPER_LIST_COLUMNS,
+  TEST_BROWSE_PAPER_LIST_COLUMNS_MIN,
+  TEST_BROWSE_PAPER_LIST_COLUMNS_NO_FILENAME,
+} from "@/lib/test-browse-select";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "論文｜EduShare",
@@ -35,18 +42,20 @@ export default async function PaperTestsPage() {
   ]);
 
   let tests = listed.data;
-  if (listed.error && /pdf_filename/i.test(listed.error.message ?? "")) {
+  if (listed.error && /pdf_filename|pdf_storage_path/i.test(listed.error.message ?? "")) {
     const retry = await supabase
       .from("tests")
       .select(
-        `${TEST_BROWSE_COLUMNS},notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_questions_json,notebooklm_vocab_questions_json`,
+        /pdf_storage_path/i.test(listed.error.message ?? "")
+          ? TEST_BROWSE_PAPER_LIST_COLUMNS_MIN
+          : TEST_BROWSE_PAPER_LIST_COLUMNS_NO_FILENAME,
       )
       .eq("document_type", "paper")
       .order("created_at", { ascending: false });
     tests = retry.data;
   }
 
-  const list = tests ?? [];
+  const list = await reconcileExistingPaperMaterialFiles(tests ?? []);
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;
 
   return (
@@ -57,8 +66,7 @@ export default async function PaperTestsPage() {
           論文一覧
         </h1>
         <p className="max-w-2xl text-sm text-zinc-600">
-          論文PDFから取り込んだテストだけを表示しています。未登録の NotebookLM
-          資料（クイズCSV・単語帳CSV・スライド・動画）があるときだけ、カードに「未」バッジが付きます。業界・著者・発表年とテキスト検索で絞り込み、並び順も選べます。
+          論文PDFから取り込んだテストだけを表示しています。クイズCSV・単語帳CSV・スライド・動画が揃ったときだけ「受験可能」になります。足りない資料は「未」バッジで示します。業界・著者・発表年とテキスト検索で絞り込み、並び順も選べます。
           {!globalEmpty ? (
             <span className="text-zinc-500">（全 {paperCount ?? list.length} 件）</span>
           ) : null}

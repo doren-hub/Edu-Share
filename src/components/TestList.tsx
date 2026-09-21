@@ -6,6 +6,10 @@ import { PaperAuthorsCollapsible } from "@/components/PaperAuthorsCollapsible";
 import { PaperDoiInteractive } from "@/components/PaperDoiInteractive";
 import { paperAuthorNamesForDisplay } from "@/lib/paper-authors";
 import { normalizePaperDoiDisplay } from "@/lib/paper-doi";
+import {
+  paperNotebookLmMaterialsComplete,
+  paperNotebookLmMissingLabels,
+} from "@/lib/paper-notebooklm-materials";
 
 export type TestRow = {
   id: string;
@@ -34,39 +38,8 @@ export type TestRow = {
   notebooklm_vocab_questions_json?: unknown;
 };
 
-function notebookLmJsonPoolNonEmpty(raw: unknown): boolean {
-  return Array.isArray(raw) && raw.length > 0;
-}
-
-/** 論文一覧の4資料（クイズCSV・単語帳CSV・スライド・動画）がすべて揃っているか */
-function paperNotebookLmMaterialsComplete(t: TestRow): boolean {
-  return (
-    notebookLmJsonPoolNonEmpty(t.notebooklm_questions_json) &&
-    notebookLmJsonPoolNonEmpty(t.notebooklm_vocab_questions_json) &&
-    Boolean(t.notebooklm_slide_pdf_storage_path?.trim()) &&
-    Boolean(t.notebooklm_video_mp4_storage_path?.trim())
-  );
-}
-
 function PaperMaterialHints({ t, compact }: { t: TestRow; compact: boolean }) {
-  const missing = [
-    {
-      label: "クイズCSV",
-      show: !notebookLmJsonPoolNonEmpty(t.notebooklm_questions_json),
-    },
-    {
-      label: "単語帳CSV",
-      show: !notebookLmJsonPoolNonEmpty(t.notebooklm_vocab_questions_json),
-    },
-    {
-      label: "スライド",
-      show: !t.notebooklm_slide_pdf_storage_path?.trim(),
-    },
-    {
-      label: "動画",
-      show: !t.notebooklm_video_mp4_storage_path?.trim(),
-    },
-  ].filter((x) => x.show);
+  const missing = paperNotebookLmMissingLabels(t);
 
   if (missing.length === 0) return null;
 
@@ -191,10 +164,19 @@ export function TestList({
       {tests.map((t) => {
         const statusReadyOk =
           t.processing_status === "ready" && !t.processing_error;
+        const isPaper = (t.document_type ?? "past_exam") === "paper";
+        const paperMaterialsComplete = paperNotebookLmMaterialsComplete(t);
         const statusBadgeBlue =
-          showPaperMaterialHints &&
-          statusReadyOk &&
-          paperNotebookLmMaterialsComplete(t);
+          statusReadyOk && isPaper && paperMaterialsComplete;
+        const showHints = showPaperMaterialHints || isPaper;
+        const statusLabel = (() => {
+          if (t.processing_status === "ready" && t.processing_error) {
+            return "テキスト未抽出";
+          }
+          if (t.processing_status !== "ready") return t.processing_status;
+          if (isPaper && !paperMaterialsComplete) return "準備中";
+          return "受験可能";
+        })();
         return (
         <li key={t.id}>
           <Link
@@ -265,11 +247,11 @@ export function TestList({
                             : "rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700"
                       }
                     >
-                      {t.processing_status === "ready" ? "受験可能" : t.processing_status}
+                      {statusLabel}
                     </span>
                   )}
                 </div>
-                {showPaperMaterialHints ? (
+                {showHints ? (
                   <PaperMaterialHints t={t} compact={compact} />
                 ) : null}
               </div>

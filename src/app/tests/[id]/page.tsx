@@ -21,6 +21,7 @@ import {
 } from "@/components/TestMaterialCarousel";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { reconcileExistingPaperMaterialFiles } from "@/lib/reconcile-paper-material-files";
 import { canStartNewAutoQuiz, countDocumentChunksForTest } from "@/lib/document-chunks";
 import type { QuestionPerformanceRow } from "@/lib/question-performance";
 import {
@@ -96,17 +97,19 @@ async function loadTestDetailRow(
     if (second.data) {
       return {
         ...second.data,
-        paper_doi: null as string | null,
-        paper_venue: null as string | null,
-        paper_authors: null as unknown,
-        notebooklm_slide_pdf_storage_path: null as string | null,
-        notebooklm_video_mp4_storage_path: null as string | null,
-        notebooklm_notebook_url: null as string | null,
-        scispace_project_url: null as string | null,
-        pdf_filename: null as string | null,
-        quiz_source: "pdf" as string,
-        notebooklm_questions_json: null as unknown,
-        notebooklm_vocab_questions_json: null as unknown,
+        notebooklm_slide_pdf_storage_path:
+          (second.data as { notebooklm_slide_pdf_storage_path?: string | null })
+            .notebooklm_slide_pdf_storage_path ?? null,
+        notebooklm_video_mp4_storage_path:
+          (second.data as { notebooklm_video_mp4_storage_path?: string | null })
+            .notebooklm_video_mp4_storage_path ?? null,
+        notebooklm_notebook_url:
+          (second.data as { notebooklm_notebook_url?: string | null }).notebooklm_notebook_url ??
+          null,
+        scispace_project_url:
+          (second.data as { scispace_project_url?: string | null }).scispace_project_url ?? null,
+        pdf_filename:
+          (second.data as { pdf_filename?: string | null }).pdf_filename ?? null,
       };
     }
   }
@@ -356,12 +359,21 @@ export default async function TestDetailPage({
     performanceRowsCsv,
   );
 
-  const slidePath =
+  const slidePathRaw =
     (test as { notebooklm_slide_pdf_storage_path?: string | null }).notebooklm_slide_pdf_storage_path?.trim() ??
     "";
-  const videoPath =
+  const videoPathRaw =
     (test as { notebooklm_video_mp4_storage_path?: string | null }).notebooklm_video_mp4_storage_path?.trim() ??
     "";
+  const [materialFiles] = await reconcileExistingPaperMaterialFiles([
+    {
+      id: test.id,
+      notebooklm_slide_pdf_storage_path: slidePathRaw || null,
+      notebooklm_video_mp4_storage_path: videoPathRaw || null,
+    },
+  ]);
+  const slidePath = materialFiles?.notebooklm_slide_pdf_storage_path?.trim() ?? "";
+  const videoPath = materialFiles?.notebooklm_video_mp4_storage_path?.trim() ?? "";
   const notebookLmNotebookUrl =
     (test as { notebooklm_notebook_url?: string | null }).notebooklm_notebook_url?.trim() ?? "";
   const scispaceProjectUrl =
