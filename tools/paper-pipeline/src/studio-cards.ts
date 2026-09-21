@@ -87,6 +87,14 @@ export function isSlideDeckCardText(text: string): boolean {
   return /件のソース/.test(t) && STUDIO_RELATIVE_TIME.test(t);
 }
 
+/** カスタマイズの「プレゼンターのスライド」。詳細カードや両方を含む親は除外 */
+export function isPresenterSlideFormatText(text: string): boolean {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (/詳細なスライド|Detailed Deck|Detailed slides?/i.test(t)) return false;
+  return /プレゼンターのスライド|Presenter Slides|Presenter'?s slides/i.test(t);
+}
+
 /** 既存スライドや生成中があれば、もう一枚作らない */
 export function shouldKickoffSlides(texts: string[]): boolean {
   const joined = texts.join("\n");
