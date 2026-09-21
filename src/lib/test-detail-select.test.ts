@@ -7,11 +7,11 @@ import {
   withOptionalMaterialFields,
 } from "./test-detail-select.ts";
 
-test("詳細 SELECT は pdf_filename を外しても URL 列を残す", () => {
-  const withoutFilename = TEST_DETAIL_SELECT_VARIANTS[1];
-  assert.match(withoutFilename, /notebooklm_notebook_url/);
-  assert.match(withoutFilename, /scispace_project_url/);
-  assert.doesNotMatch(withoutFilename, /pdf_filename/);
+test("詳細 SELECT の先頭は pdf_filename 無しで URL 列を残す", () => {
+  const first = TEST_DETAIL_SELECT_VARIANTS[0];
+  assert.match(first, /notebooklm_notebook_url/);
+  assert.match(first, /scispace_project_url/);
+  assert.doesNotMatch(first, /pdf_filename/);
 });
 
 test("looksLikeMissingColumnError: pdf_filename 欠落で次の SELECT へ進む", () => {

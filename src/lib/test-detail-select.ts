@@ -3,10 +3,10 @@
 export const TEST_DETAIL_BASE_SELECT =
   "id,title,description,source_name,processing_status,processing_error,created_at,document_type,exam_department,exam_subject,exam_period,industry,publication_year,paper_doi,paper_venue,paper_authors,uploaded_by,quiz_source,notebooklm_questions_json,notebooklm_vocab_questions_json";
 
-/** pdf_filename が無い DB でも Notebook / SciSpace URL は落とさない */
+/** pdf_filename が無い DB でも Notebook / SciSpace URL は落とさない。先頭は現行スキーマで成功する列順 */
 export const TEST_DETAIL_SELECT_VARIANTS = [
-  `${TEST_DETAIL_BASE_SELECT},notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_notebook_url,scispace_project_url,pdf_filename,pdf_storage_path`,
   `${TEST_DETAIL_BASE_SELECT},notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_notebook_url,scispace_project_url,pdf_storage_path`,
+  `${TEST_DETAIL_BASE_SELECT},notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_notebook_url,scispace_project_url,pdf_filename,pdf_storage_path`,
   `${TEST_DETAIL_BASE_SELECT},notebooklm_slide_pdf_storage_path,notebooklm_video_mp4_storage_path,notebooklm_notebook_url,scispace_project_url`,
   `${TEST_DETAIL_BASE_SELECT},notebooklm_notebook_url,scispace_project_url`,
   TEST_DETAIL_BASE_SELECT,

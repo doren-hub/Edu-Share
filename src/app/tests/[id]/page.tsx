@@ -67,6 +67,12 @@ import {
 export const dynamic = "force-dynamic";
 
 async function overlayLinkColumns(row: Record<string, unknown>, id: string) {
+  if (
+    Object.prototype.hasOwnProperty.call(row, "notebooklm_notebook_url") &&
+    Object.prototype.hasOwnProperty.call(row, "scispace_project_url")
+  ) {
+    return row;
+  }
   try {
     const admin = createAdminClient();
     const extra = await admin
@@ -92,12 +98,12 @@ async function overlayLinkColumns(row: Record<string, unknown>, id: string) {
 async function loadTestDetailRow(
   supabase: Awaited<ReturnType<typeof createClient>>,
   id: string,
-) {
+): Promise<Record<string, unknown> | null> {
   let row: Record<string, unknown> | null = null;
   for (const cols of TEST_DETAIL_SELECT_VARIANTS) {
     const res = await supabase.from("tests").select(cols).eq("id", id).single();
     if (res.data) {
-      row = res.data as Record<string, unknown>;
+      row = res.data as unknown as Record<string, unknown>;
       break;
     }
     if (!res.error || !looksLikeMissingColumnError(res.error.message ?? "")) {
@@ -110,32 +116,61 @@ async function loadTestDetailRow(
 
 const MATERIAL_SIGN_TTL_SEC = 3600;
 
+type TestDetailRow = {
+  id: string;
+  title: string;
+  description: string | null;
+  source_name: string;
+  processing_status: string;
+  processing_error: string | null;
+  document_type?: string | null;
+  uploaded_by?: string | null;
+  exam_department?: string | null;
+  exam_subject?: string | null;
+  exam_period?: string | null;
+  industry?: string | null;
+  publication_year?: string | null;
+  paper_authors?: unknown;
+  paper_venue?: string | null;
+  paper_doi?: string | null;
+  pdf_filename?: string | null;
+  pdf_storage_path?: string | null;
+  notebooklm_questions_json?: unknown;
+  notebooklm_vocab_questions_json?: unknown;
+  notebooklm_slide_pdf_storage_path?: string | null;
+  notebooklm_video_mp4_storage_path?: string | null;
+  notebooklm_notebook_url?: string | null;
+  scispace_project_url?: string | null;
+};
+
 async function signMaterialUrls(
   slidePath: string | null | undefined,
   videoPath: string | null | undefined,
-): Promise<{ slideSigned: string | null; videoSigned: string | null }> {
-  const sp = slidePath?.trim();
-  const vp = videoPath?.trim();
-  if (!sp && !vp) return { slideSigned: null, videoSigned: null };
+  pdfPath?: string | null,
+): Promise<{
+  slideSigned: string | null;
+  videoSigned: string | null;
+  pdfSigned: string | null;
+}> {
+  const signOne = async (
+    admin: ReturnType<typeof createAdminClient>,
+    path: string | null | undefined,
+  ) => {
+    const p = path?.trim();
+    if (!p) return null;
+    const { data } = await admin.storage.from("pdfs").createSignedUrl(p, MATERIAL_SIGN_TTL_SEC);
+    return data?.signedUrl ?? null;
+  };
   try {
     const admin = createAdminClient();
-    let slideSigned: string | null = null;
-    let videoSigned: string | null = null;
-    if (sp) {
-      const { data } = await admin.storage
-        .from("pdfs")
-        .createSignedUrl(sp, MATERIAL_SIGN_TTL_SEC);
-      slideSigned = data?.signedUrl ?? null;
-    }
-    if (vp) {
-      const { data } = await admin.storage
-        .from("pdfs")
-        .createSignedUrl(vp, MATERIAL_SIGN_TTL_SEC);
-      videoSigned = data?.signedUrl ?? null;
-    }
-    return { slideSigned, videoSigned };
+    const [slideSigned, videoSigned, pdfSigned] = await Promise.all([
+      signOne(admin, slidePath),
+      signOne(admin, videoPath),
+      signOne(admin, pdfPath),
+    ]);
+    return { slideSigned, videoSigned, pdfSigned };
   } catch {
-    return { slideSigned: null, videoSigned: null };
+    return { slideSigned: null, videoSigned: null, pdfSigned: null };
   }
 }
 
@@ -146,20 +181,84 @@ export default async function TestDetailPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
-  const test = await loadTestDetailRow(supabase, id);
+  const [loaded, authRes] = await Promise.all([
+    loadTestDetailRow(supabase, id),
+    supabase.auth.getUser(),
+  ]);
 
-  if (!test) notFound();
+  if (!loaded) notFound();
+  const test = loaded as TestDetailRow;
 
+  const user = authRes.data.user;
   const isPaper = (test.document_type ?? "past_exam") === "paper";
+  const ready = test.processing_status === "ready";
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const slidePathRaw =
+    (test as { notebooklm_slide_pdf_storage_path?: string | null })
+      .notebooklm_slide_pdf_storage_path?.trim() ?? "";
+  const videoPathRaw =
+    (test as { notebooklm_video_mp4_storage_path?: string | null })
+      .notebooklm_video_mp4_storage_path?.trim() ?? "";
+  const pdfPathRaw =
+    (test as { pdf_storage_path?: string | null }).pdf_storage_path?.trim() ?? "";
 
-  const chunkCount =
-    test.processing_status === "ready"
-      ? await countDocumentChunksForTest(test.id)
-      : 0;
+  type SessionRow = {
+    id: string;
+    created_at: string;
+    score_total: number | null;
+    answers_json: unknown;
+    questions_json: unknown;
+    notebook_lm_csv_pool?: string | null;
+  };
+
+  const [
+    chunkCount,
+    sessRes,
+    perfRes,
+    thesisRes,
+    materialPack,
+  ] = await Promise.all([
+    ready ? countDocumentChunksForTest(test.id) : Promise.resolve(0),
+    user && ready
+      ? supabase
+          .from("quiz_sessions")
+          .select(
+            "id, created_at, score_total, answers_json, questions_json, notebook_lm_csv_pool",
+          )
+          .eq("test_id", test.id)
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(30)
+      : Promise.resolve({ data: [] as SessionRow[] }),
+    user && ready
+      ? supabase
+          .from("question_performance")
+          .select(
+            "question_key, prompt_excerpt, question_type, attempts, correct_count, updated_at",
+          )
+          .eq("test_id", test.id)
+          .eq("user_id", user.id)
+      : Promise.resolve({ data: [] as QuestionPerformanceRow[], error: null }),
+    user && ready && isPaper
+      ? loadThesisCoverageForUser({ testId: test.id, userId: user.id })
+      : Promise.resolve(null),
+    (async () => {
+      const [materialFiles] = await reconcileExistingPaperMaterialFiles([
+        {
+          id: test.id,
+          uploaded_by: (test as { uploaded_by?: string | null }).uploaded_by ?? null,
+          pdf_storage_path: pdfPathRaw || null,
+          notebooklm_slide_pdf_storage_path: slidePathRaw || null,
+          notebooklm_video_mp4_storage_path: videoPathRaw || null,
+        },
+      ]);
+      const slidePath = materialFiles?.notebooklm_slide_pdf_storage_path?.trim() ?? "";
+      const videoPath = materialFiles?.notebooklm_video_mp4_storage_path?.trim() ?? "";
+      const urls = await signMaterialUrls(slidePath, videoPath, pdfPathRaw);
+      return { slidePath, videoPath, ...urls };
+    })(),
+  ]);
+
   const canPdfStart = canStartNewAutoQuiz({
     chunkCount,
     processingError: test.processing_error,
@@ -193,61 +292,29 @@ export default async function TestDetailPage({
         : ""
     : "";
 
-  let mySessions: Array<{
-    id: string;
-    created_at: string;
-    score_total: number | null;
-    answers_json: unknown;
-    questions_json: unknown;
-    notebook_lm_csv_pool?: string | null;
-  }> = [];
-  if (user && test.processing_status === "ready") {
-    const { data: sessRows } = await supabase
-      .from("quiz_sessions")
-      .select(
-        "id, created_at, score_total, answers_json, questions_json, notebook_lm_csv_pool",
-      )
-      .eq("test_id", test.id)
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(30);
-    mySessions = sessRows ?? [];
-  }
+  const mySessions: SessionRow[] = (sessRes.data ?? []) as SessionRow[];
 
   let performanceRows: QuestionPerformanceRow[] = [];
   let performanceLoadError: string | null = null;
-  if (user && test.processing_status === "ready") {
-    const { data: perfData, error: perfErr } = await supabase
-      .from("question_performance")
-      .select(
-        "question_key, prompt_excerpt, question_type, attempts, correct_count, updated_at",
-      )
-      .eq("test_id", test.id)
-      .eq("user_id", user.id);
-    if (perfErr) {
-      performanceLoadError = perfErr.message;
-      console.error(
-        "[test detail] question_performance select failed",
-        perfErr.code,
-        perfErr.message,
-      );
-    } else if (Array.isArray(perfData)) {
-      performanceRows = perfData as QuestionPerformanceRow[];
-    }
+  if ("error" in perfRes && perfRes.error) {
+    performanceLoadError = perfRes.error.message;
+    console.error(
+      "[test detail] question_performance select failed",
+      perfRes.error.code,
+      perfRes.error.message,
+    );
+  } else if (Array.isArray(perfRes.data)) {
+    performanceRows = perfRes.data as QuestionPerformanceRow[];
   }
 
   let thesisCoverageStats: ThesisChunkCoverageResult | null = null;
   let thesisCoverageError: string | null = null;
-  if (user && test.processing_status === "ready" && isPaper) {
-    const cov = await loadThesisCoverageForUser({
-      testId: test.id,
-      userId: user.id,
-    });
-    if (cov.ok) {
-      thesisCoverageStats = cov.stats;
+  if (thesisRes) {
+    if (thesisRes.ok) {
+      thesisCoverageStats = thesisRes.stats;
     } else {
-      thesisCoverageError = cov.error;
-      console.error("[test detail] thesis coverage failed", cov.error);
+      thesisCoverageError = thesisRes.error;
+      console.error("[test detail] thesis coverage failed", thesisRes.error);
     }
   }
 
@@ -351,32 +418,18 @@ export default async function TestDetailPage({
     performanceRowsCsv,
   );
 
-  const slidePathRaw =
-    (test as { notebooklm_slide_pdf_storage_path?: string | null }).notebooklm_slide_pdf_storage_path?.trim() ??
-    "";
-  const videoPathRaw =
-    (test as { notebooklm_video_mp4_storage_path?: string | null }).notebooklm_video_mp4_storage_path?.trim() ??
-    "";
-  const [materialFiles] = await reconcileExistingPaperMaterialFiles([
-    {
-      id: test.id,
-      uploaded_by: (test as { uploaded_by?: string | null }).uploaded_by ?? null,
-      pdf_storage_path: (test as { pdf_storage_path?: string | null }).pdf_storage_path ?? null,
-      notebooklm_slide_pdf_storage_path: slidePathRaw || null,
-      notebooklm_video_mp4_storage_path: videoPathRaw || null,
-    },
-  ]);
-  const slidePath = materialFiles?.notebooklm_slide_pdf_storage_path?.trim() ?? "";
-  const videoPath = materialFiles?.notebooklm_video_mp4_storage_path?.trim() ?? "";
+  const { slidePath, videoPath, slideSigned, videoSigned, pdfSigned } = materialPack;
   const notebookLmNotebookUrl =
     (test as { notebooklm_notebook_url?: string | null }).notebooklm_notebook_url?.trim() ?? "";
   const scispaceProjectUrl =
     (test as { scispace_project_url?: string | null }).scispace_project_url?.trim() ?? "";
 
-  const { slideSigned, videoSigned } = await signMaterialUrls(slidePath, videoPath);
-
   const materialPanes: MaterialCarouselPane[] = [
-    { key: "pdf", label: "元PDF", pdfSrc: `/api/tests/${test.id}/pdf` },
+    {
+      key: "pdf",
+      label: "元PDF",
+      pdfSrc: pdfSigned || `/api/tests/${test.id}/pdf`,
+    },
   ];
   if (slidePath && slideSigned) {
     materialPanes.push({
