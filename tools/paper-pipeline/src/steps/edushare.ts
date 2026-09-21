@@ -4,8 +4,8 @@ import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isOtherIndustryValue, pickPaperIndustry, type ExistingPaper } from "../match.ts";
 import { stripTldrSnippetNumbers, descriptionUsable, eduShareSciSpaceMetadataPaste } from "../scispace-card.ts";
-import { choosePaperAuthor, isAuthorRequiredError } from "../edushare-form.ts";
-import { isCompleted, markCompleted, markEduUploaded, type PaperState, type StudioStageId } from "../state.ts";
+import { choosePaperAuthor, isAuthorRequiredError, notebookLmMaterialBlockIsRegistered } from "../edushare-form.ts";
+import { isCompleted, markCompleted, markEduUploaded, unmarkEduUploaded, type PaperState, type StudioStageId } from "../state.ts";
 import { fillIfVisible, saveFailureShot } from "../ui.ts";
 import { videoArtifactPath, videoFileReady, ensureUploadableVideo, VIDEO_UPLOAD_MAX_BYTES } from "../video-file.ts";
 
@@ -681,13 +681,42 @@ async function importNotebookLmCsv(
   throw new Error(`${buttonName} の完了表示が出ませんでした`);
 }
 
+async function paperHasRegisteredMaterial(
+  page: Page,
+  heading: "スライド（PDF）" | "動画（MP4）",
+): Promise<boolean> {
+  const formBlock = page.locator("p").filter({ hasText: heading, exact: true }).locator("xpath=..");
+  const formText = (await formBlock.first().innerText().catch(() => "")).trim();
+  if (!formText) return false;
+  return notebookLmMaterialBlockIsRegistered(formText);
+}
+
+async function paperHasRegisteredSlide(page: Page): Promise<boolean> {
+  return paperHasRegisteredMaterial(page, "スライド（PDF）");
+}
+
 async function paperHasRegisteredVideo(page: Page): Promise<boolean> {
-  const formBlock = page.locator("p").filter({ hasText: /^動画（MP4）$/ }).locator("xpath=..");
-  const formText = (await formBlock.first().innerText().catch(() => "")).replace(/\s+/g, " ");
-  if (/未登録/.test(formText) && !/登録済み/.test(formText)) return false;
-  if (/登録済み/.test(formText)) return true;
-  const body = await page.locator("body").innerText().catch(() => "");
-  return /動画（MP4）/.test(body);
+  return paperHasRegisteredMaterial(page, "動画（MP4）");
+}
+
+async function postEduShareSlideApi(page: Page, testId: string, dest: string): Promise<void> {
+  const origin = new URL(page.url()).origin;
+  const buf = readFileSync(dest);
+  log(`Edu Share: スライド API で登録します（${buf.length} bytes）`);
+  const res = await page.request.post(`${origin}/api/tests/${testId}/material/slide`, {
+    multipart: {
+      file: {
+        name: dest.split("/").pop() || "slides.pdf",
+        mimeType: "application/pdf",
+        buffer: buf,
+      },
+    },
+    timeout: 120_000,
+  });
+  if (!res.ok()) {
+    const text = (await res.text().catch(() => "")).slice(0, 400);
+    throw new Error(`Edu Share スライド API ${res.status()}: ${text || "(空)"}`);
+  }
 }
 
 async function postEduShareVideoApi(page: Page, testId: string, dest: string): Promise<void> {
@@ -708,6 +737,56 @@ async function postEduShareVideoApi(page: Page, testId: string, dest: string): P
     const text = (await res.text().catch(() => "")).slice(0, 400);
     throw new Error(`Edu Share 動画 API ${res.status()}: ${text || "(空)"}`);
   }
+}
+
+export async function attachEduShareSlide(page: Page, state: PaperState): Promise<boolean> {
+  if (!state.eduShareTestUrl || !state.slidePdfPath || !existsSync(state.slidePdfPath)) return false;
+  const dest = state.slidePdfPath;
+  const onPaper =
+    /\/tests\//.test(page.url()) &&
+    Boolean(state.eduShareTestId) &&
+    page.url().includes(state.eduShareTestId);
+  if (!onPaper) {
+    await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
+  }
+  await expandSection(page, "NotebookLM");
+  if (await paperHasRegisteredSlide(page)) {
+    log("Edu Share: スライド PDF は登録済み");
+    return true;
+  }
+
+  if (state.eduShareTestId) {
+    try {
+      await postEduShareSlideApi(page, state.eduShareTestId, dest);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expandSection(page, "NotebookLM");
+      if (await paperHasRegisteredSlide(page)) {
+        log(`Edu Share: スライド PDF を登録しました（${statSync(dest).size} bytes）`);
+        return true;
+      }
+      warn("Edu Share: スライド API は成功したが枠が見えません。ファイル入力で再試行します");
+    } catch (e) {
+      warn(`Edu Share スライド API: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  const input = page.locator("p").filter({ hasText: "スライド（PDF）", exact: true }).locator("xpath=..").locator(
+    'input[type="file"]',
+  );
+  if (!(await input.count())) {
+    throw new Error("Edu Share のスライド file input がありません");
+  }
+  log(`Edu Share: スライドファイル入力で登録します（${statSync(dest).size} bytes）`);
+  await input.setInputFiles(dest);
+  const ok = await page.getByText("スライド用 PDF を登録しました。").waitFor({ timeout: 120_000 }).then(() => true).catch(
+    () => false,
+  );
+  if (!ok) {
+    const msg = (await page.getByRole("alert").innerText().catch(() => "")).trim();
+    throw new Error(`Edu Share のスライド登録が完了しませんでした${msg ? `: ${msg}` : "（完了表示なし）"}`);
+  }
+  log(`Edu Share: スライド PDF を登録しました（${statSync(dest).size} bytes）`);
+  return true;
 }
 
 export async function attachEduShareVideo(page: Page, state: PaperState): Promise<boolean> {
@@ -837,12 +916,7 @@ export async function runEduShareMaterials(
       markEduUploaded(state, "nlm-flashcards");
     }
 
-    if (needSlides && state.slidePdfPath) {
-      await expandSection(page, "NotebookLM");
-      await page.locator('input[type="file"][accept*="pdf"]').last().setInputFiles(state.slidePdfPath);
-      await page.getByText("スライド用 PDF を登録しました。").waitFor({ timeout: 120_000 }).catch(
-        () => warn("スライド登録の完了表示がありません"),
-      );
+    if (needSlides && (await attachEduShareSlide(page, state))) {
       markEduUploaded(state, "nlm-slides");
     }
     if (needVideo && (await attachEduShareVideo(page, state))) {
@@ -930,17 +1004,21 @@ export async function verifyEduSharePaper(
     const hasPdf = /元PDF|新しいタブで開く/.test(body);
     if (!hasPdf) throw new Error("元 PDF の表示が見つかりません");
 
-    const hasSlide = /スライド（PDF）/.test(body);
-    const hasVideo = /動画（MP4）/.test(body);
-    if (!hasSlide) warn("スライド枠が見つかりません");
-    if (!hasVideo) warn("動画枠が見つかりません");
-    const videoUploaded = (state.eduUploaded ?? []).includes("nlm-video");
-    if (state.completed.includes("nlm-video") && !hasVideo && !skipVideo && !videoUploaded) {
+    const skipSlides = opts.studioSkip?.includes("nlm-slides") ?? skipSlidesVideo;
+    const hasSlide = await paperHasRegisteredSlide(page);
+    const hasVideo = await paperHasRegisteredVideo(page);
+    const slidesLocal = Boolean(state.slidePdfPath && existsSync(state.slidePdfPath));
+    const videoLocal = videoFileReady(state.paperDir, state.videoMp4Path);
+    if (!hasSlide && slidesLocal && !skipSlides) {
+      unmarkEduUploaded(state, "nlm-slides");
+      throw new Error("Edu Share にスライド（PDF）がありません");
+    }
+    if (!hasVideo && videoLocal && !skipVideo) {
+      unmarkEduUploaded(state, "nlm-video");
       throw new Error("Edu Share に動画（MP4）がありません");
     }
-    if (!hasVideo && videoUploaded) {
-      warn("動画枠は見えないが、登録済みとして確認を続けます");
-    }
+    if (!hasSlide) warn("スライドは未登録です");
+    if (!hasVideo) warn("動画は未登録です");
 
     if (!skipQuiz) {
       if (!(await quizStart.first().isVisible({ timeout: 0 }).catch(() => false))) {

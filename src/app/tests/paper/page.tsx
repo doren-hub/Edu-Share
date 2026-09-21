@@ -57,8 +57,7 @@ export default async function PaperTestsPage() {
           論文一覧
         </h1>
         <p className="max-w-2xl text-sm text-zinc-600">
-          論文PDFから取り込んだテストだけを表示しています。未登録の NotebookLM
-          資料（クイズCSV・単語帳CSV・スライド・動画）があるときだけ、カードに「未」バッジが付きます。業界・著者・発表年とテキスト検索で絞り込み、並び順も選べます。
+          論文PDFから取り込んだテストだけを表示しています。クイズCSV・単語帳CSV・スライド・動画が揃ったときだけ「受験可能」になります。足りない資料は「未」バッジで示します。業界・著者・発表年とテキスト検索で絞り込み、並び順も選べます。
           {!globalEmpty ? (
             <span className="text-zinc-500">（全 {paperCount ?? list.length} 件）</span>
           ) : null}

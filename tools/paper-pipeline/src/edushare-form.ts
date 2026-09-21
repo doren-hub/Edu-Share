@@ -10,6 +10,14 @@ export function isDummyAuthorValue(v: string): boolean {
   return DUMMY_AUTHOR_VALUES.has(v.trim());
 }
 
+/** NotebookLM スライド／動画ブロックの「登録済み / 未登録」 */
+export function notebookLmMaterialBlockIsRegistered(blockText: string): boolean {
+  const t = blockText.replace(/\s+/g, " ").trim();
+  if (/登録済み/.test(t)) return true;
+  if (/未登録/.test(t)) return false;
+  return false;
+}
+
 function authorNamesMatch(a: string, b: string): boolean {
   const x = a.trim().toLowerCase();
   const y = b.trim().toLowerCase();

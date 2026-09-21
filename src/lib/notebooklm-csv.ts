@@ -1,5 +1,5 @@
-import type { StoredQuestion } from "@/lib/types";
-import { isStoredQuestionLike } from "@/lib/is-stored-question";
+import type { StoredQuestion } from "./types.ts";
+import { isStoredQuestionLike } from "./is-stored-question.ts";
 
 function parseCsvLine(line: string): string[] {
   const out: string[] = [];
