@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair, existingWorkPapersExcept } from "./inbox.ts";
+import { listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair, existingWorkPapersExcept } from "./inbox.ts";
+import { STUDIO_STAGES } from "./state.ts";
 
 test("listInboxPdfs: 変更日が古い順（名前順ではない）", () => {
   const root = mkdtempSync(join(tmpdir(), "paper-inbox-"));
@@ -99,6 +100,55 @@ test("listRawPasteRepairPdfs: Files 行が無い／加工済みの完了論文�
     assert.deepEqual(
       listRawPasteRepairPdfs(work).map((p) => p.filename),
       ["2307.09009v3.pdf"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("listEduMaterialRepairPdfs: 完了済みでも未反映の生成物がある論文だけ", () => {
+  const root = mkdtempSync(join(tmpdir(), "paper-edu-repair-"));
+  const work = join(root, "work");
+  const pending = join(work, "2601.18699v2");
+  const done = join(work, "2603.03111v1");
+  mkdirSync(pending, { recursive: true });
+  mkdirSync(done, { recursive: true });
+  try {
+    writeFileSync(join(pending, "2601.18699v2.pdf"), "pdf");
+    writeFileSync(join(pending, "quiz.csv"), "question,answer\nWhat is it?,A longer fact.\n");
+    writeFileSync(join(pending, "DONE"), "ok\n");
+    writeFileSync(
+      join(pending, "state.json"),
+      JSON.stringify({
+        filename: "2601.18699v2.pdf",
+        inboxPdfPath: join(pending, "2601.18699v2.pdf"),
+        paperDir: pending,
+        completed: ["nlm-quiz", "edu-upload", "done"],
+        eduShareTestId: "aaa",
+        eduShareTestUrl: "http://localhost:3000/tests/aaa",
+        quizCsvPath: join(pending, "quiz.csv"),
+        eduUploaded: [],
+      }),
+    );
+    writeFileSync(join(done, "2603.03111v1.pdf"), "pdf");
+    writeFileSync(join(done, "quiz.csv"), "question,answer\nWhat is it?,A longer fact.\n");
+    writeFileSync(join(done, "DONE"), "ok\n");
+    writeFileSync(
+      join(done, "state.json"),
+      JSON.stringify({
+        filename: "2603.03111v1.pdf",
+        inboxPdfPath: join(done, "2603.03111v1.pdf"),
+        paperDir: done,
+        completed: ["nlm-quiz", "edu-upload", "done"],
+        eduShareTestId: "bbb",
+        eduShareTestUrl: "http://localhost:3000/tests/bbb",
+        quizCsvPath: join(done, "quiz.csv"),
+        eduUploaded: ["nlm-quiz"],
+      }),
+    );
+    assert.deepEqual(
+      listEduMaterialRepairPdfs(work, STUDIO_STAGES).map((p) => p.filename),
+      ["2601.18699v2.pdf"],
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

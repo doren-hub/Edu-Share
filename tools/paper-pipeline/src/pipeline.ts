@@ -12,9 +12,11 @@ import {
   type InboxPdf,
 } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
+import { NeedVisibleChromeError } from "./human.ts";
 import { matchesExistingPaper, titleUsableForExistingMatch, type ExistingPaper } from "./match.ts";
 import { isSciSpaceRecordUrl } from "./scispace-record-url.ts";
 import {
+  bindEduSharePaper,
   clearStage,
   doneMarkerPath,
   emptyState,
@@ -108,8 +110,9 @@ function adoptExistingEduSharePaper(
   if (!hit.id) return false;
   const url = hit.url || `${baseUrl.replace(/\/$/, "")}/tests/${hit.id}`;
   log(`Edu Share に既存なので論文ページへつなぎます: ${hit.filename || hit.title || hit.id}`);
-  state.eduShareTestId = hit.id;
-  state.eduShareTestUrl = url;
+  if (bindEduSharePaper(state, hit.id, url)) {
+    log(`Edu Share の論文 ID が変わったので資料を載せ直します`);
+  }
   state.skippedAlreadyUploaded = false;
   state.lastError = "";
   if (!state.completed.includes("edu-upload")) markCompleted(state, "edu-upload");
@@ -160,6 +163,7 @@ export async function repairSciSpaceRecordLinks(
       await saveSciSpaceUrlOnEduShare(page, state);
       updated.push(state.filename);
     } catch (e) {
+      if (e instanceof NeedVisibleChromeError) throw e;
       const msg = firstLine(e);
       state.lastError = msg;
       saveState(state);
@@ -274,6 +278,7 @@ export async function repairSciSpaceCardMeta(
       saveState(state);
       updated.push(state.filename);
     } catch (e) {
+      if (e instanceof NeedVisibleChromeError) throw e;
       const msg = firstLine(e);
       state.lastError = msg;
       saveState(state);
@@ -357,6 +362,16 @@ export async function processOnePaper(
     }
     log(`${item.filename}: 完了済みだが SciSpace メタが不足なので取り直します`);
     clearStage(state, "done");
+    saveState(state);
+    try {
+      unlinkSync(doneMarkerPath(item.paperDir));
+    } catch {
+      /* 無ければ続行 */
+    }
+  } else if (hasDoneMarker(item.paperDir) && missingEduUploads(state, selected).length > 0) {
+    log(`${item.filename}: 完了済みだが Edu Share に未反映の生成物があるので載せます`);
+    clearStage(state, "done");
+    clearStage(state, "verify");
     saveState(state);
     try {
       unlinkSync(doneMarkerPath(item.paperDir));
@@ -540,6 +555,7 @@ export async function processOnePaper(
     log(`完了: ${item.filename} → ${item.paperDir}`);
     return "done";
   } catch (e) {
+    if (e instanceof NeedVisibleChromeError) throw e;
     if (e instanceof GenerationWaitingError) {
       state.waitingFor = e.stage;
       if (!state.generationStartedAt) state.generationStartedAt = new Date().toISOString();

@@ -10,6 +10,7 @@ import {
   needsRawFilesPaste,
   needsSciSpaceCardRecapture,
   filesRowHasTruncatedAuthors,
+  isDummySciSpacePaste,
   isFilesAuthorMoreLabel,
   preferExpandedAuthorPaste,
   replaceYearAuthorLine,
@@ -89,6 +90,16 @@ test("rawFilesCardPaste: Files 行をタイトル・著者だけに加工しな�
   assert.match(paste, /The paper investigates how the instruction-following/);
   assert.equal(paste, row);
   assert.notEqual(extractSciSpaceCardMeta(row, "2307.09009v3.pdf").paste, paste);
+});
+
+test("eduShareSciSpaceMetadataPaste: Dewdney のデモカードは空にする", () => {
+  const dummy = [
+    "nihms690699.pdf",
+    "The First Law of Robotics Revisited: A New Perspective on Autonomous Systems",
+    "2024⋅DOI⋅A. K. Dewdney",
+    "null",
+  ].join("\n");
+  assert.equal(eduShareSciSpaceMetadataPaste(dummy, "nihms690699.pdf"), "");
 });
 
 test("eduShareSciSpaceMetadataPaste: タイトル・年⋅著者・掲載の3行はそのまま（Show Less も残す）", () => {
@@ -189,7 +200,16 @@ test("needsSciSpaceCardRecapture: 省略著者・年著者無しは取り直す"
       filesPaste:
         "2307.09009v3.pdf\nThe First Law of Robotics Revisited: A New Perspective on Autonomous Systems\n2024⋅DOI⋅A. K. Dewdney\nnull\nPDF UPLOAD\nUploaded on 20 Sep 2026",
     }),
-    false,
+    true,
+  );
+  assert.equal(
+    needsSciSpaceCardRecapture({
+      filename: "nihms690699.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/n",
+      filesPaste:
+        "nihms690699.pdf\nThe First Law of Robotics Revisited: A New Perspective on Autonomous Systems\n2024⋅DOI⋅A. K. Dewdney\nnull\nPDF UPLOAD\nUploaded on 21 Sep 2026",
+    }),
+    true,
   );
   assert.equal(
     needsSciSpaceCardRecapture({
@@ -307,6 +327,23 @@ test("Files カードは TL;DR のあと隣のタイトルを混ぜない", () =
   assert.doesNotMatch(m.title, /First Law of Robotics/);
   assert.match(m.authors, /Lingjiao Chen/);
   assert.doesNotMatch(m.paste, /Dewdney/);
+});
+
+test("rawFilesCardPaste: Dewdney のデモカードは捨てる", () => {
+  const dummy = [
+    "nihms690699.pdf",
+    "The First Law of Robotics Revisited: A New Perspective on Autonomous Systems",
+    "2024⋅DOI⋅A. K. Dewdney",
+    "null",
+    "PDF UPLOAD",
+    "Uploaded on 21 Sep 2026",
+  ].join("\n");
+  assert.equal(rawFilesCardPaste(dummy, "nihms690699.pdf"), "");
+  assert.equal(isDummySciSpacePaste(dummy), true);
+  assert.equal(
+    isDummySciSpacePaste("How is ChatGPT's behavior changing over time?\n2023 · Lingjiao Chen"),
+    false,
+  );
 });
 
 test("Files 行が1行でもタイトル・年著者・arXiv を貼り付け用に分ける", () => {

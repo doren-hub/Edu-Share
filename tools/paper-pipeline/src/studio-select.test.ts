@@ -60,6 +60,11 @@ test("parseArgv: --generate は繰り返しとカンマ区切り", () => {
   assert.deepEqual(a.generate, ["slides", "quiz", "video"]);
 });
 
+test("parseArgv: --newest-first", () => {
+  assert.equal(parseArgv(["--newest-first"]).newestFirst, true);
+  assert.equal(parseArgv([]).newestFirst, undefined);
+});
+
 test("listWorkPdfs: --only で作業フォルダの PDF を拾う", () => {
   const root = mkdtempSync(join(tmpdir(), "paper-work-only-"));
   const work = join(root, "work");

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { needsLocalVideoFile, videoFileReady, ensureUploadableVideo, isRealVideoFile, VIDEO_UPLOAD_MAX_BYTES } from "./video-file.ts";
+import { needsLocalVideoFile, videoFileReady, ensureUploadableVideo, isRealVideoFile, isMp4FtypBuffer, isLikelyThumbUrl, rankVideoArtifactUrls, VIDEO_UPLOAD_MAX_BYTES } from "./video-file.ts";
 
 function fakeMp4(size: number): Buffer {
   const b = Buffer.alloc(size, 1);
@@ -76,4 +76,27 @@ test("ensureUploadableVideo: 上限以下はそのまま返す", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("isMp4FtypBuffer: PDF と ZIP は弾く", () => {
+  const mp4 = Buffer.alloc(12, 0);
+  mp4.write("ftyp", 4);
+  assert.equal(isMp4FtypBuffer(mp4), true);
+  assert.equal(isMp4FtypBuffer(Buffer.from("%PDF-1.4....")), false);
+  assert.equal(isMp4FtypBuffer(Buffer.from("PK\u0003\u0004xxxxxx")), false);
+  assert.equal(isMp4FtypBuffer(Buffer.from("short")), false);
+});
+
+test("rankVideoArtifactUrls: サムネを後回しにし googleusercontent を残す", () => {
+  const thumb = "https://lh3.googleusercontent.com/a=s96-c";
+  const media = "https://lh3.googleusercontent.com/video-bytes";
+  const dl = "https://contribution.usercontent.google.com/download?c=abc";
+  const fonts = "https://fonts.googleapis.com/css";
+  const ranked = rankVideoArtifactUrls([thumb, fonts, media, dl]);
+  assert.equal(ranked[0], dl);
+  assert.ok(ranked.includes(media));
+  assert.equal(ranked.includes(thumb), false);
+  assert.equal(ranked.includes(fonts), false);
+  assert.equal(isLikelyThumbUrl(thumb), true);
+  assert.equal(isLikelyThumbUrl(media), false);
 });

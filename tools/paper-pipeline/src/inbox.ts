@@ -14,6 +14,7 @@ import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { doneMarkerPath, emptyState, loadState, type PaperState, type StudioStageId } from "./state.ts";
 import { missingStudioStages } from "./studio-select.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
+import { missingEduUploads } from "./harvest.ts";
 
 export type InboxPdf = {
   filename: string;
@@ -197,6 +198,26 @@ export function listRawPasteRepairPdfs(workDir: string, onlyFilename = ""): Inbo
     const { state } = loadWorkPaper(workDir, name);
     if (onlyFilename && state.filename !== onlyFilename) continue;
     if (!needsSciSpaceCardRecapture(state)) continue;
+    const absPath = workPdfPath(state);
+    if (!absPath) continue;
+    out.push(toInboxPdf(state, absPath));
+  }
+  return out.sort((a, b) => a.filename.localeCompare(b.filename, "en"));
+}
+
+/** 完了済みでも、work にある生成物が Edu Share に未反映なら載せ直す */
+export function listEduMaterialRepairPdfs(
+  workDir: string,
+  selected: readonly StudioStageId[],
+  onlyFilename = "",
+): InboxPdf[] {
+  if (selected.length === 0) return [];
+  const out: InboxPdf[] = [];
+  for (const name of listWorkDirs(workDir)) {
+    const { state } = loadWorkPaper(workDir, name);
+    if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (!hasDoneMarker(state.paperDir) && !state.eduShareTestId) continue;
+    if (missingEduUploads(state, selected).length === 0) continue;
     const absPath = workPdfPath(state);
     if (!absPath) continue;
     out.push(toInboxPdf(state, absPath));

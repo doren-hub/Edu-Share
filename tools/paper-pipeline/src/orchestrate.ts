@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts";
 import { PACKAGE_ROOT } from "./env.ts";
-import { hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair, type InboxPdf } from "./inbox.ts";
+import { hasDoneMarker, listEduMaterialRepairPdfs, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair, type InboxPdf } from "./inbox.ts";
 import { error as logError, log, warn } from "./log.ts";
 import { pickNextJob, type SchedJob, type SchedStatus } from "./schedule.ts";
 import {
@@ -15,7 +15,7 @@ import {
   type PaperState,
   type StudioStageId,
 } from "./state.ts";
-import { hasHarvestableWork } from "./harvest.ts";
+import { hasHarvestableWork, missingEduUploads } from "./harvest.ts";
 import { currentNotebookQuotaPause, EXIT_QUOTA, waitUntilNotebookQuotaAllows } from "./notebook-quota.ts";
 import { EXIT_WAITING, recheckDelayMs } from "./waiting.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
@@ -104,7 +104,11 @@ function initialStatus(
   const kickoffSettled = studioKickoffSettled(state, skip);
   const harvestable = hasHarvestableWork(state, selected);
   if (hasDoneMarker(item.paperDir)) {
-    if (needsLocalVideoFile(state) || needsSciSpaceCardRecapture(state)) {
+    if (
+      needsLocalVideoFile(state) ||
+      needsSciSpaceCardRecapture(state) ||
+      missingEduUploads(state, selected).length > 0
+    ) {
       return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: true };
     }
     return { status: "done", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: false };
@@ -136,7 +140,10 @@ function orchHelp(): string {
   そのあいだは SciSpace 掲載・メタ、できている生成物の Edu Share 登録を先に進めます。
 
   npm start
+  npm start -- --headless
   npm run worker -- --only paper.pdf
+
+  --headless はウィンドウなし。ログインや追加確認のときだけ画面を出します。
 `;
 }
 
@@ -155,6 +162,7 @@ async function main(): Promise<void> {
   const extras = [
     ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
     ...listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename),
+    ...listEduMaterialRepairPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename),
     ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
     ...(cfg.studioGenerateExplicit
       ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
@@ -165,7 +173,9 @@ async function main(): Promise<void> {
     log(`入力ディレクトリに ${cfg.onlyFilename} はありません`);
   }
   log(
-    `オーケストレータ: 入力 ${items.length} 件（Studio ${formatStudioGenerateJa(cfg.studioGenerate)}）`,
+    `オーケストレータ: 入力 ${items.length} 件（Studio ${formatStudioGenerateJa(cfg.studioGenerate)} / ${
+      cfg.headed ? "画面付き" : "ヘッドレス"
+    }）`,
   );
 
   const skip = studioSkip(cfg);
@@ -175,7 +185,7 @@ async function main(): Promise<void> {
     const init = initialStatus(item, skip, cfg.studioGenerate);
     return {
       id: item.filename,
-      mtime: mtimeMs(item.absPath),
+      mtime: cfg.newestFirst ? -mtimeMs(item.absPath) : mtimeMs(item.absPath),
       status: init.status,
       nextCheckAt: init.nextCheckAt,
       attempts: 0,
@@ -222,6 +232,7 @@ async function main(): Promise<void> {
     if (cfg.studioGenerateExplicit) {
       args.push("--generate", formatStudioGenerateArg(cfg.studioGenerate));
     }
+    if (cfg.newestFirst) args.push("--newest-first");
     if (cfg.fromStage && cfg.onlyFilename === track.item.filename && !track.fromUsed) {
       args.push("--from", cfg.fromStage);
       track.fromUsed = true;
