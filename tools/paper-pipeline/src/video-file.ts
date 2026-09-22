@@ -32,17 +32,102 @@ export function isLikelyThumbUrl(url: string): boolean {
   return false;
 }
 
-/** LIST_ARTIFACTS の URL から動画らしき順に並べる。拡張子無しの googleusercontent も含める。 */
+/** スライド PDF / ZIP。gArtLc の /download は動画ではなくこちらが多い */
+export function isLikelyNonVideoArtifactUrl(url: string): boolean {
+  if (/\.pdf(\?|$)/i.test(url)) return true;
+  if (/\.(?:zip|pptx?)(\?|$)/i.test(url)) return true;
+  if (/\/export/i.test(url) && !/video|mp4/i.test(url)) return true;
+  return false;
+}
+
+export function looksLikeVideoUrl(url: string): boolean {
+  return /\.mp4(\?|$)|mime=video|video\/mp4|googlevideo\.com|videoplayback/i.test(url);
+}
+
+export function videoRangeStart(url: string): number {
+  const m = /[?&]range=(\d+)/i.exec(url);
+  return m ? Number(m[1]) : 0;
+}
+
+/** range / rn を除いたストリーム識別。音声と映像は別 URL になる */
+export function videoStreamKey(url: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.delete("range");
+    u.searchParams.delete("rn");
+    u.searchParams.delete("rbuf");
+    return u.toString();
+  } catch {
+    return url.replace(/[?&](?:range|rn|rbuf)=[^&]*/gi, "");
+  }
+}
+
+/** googlevideo の DASH 断片（ftyp 初期 + moof）をストリームごとに range 順へ結合する */
+export function assembleVideoFragments(frags: { url: string; buf: Buffer }[]): Buffer | null {
+  if (!frags.length) return null;
+  const groups = new Map<string, { url: string; buf: Buffer }[]>();
+  for (const f of frags) {
+    const k = videoStreamKey(f.url);
+    const list = groups.get(k) ?? [];
+    list.push(f);
+    groups.set(k, list);
+  }
+
+  const assembled: { buf: Buffer; videoMime: boolean }[] = [];
+  for (const [key, list] of groups) {
+    const byRange = new Map<number, Buffer>();
+    for (const f of list) {
+      const r = videoRangeStart(f.url);
+      const prev = byRange.get(r);
+      if (!prev || f.buf.length > prev.length) byRange.set(r, f.buf);
+    }
+    const buf = Buffer.concat([...byRange.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]));
+    assembled.push({ buf, videoMime: /mime=video/i.test(key) });
+  }
+
+  const ok = assembled
+    .filter((a) => a.buf.length >= VIDEO_MIN_BYTES && isMp4FtypBuffer(a.buf.subarray(0, 12)))
+    .sort((a, b) => {
+      if (a.videoMime !== b.videoMime) return a.videoMime ? -1 : 1;
+      return b.buf.length - a.buf.length;
+    });
+  if (ok[0]) return ok[0].buf;
+
+  const single = [...frags].sort((a, b) => b.buf.length - a.buf.length)[0];
+  if (single && single.buf.length >= VIDEO_MIN_BYTES && isMp4FtypBuffer(single.buf.subarray(0, 12))) {
+    return single.buf;
+  }
+  return null;
+}
+
+/** LIST_ARTIFACTS の生テキストで、URL の近くに動画の手がかりがあるもの */
+export function extractVideoHintedUrls(raw: string, urls: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const u of urls) {
+    if (isLikelyThumbUrl(u) || isLikelyNonVideoArtifactUrl(u)) continue;
+    const i = raw.indexOf(u);
+    const ctx = i >= 0 ? raw.slice(Math.max(0, i - 160), i + Math.min(u.length, 80) + 80) : "";
+    if (looksLikeVideoUrl(u) || /video\/mp4|\.mp4|VIDEO_OVERVIEW|ARTIFACT_TYPE_VIDEO|mime=video/i.test(ctx)) {
+      if (seen.has(u)) continue;
+      seen.add(u);
+      out.push(u);
+    }
+  }
+  return out;
+}
+
+/** LIST_ARTIFACTS / ネットワークの URL から動画らしき順。スライドの /download は後回し。 */
 export function rankVideoArtifactUrls(urls: string[]): string[] {
-  const videoNamed = urls.filter((u) => /\.mp4(\?|$)|mime=video|video\/mp4/i.test(u));
-  const downloads = urls.filter(
-    (u) => /usercontent\.google\.com\/download/i.test(u) || /\.mp4(\?|$)/i.test(u),
-  );
-  const media = urls.filter((u) => /googleusercontent\.com/i.test(u) && !isLikelyThumbUrl(u));
-  const rest = urls.filter((u) => !isLikelyThumbUrl(u));
+  const usable = urls.filter((u) => !isLikelyThumbUrl(u) && !isLikelyNonVideoArtifactUrl(u));
+  const videoNamed = usable.filter((u) => looksLikeVideoUrl(u));
+  const stream = usable.filter((u) => /googlevideo\.com|videoplayback/i.test(u));
+  const media = usable.filter((u) => /googleusercontent\.com/i.test(u) && !/\/download/i.test(u));
+  const downloads = usable.filter((u) => /usercontent\.google\.com\/download/i.test(u));
+  const rest = usable;
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const u of [...videoNamed, ...downloads, ...media, ...rest]) {
+  for (const u of [...videoNamed, ...stream, ...media, ...downloads, ...rest]) {
     if (seen.has(u)) continue;
     seen.add(u);
     out.push(u);

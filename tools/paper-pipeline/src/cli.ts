@@ -16,7 +16,7 @@ import { error as logError, firstLine, log, warn } from "./log.ts";
 import { processOnePaper, repairSciSpaceCardMeta, repairSciSpaceRecordLinks } from "./pipeline.ts";
 import { formatStudioGenerateJa } from "./studio-select.ts";
 import { EXIT_QUOTA } from "./notebook-quota.ts";
-import { EXIT_WAITING } from "./waiting.ts";
+import { EXIT_WAITING, isRetryCooling } from "./waiting.ts";
 import { emptyState, loadState, studioKickoffBegun } from "./state.ts";
 import { videoFileReady } from "./video-file.ts";
 
@@ -147,6 +147,14 @@ async function main(): Promise<void> {
   log(`作業 ${cfg.workDir}`);
   log(`Studio 生成: ${formatStudioGenerateJa(cfg.studioGenerate)}`);
   log(cfg.headed ? "モード: 画面付き" : "モード: ヘッドレス（ログイン時だけ画面を出します）");
+
+  if (items.length === 1 && isRetryCooling(loadPaperState(items[0]))) {
+    const st = loadPaperState(items[0]);
+    log(
+      `${items[0].filename}: クールダウン中なので Chrome を開きません（${st.harvestRetryAt || st.kickoffRetryAt} まで）`,
+    );
+    process.exit(EXIT_WAITING);
+  }
 
   let session = await launchBrowser(cfg);
   activeSession = session;

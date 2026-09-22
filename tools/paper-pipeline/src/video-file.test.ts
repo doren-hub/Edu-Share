@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { needsLocalVideoFile, videoFileReady, ensureUploadableVideo, isRealVideoFile, isMp4FtypBuffer, isLikelyThumbUrl, rankVideoArtifactUrls, VIDEO_UPLOAD_MAX_BYTES } from "./video-file.ts";
+import { needsLocalVideoFile, videoFileReady, ensureUploadableVideo, isRealVideoFile, isMp4FtypBuffer, isLikelyThumbUrl, isLikelyNonVideoArtifactUrl, extractVideoHintedUrls, rankVideoArtifactUrls, assembleVideoFragments, looksLikeVideoUrl, VIDEO_UPLOAD_MAX_BYTES } from "./video-file.ts";
 
 function fakeMp4(size: number): Buffer {
   const b = Buffer.alloc(size, 1);
@@ -92,11 +92,41 @@ test("rankVideoArtifactUrls: サムネを後回しにし googleusercontent を�
   const media = "https://lh3.googleusercontent.com/video-bytes";
   const dl = "https://contribution.usercontent.google.com/download?c=abc";
   const fonts = "https://fonts.googleapis.com/css";
-  const ranked = rankVideoArtifactUrls([thumb, fonts, media, dl]);
-  assert.equal(ranked[0], dl);
-  assert.ok(ranked.includes(media));
+  const mp4 = "https://cdn.example/file.mp4";
+  const ranked = rankVideoArtifactUrls([thumb, fonts, media, dl, mp4]);
+  assert.equal(ranked[0], mp4);
+  assert.ok(ranked.indexOf(media) < ranked.indexOf(dl));
   assert.equal(ranked.includes(thumb), false);
   assert.equal(ranked.includes(fonts), false);
   assert.equal(isLikelyThumbUrl(thumb), true);
   assert.equal(isLikelyThumbUrl(media), false);
+});
+
+test("isLikelyNonVideoArtifactUrl / extractVideoHintedUrls: スライド PDF を動画にしない", () => {
+  const pdf = "https://x.example/deck.pdf";
+  const mp4 = "https://storage.googleapis.com/x.mp4?token=1";
+  assert.equal(isLikelyNonVideoArtifactUrl(pdf), true);
+  assert.equal(isLikelyNonVideoArtifactUrl(mp4), false);
+  const raw = JSON.stringify(["ARTIFACT_TYPE_VIDEO", mp4, "SLIDE", pdf]);
+  assert.deepEqual(extractVideoHintedUrls(raw, [pdf, mp4]), [mp4]);
+});
+
+test("assembleVideoFragments: 映像 DASH を range 順に結合し音声は使わない", () => {
+  const ftyp = fakeMp4(80_000);
+  const moof = Buffer.alloc(50_000, 2);
+  moof.write("moof", 4);
+  const videoBase = "https://rr.googlevideo.com/videoplayback?mime=video%2Fmp4&itag=18";
+  const audio = {
+    url: "https://rr.googlevideo.com/videoplayback?mime=audio%2Fmp4&itag=140&range=0-500000",
+    buf: fakeMp4(200_000),
+  };
+  const got = assembleVideoFragments([
+    { url: `${videoBase}&range=80000-129999`, buf: moof },
+    audio,
+    { url: `${videoBase}&range=0-79999`, buf: ftyp },
+  ]);
+  assert.ok(got);
+  assert.equal(got.length, 130_000);
+  assert.equal(isMp4FtypBuffer(got.subarray(0, 12)), true);
+  assert.equal(looksLikeVideoUrl(videoBase), true);
 });
