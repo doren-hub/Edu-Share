@@ -10,6 +10,7 @@ import {
   looksLikeVenueLine,
   pickBestSciSpaceCardText,
   isolateSciSpaceCardText,
+  isDummySciSpacePaste,
   rawFilesCardPaste,
   filesRowHasTruncatedAuthors,
   preferExpandedAuthorPaste,
@@ -19,7 +20,8 @@ import {
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
-import { arxivIdFromFilename, fetchArxivAbstract, fetchArxivAtom, parseArxivAtomAuthors, parseArxivAtomYear } from "../arxiv-abstract.ts";
+import { arxivIdFromFilename, fetchArxivAbstract, fetchArxivAtom, parseArxivAtomAuthors, parseArxivAtomTitle, parseArxivAtomYear } from "../arxiv-abstract.ts";
+import { bibliographicPasteFromWork, fetchCrossrefWork } from "../crossref.ts";
 import {
   canonicalSciSpaceRecordUrl,
   isSciSpaceRecordUrl,
@@ -33,8 +35,16 @@ import {
   looksLikeSciSpaceFilesTable,
 } from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
+import { pauseIfBlocked } from "../human.ts";
 import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
 import { saveFailureShot, uploadViaChooserOrInput } from "../ui.ts";
+
+function filesSearchHint(state: PaperState): string {
+  const title = state.title.trim();
+  if (!title) return "";
+  if (isDummySciSpacePaste(title) || titleLooksLikeFilename(title, state.filename)) return "";
+  return title;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -199,6 +209,7 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
       return;
     }
     if (isAuthUrl(page) || (await needsSciSpaceLogin(page))) {
+      await pauseIfBlocked(page, "SciSpace");
       if (!loggedWait) {
         log("SciSpace: ログイン中は画面を触りません。このウィンドウでログインしてください");
         loggedWait = true;
@@ -906,8 +917,9 @@ export async function captureSciSpaceCardMeta(
       throw new Error("ブラウザが閉じられています");
     }
     await openNotebooksFilesView(page, folderUrl);
-    await filterFilesList(page, folderUrl, filename, state.title);
-    await expandFilesRowAuthors(page, filename, state.title);
+    const searchTitle = filesSearchHint(state);
+    await filterFilesList(page, folderUrl, filename, searchTitle);
+    await expandFilesRowAuthors(page, filename, searchTitle);
     if (looksLikeSciSpaceNav(state.tldr)) state.tldr = "";
     if (!(await isNotebooksFilesView(page, folderUrl))) {
       warn("SciSpace: Files 以外の画面に出たのでフォルダへ戻ります");
@@ -921,9 +933,9 @@ export async function captureSciSpaceCardMeta(
       if (!(await isNotebooksFilesView(page, folderUrl))) {
         await restoreFolderFilesTable(page, folderUrl);
       }
-      if (!(await filesNameVisible(page, filename, state.title))) {
-        await filterFilesList(page, folderUrl, filename, state.title);
-        if (!(await filesNameVisible(page, filename, state.title))) {
+      if (!(await filesNameVisible(page, filename, searchTitle))) {
+        await filterFilesList(page, folderUrl, filename, searchTitle);
+        if (!(await filesNameVisible(page, filename, searchTitle))) {
           missingNameStreak += 1;
           if (missingNameStreak >= 2) {
             warn(`SciSpace: Files に ${filename} が見つからないので TL;DR 待ちを打ち切ります`);
@@ -935,7 +947,7 @@ export async function captureSciSpaceCardMeta(
       } else {
         missingNameStreak = 0;
       }
-      await expandFilesRowAuthors(page, filename, state.title);
+      await expandFilesRowAuthors(page, filename, searchTitle);
       filesTldr = await readFilesRowTldr(page, filename);
       if (!(descriptionUsable(filesTldr) || tldrUsable(filesTldr))) {
         filesTldr = await readFilesColumnTldr(page, filename);
@@ -981,14 +993,21 @@ export async function captureSciSpaceCardMeta(
       }
       filesTldr = await readFilesColumnTldr(page, filename);
     }
-    if (!(await filesNameVisible(page, filename, state.title))) {
-      state.lastError = `SciSpace Files に ${filename} が見つかりません`;
-      warn(state.lastError);
-      saveState(state);
-      return;
+    if (!(await filesNameVisible(page, filename, searchTitle))) {
+      const filled = await fillDummyCardFromKnownIds(filename, state.doi);
+      if (filled) {
+        applyExtractedCard(state, filename, extractSciSpaceCardMeta(filled, filename));
+        state.filesPaste = filled;
+        log("SciSpace: Files に無いので既知の書誌を使います");
+      } else {
+        state.lastError = `SciSpace Files に ${filename} が見つかりません`;
+        warn(state.lastError);
+        saveState(state);
+        return;
+      }
     }
-    await expandFilesRowAuthors(page, filename, state.title);
-    const found = await collectFilesCardCandidates(page, filename, state.title);
+    await expandFilesRowAuthors(page, filename, searchTitle);
+    const found = await collectFilesCardCandidates(page, filename, searchTitle);
     let filesPaste = "";
     for (const t of found.texts) {
       filesPaste = rawFilesCardPaste(t, filename);
@@ -997,17 +1016,21 @@ export async function captureSciSpaceCardMeta(
     if (!filesPaste) {
       filesPaste = rawFilesCardPaste(pickBestSciSpaceCardText(found.texts, filename), filename);
     }
-    if (!filesPaste && state.title) {
+    if (!filesPaste && state.title && !isDummySciSpacePaste(state.title)) {
       const best = found.texts.find((t) => t.includes(state.title) && /Uploaded on|PDF UPLOAD/i.test(t)) || "";
-      if (best) filesPaste = `${filename}\n${best}`.slice(0, 4000);
+      if (best && !isDummySciSpacePaste(best)) filesPaste = `${filename}\n${best}`.slice(0, 4000);
     }
     if (filesPaste && containsForeignPdf(filesPaste, filename)) {
       warn(`SciSpace Files の取得に他の PDF が混ざっていたので、${filename} のカードだけ使います`);
       filesPaste = rawFilesCardPaste(filesPaste, filename);
     }
+    if (!filesPaste || isDummySciSpacePaste(filesPaste)) {
+      if (filesPaste) warn("SciSpace Files がデモカード（Dewdney 等）なので捨てます");
+      filesPaste = (await fillDummyCardFromKnownIds(filename, state.doi)) || "";
+    }
     if (filesRowHasTruncatedAuthors(filesPaste)) {
-      await expandFilesRowAuthors(page, filename, state.title);
-      const again = await collectFilesCardCandidates(page, filename, state.title);
+      await expandFilesRowAuthors(page, filename, searchTitle);
+      const again = await collectFilesCardCandidates(page, filename, searchTitle);
       for (const t of again.texts) {
         const next = preferExpandedAuthorPaste(rawFilesCardPaste(t, filename));
         if (next && !filesRowHasTruncatedAuthors(next)) {
@@ -1031,7 +1054,7 @@ export async function captureSciSpaceCardMeta(
       state.tldr = stripTldrSnippetNumbers(filesTldr).slice(0, 2000);
       log("SciSpace: Files の TL;DR 列を使います");
     }
-    if (filesPaste) {
+    if (filesPaste && !isDummySciSpacePaste(filesPaste)) {
       state.filesPaste = filesPaste;
       log("SciSpace: Files 行を加工せず貼り付けます");
     }
@@ -1041,7 +1064,7 @@ export async function captureSciSpaceCardMeta(
 
     if (!(await isNotebooksFilesView(page, folderUrl))) {
       await restoreFolderFilesTable(page, folderUrl);
-      await filterFilesList(page, folderUrl, filename, state.title);
+      await filterFilesList(page, folderUrl, filename, filesSearchHint(state));
     }
     if (!isSciSpaceRecordUrl(state.scispaceUrl)) {
       state.scispaceUrl = await findSciSpaceRecordUrl(page, folderUrl, filename);
@@ -1085,8 +1108,35 @@ async function fillTruncatedAuthorsFromArxiv(paste: string, filename: string): P
   return replaceYearAuthorLine(paste, line);
 }
 
+async function fillDummyCardFromArxiv(filename: string): Promise<string> {
+  const id = arxivIdFromFilename(filename);
+  if (!id) return "";
+  log(`SciSpace: デモカードだったので arXiv の書誌で補います (${id})`);
+  const xml = await fetchArxivAtom(id);
+  const title = parseArxivAtomTitle(xml);
+  const authors = parseArxivAtomAuthors(xml);
+  const year = parseArxivAtomYear(xml);
+  if (!title || authors.length === 0) return "";
+  const line = year ? `${year}⋅${authors.join(", ")}` : authors.join(", ");
+  return [filename, title, line, "arXiv"].join("\n");
+}
+
+async function fillDummyCardFromDoi(filename: string, doi: string): Promise<string> {
+  const key = doi.trim();
+  if (!key) return "";
+  log(`SciSpace: デモカードだったので DOI の書誌で補います (${key})`);
+  const work = await fetchCrossrefWork(key);
+  if (!work) return "";
+  return bibliographicPasteFromWork(filename, work);
+}
+
+async function fillDummyCardFromKnownIds(filename: string, doi: string): Promise<string> {
+  return (await fillDummyCardFromArxiv(filename)) || (await fillDummyCardFromDoi(filename, doi));
+}
+
 function sciSpaceMetaStillIncomplete(state: PaperState, filename: string): boolean {
   if (titleLooksLikeFilename(state.title, filename)) return true;
+  if (isDummySciSpacePaste(state.title) || isDummySciSpacePaste(state.filesPaste)) return true;
   if (!state.filesPaste.trim()) return true;
   if (filesRowHasTruncatedAuthors(state.filesPaste)) return true;
   return false;
@@ -1102,9 +1152,9 @@ function applyExtractedCard(
   card: ReturnType<typeof extractSciSpaceCardMeta>,
   dois: string[] = [],
 ): void {
-  if (card.title && !looksLikeSciSpaceNav(card.title) && !titleLooksLikeFilename(card.title, filename) && !looksLikeCitationTitle(card.title) && !looksLikeVenueLine(card.title)) {
+  if (card.title && !looksLikeSciSpaceNav(card.title) && !titleLooksLikeFilename(card.title, filename) && !looksLikeCitationTitle(card.title) && !looksLikeVenueLine(card.title) && !isDummySciSpacePaste(card.title) && !isDummySciSpacePaste(card.authors)) {
     state.title = card.title;
-  } else if (!state.title) state.title = filename.replace(/\.pdf$/i, "");
+  } else if (!state.title || isDummySciSpacePaste(state.title)) state.title = filename.replace(/\.pdf$/i, "");
   if (card.venue && !looksLikeSciSpaceNav(card.venue)) state.venue = card.venue;
   const doi = card.doi || dois.map((d) => doiFromHrefOrText(d)).find(Boolean) || "";
   if (doi) state.doi = doi;
@@ -1185,10 +1235,14 @@ async function fillMetaFromRecordPage(page: Page, state: PaperState, filename: s
     (await page.locator('meta[name="description"]').getAttribute("content").catch(() => "")) ||
     ""
   ).trim();
-  const heading = [og, h1].find((t) => t.length > 12 && !looksLikeSciSpaceNav(t) && !looksLikeCitationTitle(t) && !looksLikeVenueLine(t) && !titleLooksLikeFilename(t, filename)) ?? "";
+  const heading = [og, h1].find((t) => t.length > 12 && !looksLikeSciSpaceNav(t) && !looksLikeCitationTitle(t) && !looksLikeVenueLine(t) && !titleLooksLikeFilename(t, filename) && !isDummySciSpacePaste(t)) ?? "";
   const body = await pageText(page);
   const raw = [heading, ogDesc, body].filter(Boolean).join("\n");
   const card = extractSciSpaceCardMeta(raw, filename);
+  if (isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors) || isDummySciSpacePaste(heading)) {
+    warn("SciSpace: 個別ページもデモカードなので捨てます");
+    return;
+  }
   if ((!card.title || titleLooksLikeFilename(card.title, filename) || looksLikeSciSpaceNav(card.title) || looksLikeCitationTitle(card.title) || looksLikeVenueLine(card.title)) && heading) {
     card.title = heading;
     card.paste = metadataPasteFromCard(card, filename);
@@ -1208,7 +1262,7 @@ export async function captureSciSpaceRecordUrl(
   if (isSciSpaceRecordUrl(state.scispaceUrl)) return state.scispaceUrl;
   try {
     await openNotebooksFilesView(page, folderUrl);
-    await filterFilesList(page, folderUrl, filename, state.title);
+    await filterFilesList(page, folderUrl, filename, filesSearchHint(state));
     const url = await findSciSpaceRecordUrl(page, folderUrl, filename);
     if (!isSciSpaceRecordUrl(url)) {
       throw new Error(`SciSpace の個別ページ URL が見つかりません（${filename}）`);

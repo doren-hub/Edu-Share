@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  bindEduSharePaper,
   emptyState,
   firstPendingStudioStage,
   hasStudioStarted,
@@ -93,4 +97,34 @@ test("studioKickoffSettled: 4種が開始済みか完了なら揃ったとみな
   const skipQuizStarted = paper({ studioStarted: ["nlm-quiz", "nlm-flashcards"] });
   assert.equal(studioKickoffSettled(skipQuizStarted, SKIP_SLIDES_VIDEO_STAGES), true);
   assert.equal(studioKickoffSettled(skipQuizStarted), false);
+});
+
+test("bindEduSharePaper: 論文 ID が変わったら載せ済み印と DONE を捨てる", () => {
+  const paperDir = mkdtempSync(join(tmpdir(), "pp-bind-edu-"));
+  try {
+    writeFileSync(join(paperDir, "DONE"), "ok\n");
+    const state = paper({
+      paperDir,
+      eduShareTestId: "old-id",
+      eduShareTestUrl: "http://localhost:3000/tests/old-id",
+      completed: ["edu-upload", "edu-materials", "verify", "done"],
+      eduUploaded: ["nlm-quiz", "nlm-flashcards", "nlm-slides", "nlm-video"],
+    });
+    assert.equal(
+      bindEduSharePaper(state, "new-id", "http://localhost:3000/tests/new-id"),
+      true,
+    );
+    assert.equal(state.eduShareTestId, "new-id");
+    assert.equal(state.eduShareTestUrl, "http://localhost:3000/tests/new-id");
+    assert.deepEqual(state.eduUploaded, []);
+    assert.equal(state.completed.includes("done"), false);
+    assert.equal(state.completed.includes("edu-materials"), false);
+    assert.equal(existsSync(join(paperDir, "DONE")), false);
+    assert.equal(
+      bindEduSharePaper(state, "new-id", "http://localhost:3000/tests/new-id"),
+      false,
+    );
+  } finally {
+    rmSync(paperDir, { recursive: true, force: true });
+  }
 });

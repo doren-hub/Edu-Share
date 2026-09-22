@@ -150,8 +150,9 @@ flowchart TD
 ```bash
 cd tools/paper-pipeline
 npm start -- --headed
+npm start -- --headless
 npm start -- --only paper.pdf --from sci-meta
-npm run worker -- --only paper.pdf
+npm run worker -- --only paper.pdf --headless
 ```
 
-止めるときは SIGINT（worker が Chrome を閉じてから終了）。inbox が空で `DONE` がある論文は、本物の MP4 が無いときだけ repair 対象。
+止めるときは SIGINT（worker が Chrome を閉じてから終了）。inbox が空で `DONE` がある論文は、本物の MP4 が無いときだけ repair 対象。`--headless` はログインや追加確認のときだけ画面を出す。

@@ -71,6 +71,13 @@ test("titleUsableForExistingMatch: 数字ファイル名や短すぎるタイト
     ),
     true,
   );
+  assert.equal(
+    titleUsableForExistingMatch(
+      "The First Law of Robotics Revisited: A New Perspective on Autonomous Systems",
+      "nihms690699.pdf",
+    ),
+    false,
+  );
 });
 
 test("sciSpaceCardMetaIncomplete: ファイル名タイトル・空貼り付けはメタ未入り（TL;DR は見ない）", () => {

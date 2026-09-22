@@ -314,7 +314,10 @@ export async function waitForDownloadTo(
           alive = false;
         }
         if (!alive) {
-          throw new Error(`動画ダウンロードが止まりました: ${crSize} bytes（${crName}）`);
+          // Playwright がタブを見失っても、Chrome が .crdownload を書いていることがある
+          if (Date.now() - lastCrChangeAt > 45_000) {
+            throw new Error(`動画ダウンロードが止まりました: ${crSize} bytes（${crName}）`);
+          }
         }
       }
     }

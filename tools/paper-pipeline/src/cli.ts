@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import type { Page } from "playwright";
 import {
   closeBrowser,
   isTargetClosedMessage,
@@ -8,7 +9,9 @@ import {
   type BrowserSession,
 } from "./browser.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
-import { listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
+import { NeedVisibleChromeError, waitUntilUnblocked } from "./human.ts";
+import { maybeLoginEduShare } from "./steps/edushare.ts";
+import { listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
 import { processOnePaper, repairSciSpaceCardMeta, repairSciSpaceRecordLinks } from "./pipeline.ts";
 import { formatStudioGenerateJa } from "./studio-select.ts";
@@ -38,6 +41,55 @@ async function relaunch(session: BrowserSession, cfg: AppConfig): Promise<Browse
   const next = await relaunchBrowser(session, cfg);
   activeSession = next;
   return next;
+}
+
+function withHeaded(cfg: AppConfig, headed: boolean): AppConfig {
+  return { ...cfg, headed };
+}
+
+function looksLikeLoginUrl(url: string): boolean {
+  return /accounts\.google|signin\.google|\/auth\/login/i.test(url);
+}
+
+async function revealForLogin(
+  session: BrowserSession,
+  cfg: AppConfig,
+  err: NeedVisibleChromeError,
+): Promise<BrowserSession> {
+  log(`${err.context}: ログイン確認のため Chrome を画面付きで開きます`);
+  session = await relaunch(session, withHeaded(cfg, true));
+  if (err.url) {
+    await session.page.goto(err.url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  }
+  if (err.context === "Edu Share") {
+    await maybeLoginEduShare(session.page, cfg.eduShareBaseUrl, cfg.eduShareEmail, cfg.eduSharePassword);
+  }
+  await waitUntilUnblocked(session.page, err.context);
+  if (cfg.headed) return session;
+  const resume = session.page.url();
+  log("ログインが終わったので Chrome をヘッドレスに戻します");
+  session = await relaunch(session, withHeaded(cfg, false));
+  if (resume && !looksLikeLoginUrl(resume)) {
+    await session.page.goto(resume, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  }
+  return session;
+}
+
+async function runCatchingLogin<T>(
+  session: BrowserSession,
+  cfg: AppConfig,
+  fn: (page: Page) => Promise<T>,
+): Promise<{ session: BrowserSession; value: T }> {
+  let current = session;
+  for (let i = 0; i < 3; i++) {
+    try {
+      return { session: current, value: await fn(current.page) };
+    } catch (e) {
+      if (!(e instanceof NeedVisibleChromeError) || shuttingDown) throw e;
+      current = await revealForLogin(current, cfg, e);
+    }
+  }
+  throw new Error("ログイン後も続行できませんでした");
 }
 
 function installInterruptLogs(): void {
@@ -81,6 +133,7 @@ async function main(): Promise<void> {
     [
       ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
       ...listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename),
+      ...listEduMaterialRepairPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename),
       ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
       ...(cfg.studioGenerateExplicit
         ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
@@ -93,6 +146,7 @@ async function main(): Promise<void> {
   log(`入力 ${cfg.inboxDir} の PDF ${items.length} 件`);
   log(`作業 ${cfg.workDir}`);
   log(`Studio 生成: ${formatStudioGenerateJa(cfg.studioGenerate)}`);
+  log(cfg.headed ? "モード: 画面付き" : "モード: ヘッドレス（ログイン時だけ画面を出します）");
 
   let session = await launchBrowser(cfg);
   activeSession = session;
@@ -105,20 +159,26 @@ async function main(): Promise<void> {
     }
     const existing = listExistingWorkPapers(cfg.workDir);
     log(`作業フォルダの既存 PDF名 ${existing.length} 件`);
-    const repaired = await repairSciSpaceRecordLinks(session.page, cfg);
-    processed.push(...repaired.updated);
-    failed.push(...repaired.failed);
-    if (repaired.updated.length || repaired.failed.length) {
+    const repairedRun = await runCatchingLogin(session, cfg, (page) =>
+      repairSciSpaceRecordLinks(page, cfg),
+    );
+    session = repairedRun.session;
+    processed.push(...repairedRun.value.updated);
+    failed.push(...repairedRun.value.failed);
+    if (repairedRun.value.updated.length || repairedRun.value.failed.length) {
       log(
-        `SciSpace リンク補修: 更新 ${repaired.updated.length} / 失敗 ${repaired.failed.length}`,
+        `SciSpace リンク補修: 更新 ${repairedRun.value.updated.length} / 失敗 ${repairedRun.value.failed.length}`,
       );
     }
-    const metaRepaired = await repairSciSpaceCardMeta(session.page, cfg, existing);
-    processed.push(...metaRepaired.updated);
-    failed.push(...metaRepaired.failed);
-    if (metaRepaired.updated.length || metaRepaired.failed.length) {
+    const metaRun = await runCatchingLogin(session, cfg, (page) =>
+      repairSciSpaceCardMeta(page, cfg, existing),
+    );
+    session = metaRun.session;
+    processed.push(...metaRun.value.updated);
+    failed.push(...metaRun.value.failed);
+    if (metaRun.value.updated.length || metaRun.value.failed.length) {
       log(
-        `SciSpace メタ補修: 更新 ${metaRepaired.updated.length} / 失敗 ${metaRepaired.failed.length}`,
+        `SciSpace メタ補修: 更新 ${metaRun.value.updated.length} / 失敗 ${metaRun.value.failed.length}`,
       );
     }
     for (const item of items) {
@@ -130,7 +190,11 @@ async function main(): Promise<void> {
           warn(`${item.filename}: ブラウザ切断を検出したため再起動します`);
           session = await relaunch(session, cfg);
         }
-        r = await processOnePaper(session.page, cfg, item, existing);
+        const ran = await runCatchingLogin(session, cfg, (page) =>
+          processOnePaper(page, cfg, item, existing),
+        );
+        session = ran.session;
+        r = ran.value;
         if (r === "quota") break;
         if (r === "waiting") {
           if (
@@ -147,9 +211,13 @@ async function main(): Promise<void> {
               : `${item.filename}: ブラウザ切断。MP4 が無いので Studio から保存を再試行します`,
           );
           session = await relaunch(session, cfg);
-          r = await processOnePaper(session.page, cfg, item, existing, {
-            skipStudio: haveVideo,
-          });
+          const ranWait = await runCatchingLogin(session, cfg, (page) =>
+            processOnePaper(page, cfg, item, existing, {
+              skipStudio: haveVideo,
+            }),
+          );
+          session = ranWait.session;
+          r = ranWait.value;
           break;
         }
         if (r !== "failed" || (await pageAlive(session.page)) || attempt >= MAX_RELAUNCH || shuttingDown) {
@@ -164,7 +232,11 @@ async function main(): Promise<void> {
               : `${item.filename}: ブラウザ切断。MP4 が無いので Studio から保存を再試行します`,
           );
           session = await relaunch(session, cfg);
-          r = await processOnePaper(session.page, cfg, item, existing, { skipStudio: haveVideo });
+          const ranFail = await runCatchingLogin(session, cfg, (page) =>
+            processOnePaper(page, cfg, item, existing, { skipStudio: haveVideo }),
+          );
+          session = ranFail.session;
+          r = ranFail.value;
           break;
         }
         warn(

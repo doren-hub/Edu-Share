@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSy
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "./config.ts";
+import { setInteractiveUi } from "./human.ts";
 import { log, warn } from "./log.ts";
 
 export type BrowserSession = {
@@ -146,14 +147,7 @@ function clearStaleIncompleteDownloads(downloadsPath: string): void {
   if (n) log(`未完了ダウンロード ${n} 件を削除しました`);
 }
 
-export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
-  mkdirSync(cfg.chromeUserDataDir, { recursive: true });
-  const downloadsPath = join(cfg.chromeUserDataDir, "playwright-downloads");
-  mkdirSync(downloadsPath, { recursive: true });
-  chromeDownloadsPath = downloadsPath;
-  clearStaleIncompleteDownloads(downloadsPath);
-  clearStaleChromeProfileLocks(cfg.chromeUserDataDir);
-  prepareChromeProfile(cfg.chromeUserDataDir, downloadsPath);
+export function chromeLaunchArgs(cfg: Pick<AppConfig, "headed" | "exportExtensionPath">): string[] {
   const args: string[] = [
     "--hide-crash-restore-bubble",
     "--disable-session-crashed-bubble",
@@ -161,15 +155,34 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     "--disable-blink-features=AutomationControlled",
     "--exclude-switches=enable-automation",
   ];
+  if (!cfg.headed) {
+    // channel: "chrome" の旧ヘッドレスでは拡張が動かないため new を明示する
+    args.push("--headless=new");
+  }
   if (cfg.exportExtensionPath) {
     args.push(`--load-extension=${cfg.exportExtensionPath}`);
+  }
+  return args;
+}
+
+export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
+  setInteractiveUi(cfg.headed);
+  mkdirSync(cfg.chromeUserDataDir, { recursive: true });
+  const downloadsPath = join(cfg.chromeUserDataDir, "playwright-downloads");
+  mkdirSync(downloadsPath, { recursive: true });
+  chromeDownloadsPath = downloadsPath;
+  clearStaleIncompleteDownloads(downloadsPath);
+  clearStaleChromeProfileLocks(cfg.chromeUserDataDir);
+  prepareChromeProfile(cfg.chromeUserDataDir, downloadsPath);
+  const args = chromeLaunchArgs(cfg);
+  if (cfg.exportExtensionPath) {
     log(`Export 拡張を読み込み: ${cfg.exportExtensionPath}`);
   }
+  log(cfg.headed ? "Chrome を画面付きで起動します" : "Chrome をヘッドレスで起動します（ウィンドウは開きません）");
   const launchOpts = {
     headless: !cfg.headed,
     viewport: { width: 1400, height: 900 } as const,
-    acceptDownloads: true,
-    downloadsPath,
+    acceptDownloads: false, // Playwright が横取りすると .crdownload が止まり Chrome が落ちる
     args,
     ignoreDefaultArgs: [
       "--enable-automation",

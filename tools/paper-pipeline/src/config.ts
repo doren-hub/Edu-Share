@@ -33,6 +33,7 @@ export type AppConfig = {
   studioSkip: readonly StudioStageId[];
   studioGenerateExplicit: boolean;
   ignoreNotebookQuota: boolean;
+  newestFirst: boolean;
   notebookQuotaUrls: readonly string[];
   notebookQuotaFiles: readonly string[];
   notebookShortStopPercent: number;
@@ -49,6 +50,7 @@ export type CliOverrides = {
   skipSlidesVideo?: boolean;
   generate?: string[];
   ignoreNotebookQuota?: boolean;
+  newestFirst?: boolean;
 };
 
 function stripTrailingSlash(u: string): string {
@@ -75,8 +77,23 @@ export function parseArgv(argv: string[]): CliOverrides {
       }
       out.generate = [...(out.generate ?? []), ...tokens];
     } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
+    else if (a === "--newest-first") out.newestFirst = true;
   }
   return out;
+}
+
+export function envFlagEnabled(raw: string | undefined): boolean {
+  const v = (raw ?? "").trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
+/** 引数 --headless / --headed が環境変数 HEADLESS より優先。未指定なら画面付き。 */
+export function resolveHeaded(
+  overrides: Pick<CliOverrides, "headed">,
+  headlessEnv: string | undefined = process.env.HEADLESS,
+): boolean {
+  if (overrides.headed !== undefined) return overrides.headed;
+  return !envFlagEnabled(headlessEnv);
 }
 
 export function loadConfig(overrides: CliOverrides): AppConfig {
@@ -140,7 +157,7 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
       overrides.stopOnError === true ||
       process.env.STOP_ON_ERROR === "1" ||
       process.env.STOP_ON_ERROR === "true",
-    headed: overrides.headed !== false,
+    headed: resolveHeaded(overrides),
     onlyFilename: (overrides.onlyFilename ?? "").trim(),
     fromStage,
     skipSlidesVideo,
@@ -151,6 +168,10 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
       overrides.ignoreNotebookQuota === true ||
       process.env.IGNORE_NOTEBOOK_QUOTA === "1" ||
       process.env.IGNORE_NOTEBOOK_QUOTA === "true",
+    newestFirst:
+      overrides.newestFirst === true ||
+      process.env.NEWEST_FIRST === "1" ||
+      process.env.NEWEST_FIRST === "true",
     notebookQuotaUrls: defaultNotebookQuotaUrls(),
     notebookQuotaFiles: defaultNotebookQuotaFiles(),
     notebookShortStopPercent: envPercent(
@@ -180,7 +201,9 @@ export function helpText(): string {
   npm start -- --only paper.pdf --from sci-meta
   npm start -- --generate quiz,flashcards
   npm start -- --only paper.pdf --generate slides,video
-  npm run worker -- --only paper.pdf
+  npm start -- --generate slides,video --newest-first
+  npm start -- --headless
+  npm run worker -- --only paper.pdf --headless
 
 npm start は呼び出し側です。1論文ずつ既存 worker を呼びます。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。Edu Share 済みの論文にも、足りない項目を後から生成できます。同じプロファイルで Chrome を同時には開きません。Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。そのあいだは SciSpace と、できている生成物の Edu Share 登録を先に進めます。
 
@@ -194,8 +217,11 @@ npm start は呼び出し側です。1論文ずつ既存 worker を呼びます�
   --generate ITEMS     生成するもの。カンマ区切りまたは繰り返し。all で全部
                        slides / video / quiz / flashcards
   --stop-on-error      1件失敗で終了
-  --headed / --headless
+  --headed             画面付きで Chrome を開く（既定）。デバッグ用
+  --headless           ウィンドウを出さずに実行。ログインや追加確認のときだけ画面を出す
+                       環境変数 HEADLESS=1 でも可。引数が優先
   --skip-slides-video  --generate quiz,flashcards と同じ（互換）
+  --newest-first       新しい論文（変更日が新しい PDF）から処理
   --ignore-notebook-quota  Notebook 利用量による停止をしない
 `;
 }

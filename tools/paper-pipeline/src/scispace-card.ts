@@ -61,6 +61,11 @@ const SCISPACE_PROMPTS = [
   /read pdf in full screen/i,
 ];
 
+/** SciSpace Files のデモ行（実論文ではない） */
+export function isDummySciSpacePaste(paste: string): boolean {
+  return /\ba\.\s*k\.\s*dewdney\b|first law of robotics revisited/i.test(paste);
+}
+
 export function looksLikeSciSpaceNav(s: string): boolean {
   const t = s.trim();
   if (!t) return true;
@@ -193,6 +198,7 @@ export function rawFilesCardPaste(raw: string, filename: string): string {
   const compact = isolated.replace(/\s+/g, " ").trim().toLowerCase();
   if (compact === stem || compact === filename.toLowerCase()) return "";
   if (looksLikeSciSpaceNav(isolated) && isolated.length < 80) return "";
+  if (isDummySciSpacePaste(isolated)) return "";
   return preferExpandedAuthorPaste(isolated.slice(0, 4000));
 }
 
@@ -215,6 +221,7 @@ export function needsSciSpaceCardRecapture(state: {
   if (!state.filename || !state.eduShareTestUrl?.trim()) return false;
   if (needsRawFilesPaste(state)) return true;
   const paste = state.filesPaste ?? "";
+  if (isDummySciSpacePaste(paste)) return true;
   if (filesRowHasTruncatedAuthors(paste)) return true;
   const card = extractSciSpaceCardMeta(paste, state.filename);
   if (isJunkVenueLine(card.venue)) return true;
@@ -348,9 +355,11 @@ export function metadataPasteFromCard(
 
 /** Edu Share のメタ貼り付け欄。Files 原文や TL;DR 本文は入れない */
 export function eduShareSciSpaceMetadataPaste(paste: string, filename: string): string {
+  if (isDummySciSpacePaste(paste)) return "";
   const card = extractSciSpaceCardMeta(paste, filename);
   const out = metadataPasteFromCard(card, filename);
   if (!out) return "";
+  if (isDummySciSpacePaste(out) || isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors)) return "";
   if (!card.yearAuthorLine && titleLooksLikeFilename(card.title, filename)) return "";
   if (isTldrBodyLine(out) && !card.yearAuthorLine && !card.venue) return "";
   return out;
@@ -491,7 +500,11 @@ export function titleLooksLikeFilename(title: string, filename: string): boolean
 export function scoreSciSpaceCardCandidate(raw: string, filename: string): number {
   const isolated = isolateSciSpaceCardText(raw, filename);
   if (!isolated.trim()) return Number.NEGATIVE_INFINITY;
+  if (isDummySciSpacePaste(raw) || isDummySciSpacePaste(isolated)) return Number.NEGATIVE_INFINITY;
   const card = extractSciSpaceCardMeta(raw, filename);
+  if (isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors)) {
+    return Number.NEGATIVE_INFINITY;
+  }
   let s = 0;
   if (card.title && !titleLooksLikeFilename(card.title, filename)) s += 40;
   if (card.authors) s += 25;

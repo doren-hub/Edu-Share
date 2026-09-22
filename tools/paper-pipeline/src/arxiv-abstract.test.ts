@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { arxivIdFromFilename, parseArxivAtomAuthors, parseArxivAtomSummary, parseArxivAtomYear } from "./arxiv-abstract.ts";
+import { arxivIdFromFilename, parseArxivAtomAuthors, parseArxivAtomSummary, parseArxivAtomTitle, parseArxivAtomYear } from "./arxiv-abstract.ts";
 
 test("arxivIdFromFilename: 新形式 ID だけを取る", () => {
   assert.equal(arxivIdFromFilename("0709.2257v2.pdf"), "0709.2257");
@@ -18,10 +18,12 @@ test("parseArxivAtomAuthors: author/name を列挙する", () => {
     <author><name>Malcolm J. Perry</name></author>
     <author><name>Andrew Strominger</name></author>
     <summary>Soft hair on black holes.</summary>
+    <title>Soft Hair on Black Holes</title>
   </entry>
 </feed>`;
   assert.deepEqual(parseArxivAtomAuthors(xml), ["S. W. Hawking", "Malcolm J. Perry", "Andrew Strominger"]);
   assert.equal(parseArxivAtomYear(xml), "2016");
+  assert.equal(parseArxivAtomTitle(xml), "Soft Hair on Black Holes");
 });
 
 test("parseArxivAtomSummary: summary 要素を平文にする", () => {

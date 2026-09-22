@@ -95,11 +95,18 @@ export function isPresenterSlideFormatText(text: string): boolean {
   return /プレゼンターのスライド|Presenter Slides|Presenter'?s slides/i.test(t);
 }
 
+/** スライド出力カードが生成中か。生成タイル＋ページ内の sync だけでは真にしない */
+export function isSlideGenerationInProgress(text: string): boolean {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (/スライド資料を生成|スライドを生成中|Generating slide/i.test(t)) return true;
+  if (!/\bsync\b/i.test(t)) return false;
+  return isSlideDeckCardText(t.replace(/\bsync\b/gi, " "));
+}
+
 /** 既存スライドや生成中があれば、もう一枚作らない */
 export function shouldKickoffSlides(texts: string[]): boolean {
-  const joined = texts.join("\n");
-  if (/スライド資料を生成|スライドを生成中|Generating slide/i.test(joined)) return false;
-  if (textLooksLikeGenerating(joined) && /スライド/.test(joined)) return false;
+  if (texts.some((t) => isSlideGenerationInProgress(t))) return false;
   return !texts.some((t) => isSlideDeckCardText(t));
 }
 

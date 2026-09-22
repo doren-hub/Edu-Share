@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const STAGES = [
@@ -187,6 +187,31 @@ export function markEduUploaded(state: PaperState, stage: StudioStageId): void {
 export function unmarkEduUploaded(state: PaperState, stage: StudioStageId): void {
   state.eduUploaded = (state.eduUploaded ?? []).filter((s) => s !== stage);
   saveState(state);
+}
+
+/** 論文ページの testId が変わったら、載せ済み印と完了マーカーを捨てて載せ直す */
+export function bindEduSharePaper(state: PaperState, id: string, url: string): boolean {
+  const nextId = id.trim();
+  const nextUrl = url.trim();
+  if (!nextId) return false;
+  const prev = (state.eduShareTestId || "").trim();
+  state.eduShareTestId = nextId;
+  if (nextUrl) state.eduShareTestUrl = nextUrl;
+  if (!prev || prev === nextId) {
+    saveState(state);
+    return false;
+  }
+  state.eduUploaded = [];
+  for (const stage of ["edu-materials", "verify", "done"] as const) {
+    clearStage(state, stage);
+  }
+  try {
+    unlinkSync(doneMarkerPath(state.paperDir));
+  } catch {
+    /* 無ければ続行 */
+  }
+  saveState(state);
+  return true;
 }
 
 export function unmarkStudioStarted(state: PaperState, stage: StageId): void {

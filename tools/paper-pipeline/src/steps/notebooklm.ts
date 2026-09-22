@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright";
-import { pauseIfBlocked } from "../human.ts";
+import { pauseIfBlocked, isInteractiveUi } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isTargetClosedError } from "../browser.ts";
 import {
@@ -47,7 +47,7 @@ import {
   NotebookQuotaPauseError,
   type NotebookQuotaConfig,
 } from "../notebook-quota.ts";
-import { VIDEO_MIN_BYTES, isRealVideoFile, videoFileReady } from "../video-file.ts";
+import { VIDEO_MIN_BYTES, isMp4FtypBuffer, isRealVideoFile, rankVideoArtifactUrls, videoFileReady } from "../video-file.ts";
 import { formatStudioGenerateJa } from "../studio-select.ts";
 
 const NOTEBOOK_APP_HOST = /(?:notebooklm|notebook)\.google\.com/i;
@@ -685,7 +685,7 @@ async function revealStudioOutputs(page: Page): Promise<void> {
   await page.waitForTimeout(200);
 }
 
-async function waitUntilStudioOutputsReady(page: Page, timeoutMs = 20_000): Promise<boolean> {
+async function waitUntilStudioOutputsReady(page: Page, timeoutMs = 45_000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (page.isClosed()) return false;
@@ -1845,26 +1845,70 @@ async function fetchUrlInPageToVideo(page: Page, src: string, destPath: string):
     return false;
   }
 }
+function cookieHeaderForUrl(
+  cookies: { name: string; value: string; domain: string }[],
+  src: string,
+): string {
+  let host = "";
+  try {
+    host = new URL(src).hostname;
+  } catch {
+    return "";
+  }
+  return cookies
+    .filter((c) => {
+      const d = c.domain.startsWith(".") ? c.domain : `.${c.domain}`;
+      return `.${host}`.endsWith(d);
+    })
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+}
+
 async function fetchUrlToVideo(page: Page, src: string, destPath: string): Promise<boolean> {
   if (!/^https?:/i.test(src)) return false;
+  const cookies = await page.context().cookies().catch(() => []);
+  const headers: Record<string, string> = {
+    "Accept-Encoding": "identity",
+    Accept: "video/mp4,application/octet-stream,*/*",
+    Referer: page.url() || "https://notebook.google.com/",
+  };
+  const cookie = cookieHeaderForUrl(cookies, src);
+  if (cookie) headers.Cookie = cookie;
   try {
-    const res = await page.request.get(src, {
-      timeout: 180_000,
-      maxRedirects: 10,
-      headers: {
-        "Accept-Encoding": "identity",
-        Accept: "video/mp4,application/octet-stream,*/*",
-        Referer: page.url() || "https://notebook.google.com/",
-      },
+    const res = await fetch(src, {
+      headers,
+      redirect: "follow",
+      signal: AbortSignal.timeout(180_000),
     });
-    if (!res.ok()) {
-      warn(`動画 URL HTTP ${res.status()}: ${src.slice(0, 96)}`);
+    if (!res.ok && res.status !== 206) {
+      warn(`動画 URL HTTP ${res.status}: ${src.slice(0, 96)}`);
       return false;
     }
-    const buf = Buffer.from(await res.body());
-    return writeBufIfVideo(destPath, buf, src);
+    const reader = res.body?.getReader();
+    if (!reader) return false;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let decided = false;
+    while (true) {
+      const step = await reader.read();
+      if (step.done) break;
+      chunks.push(Buffer.from(step.value));
+      total += step.value.length;
+      if (!decided && total >= 12) {
+        decided = true;
+        if (!isMp4FtypBuffer(Buffer.concat(chunks).subarray(0, 12))) {
+          await reader.cancel().catch(() => undefined);
+          warn(
+            `URL は MP4 ではありません: ${src.slice(0, 64)}（先頭 ${Buffer.concat(chunks).subarray(0, 8).toString("latin1")}）`,
+          );
+          return false;
+        }
+      }
+    }
+    return writeBufIfVideo(destPath, Buffer.concat(chunks), src);
   } catch (e) {
-    warn(`動画 URL 取得に失敗: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}`);
+    const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0];
+    warn(`動画 URL 取得に失敗: ${msg}`);
     return false;
   }
 }
@@ -1900,23 +1944,10 @@ async function fetchVideoViaRpc(page: Page, destPath: string): Promise<boolean> 
     ),
   ];
   log(`LIST_ARTIFACTS hosts: ${hosts.join(" | ")}`);
-  const videoNamed = payload.urls.filter((u) => /\.mp4(\?|$)|mime=video|video\/mp4/i.test(u));
-  const downloads = payload.urls.filter(
-    (u) => /drum\.usercontent\.google\.com\/download|usercontent\.google\.com\/download/i.test(u) || /\.mp4(\?|$)/i.test(u),
-  );
-  const notThumbs = payload.urls.filter((u) => !/lh3\.googleusercontent\.com|fonts\.googleapis|favicon/i.test(u));
-  const seen = new Set<string>();
-  const candidates: string[] = [];
-  for (const u of [...videoNamed, ...downloads, ...notThumbs]) {
-    if (seen.has(u)) continue;
-    seen.add(u);
-    candidates.push(u);
-    if (candidates.length >= 16) break;
-  }
-  log(`LIST_ARTIFACTS videoNamed=${videoNamed.length} downloads=${downloads.length} try=${candidates.length}`);
+  const candidates = rankVideoArtifactUrls(payload.urls);
+  log(`LIST_ARTIFACTS videoCandidates=${candidates.length}/${payload.urls.length}`);
   for (const src of candidates) {
     log(`動画 RPC URL: ${src.slice(0, 120)}`);
-    if (await fetchUrlInPageToVideo(page, src, destPath)) return true;
     if (await fetchUrlToVideo(page, src, destPath)) return true;
   }
   return false;
@@ -2025,6 +2056,11 @@ async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<voi
       await ensureKeeperTab(page);
       if (await fetchVideoViaRpc(page, destPath)) return;
       if (page.isClosed()) throw new Error("ブラウザが閉じられています");
+      if (!isInteractiveUi()) {
+        throw new Error(
+          "ヘッドレスでは Studio メニューの動画ダウンロードを使いません（Chrome が落ちる）。RPC で MP4 を取れませんでした",
+        );
+      }
       const clickDownload = async () => {
         for (let i = 0; i < 12; i++) {
           if (page.isClosed()) throw new Error("ブラウザが閉じられています");
@@ -2315,13 +2351,12 @@ function collectErrMsg(e: unknown): string {
 
 async function unmarkStaleStudioStarts(page: Page, state: PaperState): Promise<void> {
   const body = await notebookBody(page);
-  if (textLooksLikeGenerating(body)) {
-    log("Studio は生成中（sync / 生成しています）なので開始記録はそのままにします");
-    return;
-  }
   if (generationStartIsRecent(state)) {
     log("生成開始から間もないので、出力カードがまだ無くてもやり直ししません");
     return;
+  }
+  if (textLooksLikeGenerating(body)) {
+    log("Studio に生成中表示がありますが開始から時間が経っているので、出力の有無で判断します");
   }
   if (studioOutputScanIncomplete(body)) {
     log("Studio 出力カードがまだ無いので開始記録はそのままにします");
@@ -2398,7 +2433,7 @@ async function collectReadyStudio(
   state: PaperState,
   ctx: { skipVideoDownload: boolean },
 ): Promise<void> {
-  if (!ctx.skipVideoDownload && !isCompleted(state, "nlm-slides")) {
+  if (!isCompleted(state, "nlm-slides")) {
     const dest = join(paperDir, "slides.pdf");
     try {
       if (slidesArtifactReady(dest)) {
@@ -2648,6 +2683,14 @@ async function runStudioParallel(
   if (!studioKickoffSettled(state, skipStudio)) {
     const cooldown = Date.parse(state.kickoffRetryAt || "") || 0;
     if (cooldown > Date.now()) {
+      throw new GenerationWaitingError(pending);
+    }
+    const body = await notebookBody(page).catch(() => "");
+    if (studioOutputScanIncomplete(body)) {
+      log("Studio 出力カード待ちなので、この論文は後回しにします");
+      state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
+      state.kickoffRetryStage = pending;
+      saveState(state);
       throw new GenerationWaitingError(pending);
     }
     throw new Error(`${pending} を開始できませんでした`);

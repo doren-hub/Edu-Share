@@ -14,6 +14,43 @@ export function videoArtifactPath(paperDir: string, videoMp4Path: string): strin
   return join(paperDir, "video.mp4");
 }
 
+/** 先頭バイトが MP4/QuickTime の ftyp か。PDF・ZIP を弾く。 */
+export function isMp4FtypBuffer(buf: Uint8Array): boolean {
+  if (buf.length < 8) return false;
+  const head = Buffer.from(buf.subarray(0, 12));
+  if (head.subarray(0, 5).toString("latin1") === "%PDF-") return false;
+  if (head.subarray(0, 2).toString("latin1") === "PK") return false;
+  return head.subarray(4, 8).toString("latin1") === "ftyp";
+}
+
+/** lh3 の小さいサムネ（=s96-c など） */
+export function isLikelyThumbUrl(url: string): boolean {
+  if (/fonts\.googleapis|favicon/i.test(url)) return true;
+  if (/=s0(?:\b|$)/i.test(url)) return false;
+  if (/=s\d{1,3}(?:-c)?(?:\b|$)/i.test(url)) return true;
+  if (/=w\d{2,3}-h\d{2,3}/i.test(url)) return true;
+  return false;
+}
+
+/** LIST_ARTIFACTS の URL から動画らしき順に並べる。拡張子無しの googleusercontent も含める。 */
+export function rankVideoArtifactUrls(urls: string[]): string[] {
+  const videoNamed = urls.filter((u) => /\.mp4(\?|$)|mime=video|video\/mp4/i.test(u));
+  const downloads = urls.filter(
+    (u) => /usercontent\.google\.com\/download/i.test(u) || /\.mp4(\?|$)/i.test(u),
+  );
+  const media = urls.filter((u) => /googleusercontent\.com/i.test(u) && !isLikelyThumbUrl(u));
+  const rest = urls.filter((u) => !isLikelyThumbUrl(u));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of [...videoNamed, ...downloads, ...media, ...rest]) {
+    if (seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+    if (out.length >= 24) break;
+  }
+  return out;
+}
+
 /** MP4/QuickTime の ftyp。PDF を video.mp4 として保存した誤ダウンロードを弾く。 */
 export function isRealVideoFile(path: string): boolean {
   try {
@@ -23,8 +60,7 @@ export function isRealVideoFile(path: string): boolean {
     const n = readSync(fd, buf, 0, 12, 0);
     closeSync(fd);
     if (n < 8) return false;
-    if (buf.subarray(0, 5).toString("latin1") === "%PDF-") return false;
-    return buf.subarray(4, 8).toString("latin1") === "ftyp";
+    return isMp4FtypBuffer(buf.subarray(0, n));
   } catch {
     return false;
   }

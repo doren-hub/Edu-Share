@@ -34,7 +34,14 @@ npm start
 npm start -- --inbox /Users/doren/Developer/edu-share-papers/inbox --work /Users/doren/Developer/edu-share-papers/work
 ```
 
-初回は Chrome が開くので、Google（NotebookLM）、SciSpace、Edu Share にログインしてください。NotebookLM は **ホームに「ノートブックを新規作成」が見えてから** ターミナルで Enter を押します。以降は同じプロファイルを使います。
+初回やログイン切れのときは Chrome が開くので、Google（NotebookLM）、SciSpace、Edu Share にログインしてください。`--headless` では通常ウィンドウを出さず、ログインや追加確認のときだけ画面を出して、終わったらヘッドレスに戻します。同じプロファイルを画面付きと同時には開かないでください。
+
+```bash
+npm start -- --headless
+# または .env に HEADLESS=1
+```
+
+引数 `--headless` / `--headed` が `HEADLESS` より優先します。同じプロファイルを画面付きと同時には開かないでください。
 
 Export 拡張をまだ入れていなければ、開いた Chrome の `chrome://extensions` から読み込むか、`.env` に拡張フォルダのパスを書きます。
 

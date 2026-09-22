@@ -40,6 +40,21 @@ export function parseArxivAtomYear(xml: string): string {
   return m?.[1] ?? "";
 }
 
+export function parseArxivAtomTitle(xml: string): string {
+  const entry = xml.match(/<entry\b[\s\S]*?<\/entry>/i)?.[0] ?? xml;
+  const m = entry.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  if (!m?.[1]) return "";
+  return m[1]
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function fetchArxivAtom(id: string): Promise<string> {
   const key = id.trim();
   if (!key) return "";

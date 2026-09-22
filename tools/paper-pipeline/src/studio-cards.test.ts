@@ -16,6 +16,7 @@ import {
   studioVideoGenerationDone,
   isSlideDeckCardText,
   isPresenterSlideFormatText,
+  isSlideGenerationInProgress,
   textLooksLikeGenerating,
 } from "./studio-cards.ts";
 
@@ -154,6 +155,21 @@ test("compact なスライドカードは再生成しない", () => {
   );
   assert.equal(shouldKickoffSlides(["tablet スライド資料 chevron_forward"]), true);
   assert.equal(shouldKickoffSlides(["スライド資料を生成して... 1件のソースに基づく"]), false);
+});
+
+test("動画・クイズ・単語帳と生成タイルだけではスライドをキックオフする", () => {
+  const cards = [
+    "subscriptions 未読 永遠のフラクタル：宇宙はなぜ無限に再生するのか 7:21 · 解説 · 1 件のソース · 15 時間前 play_arrow",
+    "cards_star カオス的インフレ フラッシュカード 1 件のソース · 15 時間前 more_vert",
+    "quiz インフレーション クイズ 1 件のソース · 15 時間前 more_vert",
+    "7:21 · 解説 · 1 件のソース · 15 時間前",
+    "add ノートブックを作成 tablet スライド資料 chevron_forward subscriptions 動画解説 chevron_forward sync 動画解説 quiz インフレーション クイズ 1 件のソース · 15 時間前 フラッシュカード",
+  ];
+  for (const c of cards) {
+    assert.equal(isSlideDeckCardText(c), false, c.slice(0, 48));
+    assert.equal(isSlideGenerationInProgress(c), false, c.slice(0, 48));
+  }
+  assert.equal(shouldKickoffSlides(cards), true);
 });
 
 test("動画ダウンロードは download / ダウンロード / メニュー表記", () => {

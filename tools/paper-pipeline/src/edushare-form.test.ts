@@ -7,8 +7,12 @@ import {
   fallbackAuthorName,
   isAuthorRequiredError,
   isDummyAuthorValue,
+  materialCarouselShowLabel,
   notebookLmMaterialBlockIsRegistered,
+  paperMaterialIsRegistered,
   pickAuthorSelectValue,
+  SLIDE_MATERIAL_HEADING,
+  VIDEO_MATERIAL_HEADING,
 } from "./edushare-form.ts";
 
 test("pickAuthorSelectValue: 空とその他を飛ばして実名を返す", () => {
@@ -42,6 +46,23 @@ test("notebookLmMaterialBlockIsRegistered: 未登録を登録済みと取り違�
     true,
   );
   assert.equal(notebookLmMaterialBlockIsRegistered("スライド（PDF）"), false);
+});
+
+test("materialCarouselShowLabel / paperMaterialIsRegistered", () => {
+  assert.equal(materialCarouselShowLabel(SLIDE_MATERIAL_HEADING), "スライド（PDF）を表示");
+  assert.equal(materialCarouselShowLabel(VIDEO_MATERIAL_HEADING), "動画（MP4）を表示");
+  assert.equal(
+    paperMaterialIsRegistered({ formBlockText: "スライド（PDF）\n未登録", hasViewerPane: true }),
+    true,
+  );
+  assert.equal(
+    paperMaterialIsRegistered({ formBlockText: "スライド（PDF）\n未登録", hasViewerPane: false }),
+    false,
+  );
+  assert.equal(
+    paperMaterialIsRegistered({ formBlockText: "動画（MP4）\n登録済み", hasViewerPane: false }),
+    true,
+  );
 });
 
 test("choosePaperAuthor: デモ著者は捨てて Files 貼り付けの先頭名を入れる", () => {

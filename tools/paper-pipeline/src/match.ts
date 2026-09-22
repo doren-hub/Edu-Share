@@ -1,6 +1,6 @@
 /** タイトル・ファイル名・DOI の突き合わせ、業界候補の最長一致 */
 
-import { looksLikeCitationTitle, looksLikeVenueLine, tldrUsable } from "./scispace-card.ts";
+import { isDummySciSpacePaste, looksLikeCitationTitle, looksLikeVenueLine, tldrUsable } from "./scispace-card.ts";
 
 export function normalizeKey(s: string): string {
   return s
@@ -53,6 +53,7 @@ export function titleUsableForExistingMatch(title: string, filename: string): bo
   if (/^[\d._-]+$/.test(t)) return false;
   if (looksLikeCitationTitle(t)) return false;
   if (looksLikeVenueLine(t)) return false;
+  if (isDummySciSpacePaste(t)) return false;
   return true;
 }
 
