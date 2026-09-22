@@ -155,3 +155,24 @@ test("shouldSkipNotebookVisit: メタ未取得や Chrome 切断後は Studio を
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("hasHarvestableWork: 収穫クールダウン中は同じ MP4 / メタ取り直しを収穫扱いにしない", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pp-harvest-cool-"));
+  try {
+    const until = new Date(Date.now() + 10 * 60_000).toISOString();
+    const state = paper(dir, {
+      notebooklmUrl: "https://notebooklm.google.com/notebook/x",
+      completed: ["sci-upload", "sci-meta", "edu-upload", "nlm-slides", "nlm-video"],
+      studioStarted: ["nlm-slides", "nlm-video"],
+      harvestRetryAt: until,
+      harvestFailures: 1,
+      filesPaste: "a.pdf\nA title\n2024 · Ada Lovelace\narXiv",
+      eduShareTestUrl: "http://localhost:3000/tests/x",
+      waitingFor: "nlm-video",
+    });
+    assert.equal(hasHarvestableWork(state, STUDIO_STAGES), false);
+    assert.equal(shouldSkipNotebookVisit(state, STUDIO_STAGES), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -17,7 +17,7 @@ import {
 } from "./state.ts";
 import { hasHarvestableWork, missingEduUploads } from "./harvest.ts";
 import { currentNotebookQuotaPause, EXIT_QUOTA, waitUntilNotebookQuotaAllows } from "./notebook-quota.ts";
-import { EXIT_WAITING, recheckDelayMs } from "./waiting.ts";
+import { EXIT_WAITING, recheckDelayMs, retryUntilMs } from "./waiting.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
 import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
@@ -103,6 +103,10 @@ function initialStatus(
   const kickoffBegun = studioKickoffBegun(state, skip);
   const kickoffSettled = studioKickoffSettled(state, skip);
   const harvestable = hasHarvestableWork(state, selected);
+  const coolUntil = retryUntilMs(state);
+  if (coolUntil > Date.now()) {
+    return { status: "waiting", nextCheckAt: coolUntil, kickoffBegun, kickoffSettled, harvestable };
+  }
   if (hasDoneMarker(item.paperDir)) {
     if (
       needsLocalVideoFile(state) ||
@@ -138,6 +142,7 @@ function orchHelp(): string {
   同じ Chrome プロファイルは同時に使いません。
   Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。
   そのあいだは SciSpace 掲載・メタ、できている生成物の Edu Share 登録を先に進めます。
+  MP4 が取れない・Studio が空・SciSpace メタが進まないときは同じ論文をすぐ開き直さず、間隔を空けます。
 
   npm start
   npm start -- --headless
@@ -263,7 +268,7 @@ async function main(): Promise<void> {
       const state = loadPaperState(track.item);
       applyKickoff(job, state, skip, cfg.studioGenerate);
       const stage = state.waitingFor || "nlm-video";
-      const cooldownUntil = Date.parse(state.kickoffRetryAt || "") || 0;
+      const cooldownUntil = retryUntilMs(state);
       if (!job.kickoffSettled && !generationBlocked && cooldownUntil <= Date.now()) {
         job.status = "ready";
         job.nextCheckAt = 0;

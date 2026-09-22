@@ -101,6 +101,12 @@ async function useChromeOwnDownloads(context: BrowserContext, downloadsPath: str
     downloadPath: downloadsPath,
     eventsEnabled: false,
   });
+  await session
+    .send("Network.enable", {
+      maxResourceBufferSize: 256 * 1024 * 1024,
+      maxPostDataSize: 0,
+    })
+    .catch(() => undefined);
   log(`Chrome 保存先: ${downloadsPath}（ブラウザ自身に書かせます）`);
 }
 

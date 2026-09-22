@@ -2,6 +2,7 @@ import { isCompleted, studioKickoffBegun, studioKickoffSettled, type PaperState,
 import { missingStudioStages, studioArtifactReady } from "./studio-select.ts";
 import { needsSciSpaceCardRecapture, rawFilesCardPaste } from "./scispace-card.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
+import { isRetryCooling } from "./waiting.ts";
 
 export function hasAnyStudioArtifact(
   state: PaperState,
@@ -24,6 +25,14 @@ export function hasHarvestableWork(
   selected: readonly StudioStageId[],
 ): boolean {
   if (state.skippedAlreadyUploaded && !state.eduShareTestId && !state.eduShareTestUrl) {
+    return false;
+  }
+  if (isRetryCooling(state)) {
+    if (!isCompleted(state, "sci-upload")) return true;
+    if (hasAnyStudioArtifact(state, selected)) {
+      if (!isCompleted(state, "edu-upload")) return true;
+      if (missingEduUploads(state, selected).length > 0) return true;
+    }
     return false;
   }
   if (needsLocalVideoFile(state)) return true;
@@ -51,7 +60,7 @@ export function shouldSkipNotebookVisit(
   selected: readonly StudioStageId[],
   opts: { skipKickoff?: boolean; skipStudio?: boolean } = {},
 ): boolean {
-  if (needsLocalVideoFile(state)) return false;
+  if (needsLocalVideoFile(state)) return isRetryCooling(state);
   if (opts.skipStudio) return true;
   if (!studioKickoffSettled(state)) return false;
   if (!isCompleted(state, "sci-meta") || !rawFilesCardPaste(state.filesPaste, state.filename)) {

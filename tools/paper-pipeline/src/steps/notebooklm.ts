@@ -1,7 +1,7 @@
-import { copyFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright";
-import { pauseIfBlocked, isInteractiveUi } from "../human.ts";
+import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isTargetClosedError } from "../browser.ts";
 import {
@@ -40,14 +40,14 @@ import {
   textLooksLikeGenerating,
   type VideoKickoffScan,
 } from "../studio-cards.ts";
-import { GenerationWaitingError } from "../waiting.ts";
+import { decideIncompleteStudioScan, GenerationWaitingError, STUDIO_EMPTY_REVISIT_MS, clearHarvestRetry, GENERATION_START_GRACE_MS } from "../waiting.ts";
 import {
   loadNotebookQuota,
   notebookGenerationPause,
   NotebookQuotaPauseError,
   type NotebookQuotaConfig,
 } from "../notebook-quota.ts";
-import { VIDEO_MIN_BYTES, isMp4FtypBuffer, isRealVideoFile, rankVideoArtifactUrls, videoFileReady } from "../video-file.ts";
+import { VIDEO_MIN_BYTES, isRealVideoFile, videoFileReady } from "../video-file.ts";
 import { formatStudioGenerateJa } from "../studio-select.ts";
 
 const NOTEBOOK_APP_HOST = /(?:notebooklm|notebook)\.google\.com/i;
@@ -694,7 +694,7 @@ async function waitUntilStudioOutputsReady(page: Page, timeoutMs = 45_000): Prom
     if (!studioOutputScanIncomplete(t)) return true;
     await page.waitForTimeout(500).catch(() => undefined);
   }
-  warn("Studio 出力カードがまだ出ていません（ツールバーだけのときは開始記録を消しません）");
+  warn("Studio 出力カードがまだ出ていません");
   return false;
 }
 
@@ -807,7 +807,6 @@ function textLooksLikeStudioFailure(t: string): boolean {
 }
 
 /** 生成ボタンを押してから UI に sync が出るまでの猶予。ここを過ぎても出力が無ければやり直し。 */
-const GENERATION_START_GRACE_MS = 20 * 60 * 1000;
 
 function generationStartIsRecent(state: PaperState): boolean {
   const t = Date.parse(state.generationStartedAt || "");
@@ -1371,7 +1370,7 @@ const LIST_ARTIFACTS_IN_PAGE = String.raw`async () => {
   const re = /https?:\\?\/\\?\/[^\s"\\]+/g;
   let m;
   while ((m = re.exec(text))) add(m[0]);
-  return { status: res.status, at: Boolean(at), notebookId: notebookId, urls: urls, preview: text.slice(0, 240) };
+  return { status: res.status, at: Boolean(at), notebookId: notebookId, urls: urls, preview: text.slice(0, 240), raw: text.slice(0, 80_000) };
 }`;
 
 async function fetchSlidePdfViaRpc(page: Page, destPath: string): Promise<boolean> {
@@ -1793,288 +1792,30 @@ async function clickNotebookLmVideoDownload(page: Page): Promise<boolean> {
   return false;
 }
 
-async function writeBufIfVideo(destPath: string, buf: Buffer, label: string): Promise<boolean> {
-  if (buf.length <= VIDEO_MIN_BYTES) return false;
-  writeFileSync(destPath, buf);
-  if (!isRealVideoFile(destPath)) {
-    try {
-      unlinkSync(destPath);
-    } catch {
-      /* 破棄できなくても次の取得で上書きする */
-    }
-    warn(`URL は MP4 ではありません: ${label.slice(0, 64)}（先頭 ${buf.subarray(0, 8).toString("latin1")}）`);
-    return false;
-  }
-  log(`保存: ${destPath}（${buf.length} bytes）`);
-  return true;
-}
-
-async function fetchUrlInPageToVideo(page: Page, src: string, destPath: string): Promise<boolean> {
-  const sink = page as VideoSinkPage;
-  await bindVideoSink(sink);
-  sink.__ppVideoChunks = [];
-  try {
-    const ok = await Promise.race([
-      page.evaluate(
-        `(async (src) => {
-          const res = await fetch(src, { credentials: "include", redirect: "follow" });
-          if (!res.ok) return false;
-          const buf = new Uint8Array(await res.arrayBuffer());
-          if (buf.length < ${VIDEO_MIN_BYTES}) return false;
-          const push = window["__ppVideoPush"];
-          if (typeof push !== "function") return false;
-          const step = 32768;
-          for (let i = 0; i < buf.length; i += step) {
-            const slice = buf.subarray(i, i + step);
-            let s = "";
-            for (let j = 0; j < slice.length; j++) s += String.fromCharCode(slice[j]);
-            await push(btoa(s));
-          }
-          return true;
-        })(${JSON.stringify(src)})`,
-      ),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 180_000)),
-    ]);
-    if (!ok) return false;
-    const buf = Buffer.concat(sink.__ppVideoChunks ?? []);
-    sink.__ppVideoChunks = [];
-    return writeBufIfVideo(destPath, buf, src);
-  } catch (e) {
-    sink.__ppVideoChunks = [];
-    warn(`ページ内の動画取得に失敗: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}`);
-    return false;
-  }
-}
-function cookieHeaderForUrl(
-  cookies: { name: string; value: string; domain: string }[],
-  src: string,
-): string {
-  let host = "";
-  try {
-    host = new URL(src).hostname;
-  } catch {
-    return "";
-  }
-  return cookies
-    .filter((c) => {
-      const d = c.domain.startsWith(".") ? c.domain : `.${c.domain}`;
-      return `.${host}`.endsWith(d);
-    })
-    .map((c) => `${c.name}=${c.value}`)
-    .join("; ");
-}
-
-async function fetchUrlToVideo(page: Page, src: string, destPath: string): Promise<boolean> {
-  if (!/^https?:/i.test(src)) return false;
-  const cookies = await page.context().cookies().catch(() => []);
-  const headers: Record<string, string> = {
-    "Accept-Encoding": "identity",
-    Accept: "video/mp4,application/octet-stream,*/*",
-    Referer: page.url() || "https://notebook.google.com/",
-  };
-  const cookie = cookieHeaderForUrl(cookies, src);
-  if (cookie) headers.Cookie = cookie;
-  try {
-    const res = await fetch(src, {
-      headers,
-      redirect: "follow",
-      signal: AbortSignal.timeout(180_000),
-    });
-    if (!res.ok && res.status !== 206) {
-      warn(`動画 URL HTTP ${res.status}: ${src.slice(0, 96)}`);
-      return false;
-    }
-    const reader = res.body?.getReader();
-    if (!reader) return false;
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let decided = false;
-    while (true) {
-      const step = await reader.read();
-      if (step.done) break;
-      chunks.push(Buffer.from(step.value));
-      total += step.value.length;
-      if (!decided && total >= 12) {
-        decided = true;
-        if (!isMp4FtypBuffer(Buffer.concat(chunks).subarray(0, 12))) {
-          await reader.cancel().catch(() => undefined);
-          warn(
-            `URL は MP4 ではありません: ${src.slice(0, 64)}（先頭 ${Buffer.concat(chunks).subarray(0, 8).toString("latin1")}）`,
-          );
-          return false;
-        }
-      }
-    }
-    return writeBufIfVideo(destPath, Buffer.concat(chunks), src);
-  } catch (e) {
-    const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0];
-    warn(`動画 URL 取得に失敗: ${msg}`);
-    return false;
-  }
-}
-
-async function fetchVideoViaRpc(page: Page, destPath: string): Promise<boolean> {
-  const payload = (await page.evaluate(`(${LIST_ARTIFACTS_IN_PAGE})()`).catch((e) => {
-    warn(`LIST_ARTIFACTS 失敗: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
-    return null;
-  })) as {
-    status: number;
-    at?: boolean;
-    notebookId?: string;
-    urls: string[];
-    preview?: string;
-  } | null;
-  if (!payload) return false;
-  log(
-    `LIST_ARTIFACTS(動画) status=${payload.status} urls=${payload.urls.length} notebook=${payload.notebookId ?? ""} at=${Boolean(payload.at)}`,
-  );
-  if (!payload.urls.length) {
-    warn(`LIST_ARTIFACTS 応答先頭: ${(payload.preview ?? "").replace(/\s+/g, " ")}`);
-    return false;
-  }
-  const hosts = [
-    ...new Set(
-      payload.urls.map((u) => {
-        try {
-          return new URL(u).host;
-        } catch {
-          return u.slice(0, 40);
-        }
-      }),
-    ),
-  ];
-  log(`LIST_ARTIFACTS hosts: ${hosts.join(" | ")}`);
-  const candidates = rankVideoArtifactUrls(payload.urls);
-  log(`LIST_ARTIFACTS videoCandidates=${candidates.length}/${payload.urls.length}`);
-  for (const src of candidates) {
-    log(`動画 RPC URL: ${src.slice(0, 120)}`);
-    if (await fetchUrlToVideo(page, src, destPath)) return true;
-  }
-  return false;
-}
-
-type VideoSinkPage = Page & { __ppVideoChunks?: Buffer[]; __ppVideoBound?: boolean };
-
-async function bindVideoSink(page: VideoSinkPage): Promise<void> {
-  if (page.__ppVideoBound) return;
-  page.__ppVideoChunks = [];
-  try {
-    await page.exposeFunction("__ppVideoPush", (b64: string) => {
-      if (typeof b64 === "string" && b64) page.__ppVideoChunks!.push(Buffer.from(b64, "base64"));
-    });
-  } catch (e) {
-    if (!/already registered|has been already registered/i.test(String(e))) throw e;
-  }
-  page.__ppVideoBound = true;
-}
-
-async function fetchBlobUrlToVideo(page: Page, destPath: string): Promise<boolean> {
-  const sink = page as VideoSinkPage;
-  await bindVideoSink(sink);
-  sink.__ppVideoChunks = [];
-  const ok = await page
-    .evaluate(
-      `(async () => {
-        const v = document.querySelector("video");
-        const src = (v && (v.currentSrc || v.src)) || "";
-        if (!src || src.indexOf("blob:") !== 0) return false;
-        const res = await fetch(src);
-        const buf = new Uint8Array(await res.arrayBuffer());
-        if (buf.length < ${VIDEO_MIN_BYTES}) return false;
-        const push = window["__ppVideoPush"];
-        if (typeof push !== "function") return false;
-        const step = 32768;
-        for (let i = 0; i < buf.length; i += step) {
-          const slice = buf.subarray(i, i + step);
-          let s = "";
-          for (let j = 0; j < slice.length; j++) s += String.fromCharCode(slice[j]);
-          await push(btoa(s));
-        }
-        return true;
-      })()`,
-    )
-    .catch((e) => {
-      warn(`blob 動画取得: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
-      return false;
-    });
-  if (!ok || !sink.__ppVideoChunks?.length) return false;
-  const buf = Buffer.concat(sink.__ppVideoChunks);
-  sink.__ppVideoChunks = [];
-  writeFileSync(destPath, buf);
-  if (!isRealVideoFile(destPath)) {
-    try {
-      unlinkSync(destPath);
-    } catch {
-      /* 破棄できなくても次の取得で上書きする */
-    }
-    warn("blob から取ったファイルは MP4 ではありません");
-    return false;
-  }
-  log(`保存: ${destPath}（${buf.length} bytes, blob）`);
-  return true;
-}
-async function fetchOpenVideoElement(page: Page, destPath: string): Promise<boolean> {
-  const src = String(
-    await page
-      .evaluate(`(() => {
-        const v = document.querySelector("video");
-        return (v && (v.currentSrc || v.src)) || "";
-      })()`)
-      .catch(() => ""),
-  );
-  if (/^https?:/i.test(src)) {
-    if (await fetchUrlToVideo(page, src, destPath)) return true;
-  }
-  const perfUrls = (await page
-    .evaluate(
-      `(() => {
-        try {
-          return performance.getEntriesByType("resource").map((e) => e.name).filter((u) =>
-            /\\.(mp4|m4v|mov|webm)(\\?|$)/i.test(u) ||
-            /mime=video|video\\/mp4|googlevideo|contribution\\.usercontent\\.google\\.com\\/download/i.test(u)
-          );
-        } catch (e) {
-          return [];
-        }
-      })()`,
-    )
-    .catch(() => [])) as string[];
-  for (const u of perfUrls.slice(0, 8)) {
-    log(`動画 resource URL: ${String(u).slice(0, 120)}`);
-    if (await fetchUrlToVideo(page, u, destPath)) return true;
-  }
-  if (src.startsWith("blob:")) return fetchBlobUrlToVideo(page, destPath);
-  return false;}
-
 async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<void> {
   await withTimeout(
     (async () => {
-      if (!(await waitUntilVideoDurationVisible(page, 5_000))) {
-        warn("動画の長さ表示が出る前にダウンロードを試みます");
-      }
-      log("Studio の解説カードから MP4 を保存します（再生しません）");
+      log("Studio メニューの「動画をダウンロード」を使います");
       await ensureKeeperTab(page);
-      if (await fetchVideoViaRpc(page, destPath)) return;
-      if (page.isClosed()) throw new Error("ブラウザが閉じられています");
-      if (!isInteractiveUi()) {
-        throw new Error(
-          "ヘッドレスでは Studio メニューの動画ダウンロードを使いません（Chrome が落ちる）。RPC で MP4 を取れませんでした",
-        );
+      if (!(await waitUntilVideoDurationVisible(page, 5_000))) {
+        warn("動画の長さ表示が出る前にメニューダウンロードを試みます");
       }
       const clickDownload = async () => {
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 8; i++) {
           if (page.isClosed()) throw new Error("ブラウザが閉じられています");
           if (await clickNotebookLmVideoDownload(page)) return;
+          if (await clickLabeledControl(page, "download")) return;
           await new Promise((r) => setTimeout(r, 1_000));
         }
         throw new Error("ダウンロード操作が見つかりません");
       };
       await waitForDownloadTo(page, destPath, clickDownload, 180_000, VIDEO_MIN_BYTES);
-      if (isRealVideoFile(destPath)) return;
-      throw new Error("動画 MP4 を Studio から保存できませんでした");
+      if (!isRealVideoFile(destPath)) {
+        throw new Error("Studio の「動画をダウンロード」で MP4 を保存できませんでした");
+      }
     })(),
-    250_000,
-    "動画保存が 250 秒を超えたので打ち切ります",
+    200_000,
+    "動画保存が 200 秒を超えたので打ち切ります",
   );
 }
 
@@ -2349,7 +2090,11 @@ function collectErrMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-async function unmarkStaleStudioStarts(page: Page, state: PaperState): Promise<void> {
+async function unmarkStaleStudioStarts(
+  page: Page,
+  state: PaperState,
+  skipKickoff = false,
+): Promise<void> {
   const body = await notebookBody(page);
   if (generationStartIsRecent(state)) {
     log("生成開始から間もないので、出力カードがまだ無くてもやり直ししません");
@@ -2359,8 +2104,25 @@ async function unmarkStaleStudioStarts(page: Page, state: PaperState): Promise<v
     log("Studio に生成中表示がありますが開始から時間が経っているので、出力の有無で判断します");
   }
   if (studioOutputScanIncomplete(body)) {
-    log("Studio 出力カードがまだ無いので開始記録はそのままにします");
-    return;
+    const decision = decideIncompleteStudioScan({
+      generationStartedAt: state.generationStartedAt,
+      generating: textLooksLikeGenerating(body),
+    });
+    const action = skipKickoff && decision === "unmark" ? "cooldown" : decision;
+    if (action === "keep") {
+      log("Studio 出力カードがまだ無いので開始記録はそのままにします");
+      return;
+    }
+    if (action === "cooldown") {
+      const until = new Date(Date.now() + STUDIO_EMPTY_REVISIT_MS).toISOString();
+      const stage = waitingStudioStage(state) ?? firstPendingStudioStage(state) ?? "nlm-video";
+      log(`Studio 出力カードがまだ無いので、${until} まで同じ論文を開き直しません`);
+      state.kickoffRetryAt = until;
+      state.kickoffRetryStage = stage;
+      saveState(state);
+      throw new GenerationWaitingError(stage);
+    }
+    log("Studio 出力カードが長時間無いので開始記録を捨ててやり直します");
   }
   if (hasStudioStarted(state, "nlm-slides") && !isCompleted(state, "nlm-slides")) {
     const stamps = page.getByText(STUDIO_RELATIVE_TIME);
@@ -2467,6 +2229,10 @@ async function collectReadyStudio(
     if (!state.completed.includes("nlm-video") && !state.completed.includes("done")) {
       markCompleted(state, "nlm-video");
     }
+    if (state.harvestFailures || state.harvestRetryAt) {
+      clearHarvestRetry(state);
+      saveState(state);
+    }
   } else if (!ctx.skipVideoDownload) {
     try {
       if (await studioHasExplainerVideoOutput(page)) {
@@ -2475,6 +2241,7 @@ async function collectReadyStudio(
         await downloadStudioVideoMp4(page, videoDest);
         if (artifactReady(videoDest, VIDEO_MIN_BYTES)) {
           state.videoMp4Path = videoDest;
+          clearHarvestRetry(state);
           saveState(state);
           if (!state.completed.includes("nlm-video") && !state.completed.includes("done")) {
             markCompleted(state, "nlm-video");
@@ -2485,7 +2252,8 @@ async function collectReadyStudio(
       const msg = collectErrMsg(e);
       if (
         isTargetClosedError(e) ||
-        /ダウンロードボタンが見つかりません|動画保存が |LIST_ARTIFACTS|Chrome ダウンロード|動画 MP4 を Studio/.test(msg)      ) {
+        /ダウンロードボタンが見つかりません|ダウンロード操作が見つかりません|動画保存が |LIST_ARTIFACTS|Chrome ダウンロード|動画をダウンロード/.test(msg)
+      ) {
         ctx.skipVideoDownload = true;
       }
       warn(`動画の保存はまだできません: ${msg}`);
@@ -2550,7 +2318,7 @@ async function runStudioParallel(
   await expandNotebookPanels(page);
   const outputsReady = await waitUntilStudioOutputsReady(page);
   await logStudioCardSummaries(page);
-  await unmarkStaleStudioStarts(page, state);
+  await unmarkStaleStudioStarts(page, state, skipKickoff);
 
   const want = (stage: StudioStageId) => !skipStudio.includes(stage);
   if (skipStudio.length) {

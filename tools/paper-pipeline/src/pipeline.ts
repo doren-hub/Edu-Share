@@ -51,7 +51,7 @@ import {
   sciSpaceTitleLooksLikeChrome,
   tldrUsable,
 } from "./scispace-card.ts";
-import { GenerationWaitingError } from "./waiting.ts";
+import { applyHarvestFailure, GenerationWaitingError, isRetryCooling } from "./waiting.ts";
 import { currentNotebookQuotaPause, NotebookQuotaPauseError } from "./notebook-quota.ts";
 import { needsLocalVideoFile, videoFileReady } from "./video-file.ts";
 import { formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
@@ -201,6 +201,14 @@ export async function repairSciSpaceCardMeta(
     if (cfg.onlyFilename && state.filename !== cfg.onlyFilename) continue;
     if (!state.eduShareTestUrl || !state.filename) continue;
     if (!needsSciSpaceCardRecapture(state)) continue;
+    if (needsLocalVideoFile(state)) {
+      log(`${state.filename}: MP4 取得を先にするため SciSpace メタ補修は後回しにします`);
+      continue;
+    }
+    if (isRetryCooling(state)) {
+      log(`${state.filename}: SciSpace メタ補修はクールダウン中（${state.harvestRetryAt} まで）`);
+      continue;
+    }
     log(`--- SciSpace メタ補修 ${state.filename} ---`);
     const before = {
       title: state.title,
@@ -344,6 +352,14 @@ export async function processOnePaper(
   }
   saveState(state);
 
+  if (isRetryCooling(state)) {
+    const until = state.harvestRetryAt || state.kickoffRetryAt;
+    log(`${item.filename}: 同じ失敗の再試行を遅らせます（${until} まで）`);
+    if (!state.waitingFor) state.waitingFor = firstPendingStudioStage(state, cfg.studioSkip) || "nlm-video";
+    saveState(state);
+    return "waiting";
+  }
+
   const selected = cfg.studioGenerate;
   if (hasDoneMarker(item.paperDir) && needsLocalVideoFile(state)) {
     log(`${item.filename}: 完了済みだが動画 MP4 が無いので Edu Share へ載せ直します`);
@@ -469,6 +485,13 @@ export async function processOnePaper(
     if (state.eduShareTestUrl && state.filesPaste.trim()) {
       await applySciSpaceMetaToPaperPage(page, { paperDir: item.paperDir, state });
     }
+    if (needsSciSpaceCardRecapture(state) && !needsLocalVideoFile(state) && !isRetryCooling(state)) {
+      const wait = applyHarvestFailure(state);
+      log(
+        `${item.filename}: SciSpace メタがまだ足りないので ${Math.round(wait / 60_000)} 分後に取り直します`,
+      );
+      saveState(state);
+    }
 
     const afterSci = matchesExistingPaper(existingWorkPapersExcept(cfg.workDir, item.paperDir), {
       filename: item.filename,
@@ -541,6 +564,9 @@ export async function processOnePaper(
       !videoFileReady(item.paperDir, state.videoMp4Path)
     ) {
       warn("解説動画の MP4 がまだ無いので、Edu Share 確認は後回しにします");
+      const wait = applyHarvestFailure(state);
+      log(`${item.filename}: MP4 取得を ${Math.round(wait / 60_000)} 分後にやり直します`);
+      saveState(state);
       throw new GenerationWaitingError("nlm-video");
     }
     await verifyEduSharePaper(page, {

@@ -56,6 +56,10 @@ export type PaperState = {
   kickoffRetryAt: string;
   /** kickoffRetryAt の対象段階。他の Studio は後回しにしない */
   kickoffRetryStage: StageId | "";
+  /** MP4 取得失敗や SciSpace メタが進まないとき、この時刻まで同じ論文を開かない */
+  harvestRetryAt: string;
+  /** harvestRetryAt の指数バックオフ用。成功したら 0 に戻す */
+  harvestFailures: number;
   /** Edu Share に載せ済みの Studio 成果物。利用量待ちの途中アップロード用 */
   eduUploaded: StudioStageId[];
 };
@@ -86,6 +90,8 @@ export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath"
     studioStarted: [],
     kickoffRetryAt: "",
     kickoffRetryStage: "",
+    harvestRetryAt: "",
+    harvestFailures: 0,
     eduUploaded: [],
   };
 }
@@ -118,6 +124,8 @@ export function loadState(paperDir: string, fallback: PaperState): PaperState {
       eduUploaded,
       kickoffRetryStage:
         parsed.kickoffRetryStage && isStageId(parsed.kickoffRetryStage) ? parsed.kickoffRetryStage : "",
+      harvestRetryAt: typeof parsed.harvestRetryAt === "string" ? parsed.harvestRetryAt : "",
+      harvestFailures: Math.max(0, Math.floor(Number(parsed.harvestFailures) || 0)),
       paperDir,
       inboxPdfPath: fallback.inboxPdfPath,
     };
