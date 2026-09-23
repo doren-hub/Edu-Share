@@ -203,9 +203,10 @@ export function helpText(): string {
   npm start -- --headless
   npm run repair-meta
   npm run repair-meta -- --only paper.pdf --headed
+  npm run fill-inbox -- --source "/path/to/papers" --count 3
   npm run worker -- --only paper.pdf --headless
 
-npm start は inbox 直下の PDF だけを、1論文ずつ worker で処理します。作業フォルダにあるだけの論文は対象にしません。SciSpace のメタ補修（Files 行が空、省略著者、画面文言の題名や掲載）は npm run repair-meta です。npm start と同時には起動しません。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。同じプロファイルで Chrome を同時には開きません。Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。そのあいだは、処理中の inbox の論文について SciSpace と、できている生成物の Edu Share 登録を先に進めます。
+npm start は inbox 直下の PDF だけを、1論文ずつ worker で処理します。作業フォルダにあるだけの論文は対象にしません。SciSpace のメタ補修（Files 行が空、省略著者、画面文言の題名や掲載）は npm run repair-meta です。未処理 PDF をライブラリから inbox へ 3 件コピーするのは npm run fill-inbox です。npm start と同時には起動しません。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。同じプロファイルで Chrome を同時には開きません。Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。そのあいだは、処理中の inbox の論文について SciSpace と、できている生成物の Edu Share 登録を先に進めます。
 
 必須: PAPER_INBOX_DIR と PAPER_WORK_DIR（.env または引数）
 

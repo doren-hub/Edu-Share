@@ -82,6 +82,15 @@ npm run repair-meta -- --only paper.pdf --headed
 
 `npm start` はこの補修をしない。同じ Chrome プロファイルなので、`npm start` と同時には起動しない。
 
+ライブラリから未処理の PDF を inbox へコピーする（既定 3 件。変更日が古い順。元のファイルは残す）:
+
+```bash
+npm run fill-inbox -- --source "/path/to/papers"
+npm run fill-inbox -- --source "/path/to/papers" --count 3
+```
+
+inbox または作業フォルダに同じ PDF 名があるものは処理済みとして飛ばします。ソースは `PAPER_SOURCE_DIR` でも指定できます。書類フォルダをプロセスから読めないときは、Finder 経由で一覧とコピーをします。
+
 ## 6. 終わりの見分け
 
 | 状態 | 置き場所 |
