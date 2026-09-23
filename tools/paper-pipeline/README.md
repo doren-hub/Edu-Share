@@ -38,6 +38,7 @@ npm start -- --inbox /Users/doren/Developer/edu-share-papers/inbox --work /Users
 
 ```bash
 npm run repair-meta -- --headed
+npm run fill-inbox -- --source "/path/to/papers" --count 3
 ```
 
 初回やログイン切れのときは Chrome が開くので、Google（NotebookLM）、SciSpace、Edu Share にログインしてください。`--headless` では通常ウィンドウを出さず、ログインや追加確認のときだけ画面を出して、終わったらヘッドレスに戻します。同じプロファイルを画面付きと同時には開かないでください。
