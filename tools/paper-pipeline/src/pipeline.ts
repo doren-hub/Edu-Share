@@ -43,10 +43,20 @@ import {
   verifyEduSharePaper,
 } from "./steps/edushare.ts";
 import { runNotebookLm } from "./steps/notebooklm.ts";
-import { captureSciSpaceCardMeta, captureSciSpaceRecordUrl, runSciSpaceMeta, runSciSpaceUpload } from "./steps/scispace.ts";
 import {
+  captureSciSpaceCardMeta,
+  captureSciSpaceRecordUrl,
+  runSciSpaceMeta,
+  runSciSpaceUpload,
+} from "./steps/scispace.ts";
+import {
+  descriptionLooksIncomplete,
   descriptionUsable,
+  hasBadPaperMeta,
+  looksLikePdfApiSummary,
+  sciSpaceDescriptionUsable,
   needsSciSpaceCardRecapture,
+  reconcileMetaFromFilesPaste,
   sciSpaceTldrLooksLikeChrome,
   sciSpaceTitleLooksLikeChrome,
   tldrUsable,
@@ -55,7 +65,12 @@ import { applyHarvestFailure, GenerationWaitingError, isRetryCooling } from "./w
 import { currentNotebookQuotaPause, NotebookQuotaPauseError } from "./notebook-quota.ts";
 import { needsLocalVideoFile, videoFileReady } from "./video-file.ts";
 import { formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
-import { hasAnyStudioArtifact, missingEduUploads, shouldSkipNotebookVisit } from "./harvest.ts";
+import {
+  hasAnyStudioArtifact,
+  hasPendingStudioHarvest,
+  missingEduUploads,
+  shouldSkipNotebookVisit,
+} from "./harvest.ts";
 
 export type BatchResult = {
   processed: string[];
@@ -200,12 +215,12 @@ export async function repairSciSpaceCardMeta(
     const state = loadState(paperDir, fallback);
     if (cfg.onlyFilename && state.filename !== cfg.onlyFilename) continue;
     if (!state.eduShareTestUrl || !state.filename) continue;
-    if (!needsSciSpaceCardRecapture(state)) continue;
+    if (!needsSciSpaceCardRecapture(state) && !hasBadPaperMeta(state)) continue;
     if (needsLocalVideoFile(state)) {
       log(`${state.filename}: MP4 取得を先にするため SciSpace メタ補修は後回しにします`);
       continue;
     }
-    if (isRetryCooling(state)) {
+    if (isRetryCooling(state) && !hasBadPaperMeta(state)) {
       log(`${state.filename}: SciSpace メタ補修はクールダウン中（${state.harvestRetryAt} まで）`);
       continue;
     }
@@ -220,6 +235,16 @@ export async function repairSciSpaceCardMeta(
     try {
       if (!(await recoverStuckPage(page))) {
         throw new Error("ブラウザが閉じられています");
+      }
+      if (hasBadPaperMeta(state) && !needsSciSpaceCardRecapture(state)) {
+        reconcileMetaFromFilesPaste(state);
+        saveState(state);
+        log(`${state.filename}: Files 行からメタを戻します title=${state.title.slice(0, 80)}`);
+        await applySciSpaceMetaToPaperPage(page, { paperDir, state });
+        state.lastError = "";
+        saveState(state);
+        updated.push(state.filename);
+        continue;
       }
       await captureSciSpaceCardMeta(page, {
         folderUrl: cfg.scispaceFolderUrl,
@@ -297,6 +322,89 @@ export async function repairSciSpaceCardMeta(
   return { updated, failed };
 }
 
+function needsDescriptionRepair(state: { tldr?: string }): boolean {
+  const t = (state.tldr ?? "").trim();
+  if (!t) return true;
+  if (looksLikePdfApiSummary(t)) return true;
+  return descriptionLooksIncomplete(t);
+}
+
+/** 説明欄を SciSpace TL;DR 優先で作り直す（無ければ PDF 要約） */
+export async function repairPaperDescriptions(
+  page: Page,
+  cfg: AppConfig,
+): Promise<{ updated: string[]; failed: string[] }> {
+  const updated: string[] = [];
+  const failed: string[] = [];
+  let names: string[] = [];
+  try {
+    names = readdirSync(cfg.workDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort((a, b) => a.localeCompare(b, "en"));
+  } catch {
+    return { updated, failed };
+  }
+  for (const name of names) {
+    const paperDir = join(cfg.workDir, name);
+    const fallback = emptyState({
+      filename: `${name}.pdf`,
+      inboxPdfPath: join(paperDir, `${name}.pdf`),
+      paperDir,
+    });
+    const state = loadState(paperDir, fallback);
+    if (cfg.onlyFilename && state.filename !== cfg.onlyFilename) continue;
+    if (!state.eduShareTestUrl || !state.eduShareTestId) continue;
+    if (!needsDescriptionRepair(state)) continue;
+    log(`--- 説明欄補修 ${state.filename} ---`);
+    try {
+      if (!(await recoverStuckPage(page))) {
+        throw new Error("ブラウザが閉じられています");
+      }
+      const previousTldr = state.tldr;
+      if (looksLikePdfApiSummary(state.tldr)) {
+        state.tldr = "";
+        saveState(state);
+      }
+      await captureSciSpaceCardMeta(page, {
+        folderUrl: cfg.scispaceFolderUrl,
+        filename: state.filename,
+        paperDir,
+        state,
+      });
+      saveState(state);
+      const gotDescription = sciSpaceDescriptionUsable(state.tldr) || descriptionUsable(state.tldr);
+      if (!gotDescription) {
+        const keep = previousTldr.trim() && !descriptionLooksIncomplete(previousTldr);
+        if (keep) {
+          state.tldr = previousTldr;
+          saveState(state);
+          log(`${state.filename}: SciSpace の説明が取れないので、元の説明を残します`);
+          await applySciSpaceMetaToPaperPage(page, { paperDir, state });
+        } else {
+          log(`${state.filename}: 説明を埋められないので、この回は説明補修を終えます`);
+          saveState(state);
+        }
+        continue;
+      }
+      if (!sciSpaceDescriptionUsable(state.tldr)) {
+        log(`${state.filename}: SciSpace TL;DR が取れないので PDF 要約にフォールバックします`);
+      }
+      await applySciSpaceMetaToPaperPage(page, { paperDir, state });
+      saveState(state);
+      updated.push(state.filename);
+    } catch (e) {
+      if (e instanceof NeedVisibleChromeError) throw e;
+      const msg = firstLine(e);
+      state.lastError = msg;
+      saveState(state);
+      logError(`${state.filename}: 説明欄補修に失敗: ${msg}`);
+      failed.push(state.filename);
+    }
+  }
+  return { updated, failed };
+}
+
 function reopenStudioFollowup(
   state: PaperState,
   selected: readonly StudioStageId[],
@@ -352,7 +460,8 @@ export async function processOnePaper(
   }
   saveState(state);
 
-  if (isRetryCooling(state)) {
+  const selected = cfg.studioGenerate;
+  if (isRetryCooling(state) && !hasPendingStudioHarvest(state, selected)) {
     const until = state.harvestRetryAt || state.kickoffRetryAt;
     log(`${item.filename}: 同じ失敗の再試行を遅らせます（${until} まで）`);
     if (!state.waitingFor) state.waitingFor = firstPendingStudioStage(state, cfg.studioSkip) || "nlm-video";
@@ -360,7 +469,6 @@ export async function processOnePaper(
     return "waiting";
   }
 
-  const selected = cfg.studioGenerate;
   if (hasDoneMarker(item.paperDir) && needsLocalVideoFile(state)) {
     log(`${item.filename}: 完了済みだが動画 MP4 が無いので Edu Share へ載せ直します`);
     clearStage(state, "done");

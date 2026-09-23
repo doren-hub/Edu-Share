@@ -3,7 +3,19 @@ import type { Locator, Page } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isOtherIndustryValue, pickPaperIndustry, type ExistingPaper } from "../match.ts";
-import { stripTldrSnippetNumbers, descriptionUsable, eduShareSciSpaceMetadataPaste, extractSciSpaceCardMeta, isDummySciSpacePaste, titleLooksLikeFilename } from "../scispace-card.ts";
+import {
+  stripTldrSnippetNumbers,
+  descriptionUsable,
+  eduShareSciSpaceMetadataPaste,
+  extractSciSpaceCardMeta,
+  isDummySciSpacePaste,
+  looksLikePdfApiSummary,
+  reconcileMetaFromFilesPaste,
+  sciSpaceDescriptionUsable,
+  titleLooksLikeBadSciSpaceCapture,
+  titleLooksLikeFilename,
+  venueLooksLikeBadSciSpaceCapture,
+} from "../scispace-card.ts";
 import {
   choosePaperAuthor,
   isAuthorRequiredError,
@@ -12,7 +24,16 @@ import {
   SLIDE_MATERIAL_HEADING,
   VIDEO_MATERIAL_HEADING,
 } from "../edushare-form.ts";
-import { bindEduSharePaper, isCompleted, markCompleted, markEduUploaded, unmarkEduUploaded, type PaperState, type StudioStageId } from "../state.ts";
+import {
+  bindEduSharePaper,
+  isCompleted,
+  markCompleted,
+  markEduUploaded,
+  saveState,
+  unmarkEduUploaded,
+  type PaperState,
+  type StudioStageId,
+} from "../state.ts";
 import { fillIfVisible, saveFailureShot } from "../ui.ts";
 import { videoArtifactPath, videoFileReady, ensureUploadableVideo, VIDEO_UPLOAD_MAX_BYTES } from "../video-file.ts";
 
@@ -26,14 +47,24 @@ function shouldSkipSciSpacePaste(paste: string, filename: string): boolean {
 }
 
 function usableEduShareTitle(state: PaperState): string {
-  const t = state.title.trim();
-  if (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename)) return "";
+  let t = state.title.trim();
+  if (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t)) {
+    t = extractSciSpaceCardMeta(state.filesPaste, state.filename).title.trim();
+  }
+  if (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t)) {
+    return "";
+  }
   return t.slice(0, 200);
 }
 
 function usableEduShareVenue(state: PaperState): string {
-  const v = state.venue.trim();
-  if (!v || isDummySciSpacePaste(v) || /^(null|undefined)$/i.test(v)) return "";
+  let v = state.venue.trim();
+  if (!v || isDummySciSpacePaste(v) || /^(null|undefined)$/i.test(v) || venueLooksLikeBadSciSpaceCapture(v)) {
+    v = extractSciSpaceCardMeta(state.filesPaste, state.filename).venue.trim();
+  }
+  if (!v || isDummySciSpacePaste(v) || /^(null|undefined)$/i.test(v) || venueLooksLikeBadSciSpaceCapture(v)) {
+    return "";
+  }
   return v.slice(0, 400);
 }
 
@@ -630,12 +661,17 @@ export async function applySciSpaceMetaToPaperPage(
 ): Promise<void> {
   const { paperDir, state } = opts;
   if (!state.eduShareTestUrl) throw new Error("Edu Share の論文 URL がありません");
+  if (reconcileMetaFromFilesPaste(state)) saveState(state);
   const paste = shouldSkipSciSpacePaste(state.filesPaste, state.filename)
     ? ""
     : eduShareSciSpaceMetadataPaste(state.filesPaste, state.filename);
   const rawTldr = state.tldr.trim();
-  const tldr = descriptionUsable(rawTldr) ? rawTldr : stripTldrSnippetNumbers(rawTldr);
-  let tldrOk = descriptionUsable(tldr);
+  const tldr = sciSpaceDescriptionUsable(rawTldr)
+    ? rawTldr
+    : descriptionUsable(rawTldr)
+      ? rawTldr
+      : stripTldrSnippetNumbers(rawTldr);
+  let tldrOk = sciSpaceDescriptionUsable(tldr) || descriptionUsable(rawTldr);
 
   try {
     await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });

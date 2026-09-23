@@ -18,10 +18,16 @@ import {
   pickBestSciSpaceCardText,
   sciSpaceExtractionLooksLikeChrome,
   titleLooksLikeFilename,
+  titleLooksLikeBadSciSpaceCapture,
+  venueLooksLikeBadSciSpaceCapture,
+  reconcileMetaFromFilesPaste,
   looksLikeCitationTitle,
   looksLikeSciSpaceNav,
   tldrUsable,
   descriptionUsable,
+  descriptionLooksIncomplete,
+  looksLikePdfApiSummary,
+  sciSpaceDescriptionUsable,
   pickAbstractSection,
 } from "./scispace-card.ts";
 
@@ -183,13 +189,24 @@ test("extractSciSpaceCardMeta: 雑誌名が arXiv 以外でも掲載に残す", 
   assert.match(eduShareSciSpaceMetadataPaste(everett, "everett1957.pdf"), /Reviews of Modern Physics/);
 });
 
-test("needsSciSpaceCardRecapture: 省略著者・年著者無しは取り直す", () => {
+test("needsSciSpaceCardRecapture: 省略著者だけでは取り直さず、年著者無しは取り直す", () => {
   assert.equal(
     needsSciSpaceCardRecapture({
       filename: "2601.15300v1.pdf",
       eduShareTestUrl: "http://localhost:3000/tests/z",
       filesPaste:
-        "2601.15300v1.pdf\nA title\n2026⋅Weiwei Wang, Jiyong Min...+1 More\narXiv\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+        "2601.15300v1.pdf\nA title that is long enough\n2026⋅Weiwei Wang, Jiyong Min...+1 More\narXiv\nPDF UPLOAD\nUploaded on 20 Sep 2026",
+    }),
+    false,
+  );
+  assert.equal(
+    needsSciSpaceCardRecapture({
+      filename: "MerloNRC.pdf",
+      eduShareTestUrl: "http://localhost:3000/tests/m",
+      title: "Nature Publishing Group",
+      venue: "Pricing",
+      filesPaste:
+        "MerloNRC.pdf\nCancer as an evolutionary and ecological process\n2006⋅DOI⋅Lauren M.F. Merlo, John W. Pepper...+2 More\nNature Reviews Cancer\nPDF UPLOAD\nUploaded on 23 Sep 2026",
     }),
     true,
   );
@@ -620,6 +637,40 @@ test("誌名だけの行は論文タイトルにしない", () => {
   assert.match(m.title, /Galaxy spin direction/);
 });
 
+test("titleLooksLikeBadSciSpaceCapture: ISSN や vol. 断片を弾く", () => {
+  assert.equal(titleLooksLikeBadSciSpaceCapture("ISSN 1473-0197"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Paper-like electronic displays: Large-area rubber-"), true);
+  assert.equal(
+    titleLooksLikeBadSciSpaceCapture(
+      "Virtual electrowetting channels: electronic liquid transport with continuous channel functionality†",
+    ),
+    false,
+  );
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Nature Publishing Group"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Content maybe subject to copyright Report"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("085001_1_5.0323853.pdf"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("vol. 98"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("This journal is"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Pricing"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Lab on a Chip"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Nature Reviews Cancer"), false);
+});
+
+test("reconcileMetaFromFilesPaste: Files 行の正しいメタで state を戻す", () => {
+  const filesPaste =
+    "Lab-on-a-Chip.pdf\nVirtual electrowetting channels: electronic liquid transport with continuous channel functionality†\n2010⋅DOI⋅Manjeet Dhindsa, Jason Heikenfeld...+4 More\nLab on a Chip";
+  const state = {
+    filename: "Lab-on-a-Chip.pdf",
+    title: "ISSN 1473-0197",
+    venue: "This journal is",
+    doi: "10.1039/b925278a",
+    filesPaste,
+  };
+  assert.equal(reconcileMetaFromFilesPaste(state), true);
+  assert.match(state.title, /Virtual electrowetting channels/);
+  assert.equal(state.venue, "Lab on a Chip");
+});
+
 test("日付・ページ範囲・PDF全画面はタイトルにしない", () => {
   assert.equal(looksLikeCitationTitle("OCTOBER 01 2023"), true);
   assert.equal(looksLikeCitationTitle(", 1–20 (2025)"), true);
@@ -652,6 +703,44 @@ test("Abstract 見出しの段落を TL;DR にする", () => {
     "1. Introduction",
   ].join("\n");
   assert.match(pickAbstractSection(raw), /Schwarzschild's solution of Einstein's field equations/);
+});
+
+test("looksLikePdfApiSummary: PDF 要約 API 形式を SciSpace より下げる", () => {
+  assert.equal(
+    looksLikePdfApiSummary("以下に資料本文の要約を記載します。\n\n### 主な研究手法\n…"),
+    true,
+  );
+  assert.equal(
+    looksLikePdfApiSummary("The paper discusses quantum effects on black holes."),
+    false,
+  );
+  assert.equal(
+    sciSpaceDescriptionUsable(
+      "The paper discusses quantum effects on black holes and explains how particle creation occurs near the event horizon under specific conditions.",
+    ),
+    true,
+  );
+});
+
+test("descriptionLooksIncomplete: 途中切れの PDF 要約を弾く", () => {
+  assert.equal(
+    descriptionLooksIncomplete(
+      "### 主な研究手法\nLuo and Hou [10]によって提案された3D Euler方程式の有限時間ブローアップシナリオを解明するため、2次元モデル「双曲型Boussinesqシステム」を",
+    ),
+    true,
+  );
+  assert.equal(
+    descriptionLooksIncomplete(
+      "以下に資料本文の要約を記載します。\n\n### 主な研究手法\n通常のテンソル計算規則が用いられた。",
+    ),
+    true,
+  );
+  assert.equal(
+    descriptionLooksIncomplete(
+      "### 主な研究手法\n本研究では、IoT技術に基づく道路・橋梁インテリジェント監視システムを設計しました。",
+    ),
+    false,
+  );
 });
 
 test("長い日本語要約は画面文言ではなく説明に使える", () => {

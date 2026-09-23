@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/orchestrate.ts",
+    "repair-meta": "tsx src/orchestrate.ts --repair-meta",
     "worker": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/match.test.ts src/scispace-card.test.ts src/scispace-record-url.test.ts src/scispace-files-view.test.ts src/inbox.test.ts src/schedule.test.ts src/state.test.ts src/studio-cards.test.ts src/studio-select.test.ts src/edushare-form.test.ts src/video-file.test.ts src/arxiv-abstract.test.ts src/crossref.test.ts src/notebook-quota.test.ts src/harvest.test.ts src/ui-download.test.ts src/human.test.ts src/config.test.ts src/browser.test.ts src/waiting.test.ts"

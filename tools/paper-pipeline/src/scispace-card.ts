@@ -212,17 +212,23 @@ export function needsRawFilesPaste(state: {
   return !rawFilesCardPaste(state.filesPaste ?? "", state.filename);
 }
 
-/** Files 行が空・省略著者・年著者行無しなら取り直す */
+/** Files 行が空・年著者行無し、または保存済みタイトル・掲載が画面文言なら取り直す。
+ * 著者の +N More だけでは取り直さない（展開に失敗しても同じ論文を繰り返さない）。
+ */
 export function needsSciSpaceCardRecapture(state: {
   filename: string;
   filesPaste?: string;
   eduShareTestUrl?: string;
+  title?: string;
+  venue?: string;
 }): boolean {
   if (!state.filename || !state.eduShareTestUrl?.trim()) return false;
+  const savedTitle = (state.title ?? "").trim();
+  if (savedTitle && titleLooksLikeBadSciSpaceCapture(savedTitle)) return true;
+  if (looksLikePublisherOrPaywall(state.venue ?? "")) return true;
   if (needsRawFilesPaste(state)) return true;
   const paste = state.filesPaste ?? "";
   if (isDummySciSpacePaste(paste)) return true;
-  if (filesRowHasTruncatedAuthors(paste)) return true;
   const card = extractSciSpaceCardMeta(paste, state.filename);
   if (isJunkVenueLine(card.venue)) return true;
   if (!card.yearAuthorLine) return true;
@@ -303,6 +309,82 @@ function pickTitle(lines: string[], filename: string): string {
 
 function isJunkVenueLine(s: string): boolean {
   return /^(null|undefined|none|n\/a|-)$/i.test(s.trim());
+}
+
+/** SciSpace 個別ページなどから誤って取れたタイトル */
+export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
+  const t = title.trim();
+  if (!t) return true;
+  if (/\.pdf$/i.test(t)) return true;
+  if (/^ISSN\s/i.test(t)) return true;
+  if (/^vol\.?\s*\d/i.test(t)) return true;
+  if (/^This journal is/i.test(t)) return true;
+  if (looksLikePublisherOrPaywall(t)) return true;
+  if (/[-–—]\s*$/.test(t) && t.length < 120) return true;
+  if (looksLikeCitationTitle(t)) return true;
+  if (looksLikeVenueLine(t) && t.length < 90) return true;
+  return false;
+}
+
+/** SciSpace 個別ページなどから誤って取れた掲載誌 */
+export function venueLooksLikeBadSciSpaceCapture(venue: string): boolean {
+  const v = venue.trim();
+  if (!v) return true;
+  if (isJunkVenueLine(v)) return true;
+  if (/^vol\.?\s*\d/i.test(v)) return true;
+  if (/^This journal is/i.test(v)) return true;
+  if (/^ISSN\s/i.test(v)) return true;
+  if (looksLikeCitationTitle(v)) return true;
+  if (looksLikePublisherOrPaywall(v)) return true;
+  return false;
+}
+
+/** 個別ページの出版社名や料金画面。論文タイトル・掲載誌ではない */
+export function looksLikePublisherOrPaywall(s: string): boolean {
+  const t = s.trim();
+  if (!t || t.length > 80) return false;
+  if (/^pricing$/i.test(t)) return true;
+  if (/^subscribe$/i.test(t)) return true;
+  if (/publishing group$/i.test(t)) return true;
+  if (/content maybe subject to copyright/i.test(t)) return true;
+  return false;
+}
+
+export function hasBadPaperMeta(state: {
+  title?: string;
+  venue?: string;
+  filename: string;
+}): boolean {
+  const title = (state.title ?? "").trim();
+  const venue = (state.venue ?? "").trim();
+  if (title && titleLooksLikeBadSciSpaceCapture(title)) return true;
+  if (venue && venueLooksLikeBadSciSpaceCapture(venue)) return true;
+  return false;
+}
+
+/** Files 行の方が正しいとき、state のタイトル・掲載・DOI を戻す */
+export function reconcileMetaFromFilesPaste(
+  state: { title: string; venue: string; doi: string; filesPaste: string; filename: string },
+): boolean {
+  const card = extractSciSpaceCardMeta(state.filesPaste, state.filename);
+  let changed = false;
+  if (
+    card.title &&
+    !titleLooksLikeFilename(card.title, state.filename) &&
+    (titleLooksLikeBadSciSpaceCapture(state.title) || !state.title.trim())
+  ) {
+    state.title = card.title;
+    changed = true;
+  }
+  if (card.venue && (venueLooksLikeBadSciSpaceCapture(state.venue) || !state.venue.trim())) {
+    state.venue = card.venue;
+    changed = true;
+  }
+  if (card.doi && !state.doi.trim()) {
+    state.doi = card.doi;
+    changed = true;
+  }
+  return changed;
 }
 
 function pickVenue(lines: string[], filename: string, title: string): string {
@@ -443,11 +525,55 @@ export function tldrUsable(s: string): boolean {
   return true;
 }
 
+/** Edu Share PDF 要約 API が生成した説明（SciSpace TL;DR より優先度低） */
+export function looksLikePdfApiSummary(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/以下に資料本文の要約を記載します/.test(t)) return true;
+  if (
+    /^###?\s*主な研究手法/m.test(t) &&
+    !/^(The paper|This paper|This study|The study)\b/i.test(t) &&
+    !/主要な発見|推奨事項|結論/.test(t)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function sciSpaceDescriptionUsable(s: string): boolean {
+  const t = s.trim();
+  if (!t || looksLikePdfApiSummary(t)) return false;
+  return descriptionUsable(t) || tldrUsable(t);
+}
+
+/** 説明欄に入れる本文が途中切れかどうか */
+export function descriptionLooksIncomplete(s: string): boolean {
+  const t = s.replace(/\r\n/g, "\n").trim();
+  const flat = t.replace(/\s+/g, " ").trim();
+  if (!flat) return true;
+
+  if (/[をがはにでとのへ、,]$/.test(flat)) return true;
+  if (flat.length < 100 && !/[。．.!?！？]/.test(flat)) return true;
+  if (!/[。．.!?！？]$/.test(flat) && flat.length < 600) return true;
+
+  const tail = flat.slice(-80);
+  if (flat.length < 450 && !/[。．.!?！？]/.test(tail)) return true;
+
+  if (/###?\s*主な研究手法/.test(t) && flat.length < 120 && !/[。．.!?！？]/.test(flat)) return true;
+  if (/以下に資料本文の要約を記載します/.test(t) && flat.length < 350) return true;
+
+  if (/[-–—]$/.test(flat) && flat.length < 200) return true;
+  if (/[a-z]-$/.test(flat)) return true;
+
+  return false;
+}
+
 /** Edu Share の説明欄に入れてよい本文（短い途中切れは除外） */
 export function descriptionUsable(s: string): boolean {
   const t = s.replace(/\s+/g, " ").trim();
   if (t.length < 80) return false;
   if (looksLikeSciSpaceNav(t)) return false;
+  if (descriptionLooksIncomplete(s)) return false;
   if (t.length < 120) {
     if (looksLikeCitationTitle(t)) return false;
     if (/[-–—,;:]\.?$/.test(t)) return false;

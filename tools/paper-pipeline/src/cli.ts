@@ -13,7 +13,12 @@ import { NeedVisibleChromeError, waitUntilUnblocked } from "./human.ts";
 import { maybeLoginEduShare } from "./steps/edushare.ts";
 import { listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
-import { processOnePaper, repairSciSpaceCardMeta, repairSciSpaceRecordLinks } from "./pipeline.ts";
+import {
+  processOnePaper,
+  repairPaperDescriptions,
+  repairSciSpaceCardMeta,
+  repairSciSpaceRecordLinks,
+} from "./pipeline.ts";
 import { formatStudioGenerateJa } from "./studio-select.ts";
 import { EXIT_QUOTA } from "./notebook-quota.ts";
 import { EXIT_WAITING, isRetryCooling } from "./waiting.ts";
@@ -128,22 +133,26 @@ async function main(): Promise<void> {
   const cfg = loadConfig(overrides);
   assertConfigPaths(cfg);
   mkdirSync(cfg.workDir, { recursive: true });
-  const items = mergeInboxAndVideoRepair(
-    listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename),
-    [
-      ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
-      ...listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename),
-      ...listEduMaterialRepairPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename),
-      ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
-      ...(cfg.studioGenerateExplicit
-        ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
-        : []),
-    ],
-  );
+  const inbox = listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
+  const items = cfg.onlyFilename
+    ? mergeInboxAndVideoRepair(inbox, [
+        ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
+        ...listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename),
+        ...listEduMaterialRepairPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename),
+        ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
+        ...(cfg.studioGenerateExplicit
+          ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
+          : []),
+      ])
+    : inbox;
   if (cfg.onlyFilename && items.length === 0) {
-    log(`入力ディレクトリに ${cfg.onlyFilename} はありません（SciSpace リンク補修は作業フォルダを見ます）`);
+    log(`inbox にも作業フォルダにも ${cfg.onlyFilename} はありません`);
   }
-  log(`入力 ${cfg.inboxDir} の PDF ${items.length} 件`);
+  log(
+    cfg.onlyFilename
+      ? `対象 ${items.length} 件（--only ${cfg.onlyFilename}）`
+      : `inbox ${cfg.inboxDir} の PDF ${items.length} 件`,
+  );
   log(`作業 ${cfg.workDir}`);
   log(`Studio 生成: ${formatStudioGenerateJa(cfg.studioGenerate)}`);
   log(cfg.headed ? "モード: 画面付き" : "モード: ヘッドレス（ログイン時だけ画面を出します）");
@@ -187,6 +196,15 @@ async function main(): Promise<void> {
     if (metaRun.value.updated.length || metaRun.value.failed.length) {
       log(
         `SciSpace メタ補修: 更新 ${metaRun.value.updated.length} / 失敗 ${metaRun.value.failed.length}`,
+      );
+    }
+    const descRun = await runCatchingLogin(session, cfg, (page) => repairPaperDescriptions(page, cfg));
+    session = descRun.session;
+    processed.push(...descRun.value.updated);
+    failed.push(...descRun.value.failed);
+    if (descRun.value.updated.length || descRun.value.failed.length) {
+      log(
+        `説明欄補修: 更新 ${descRun.value.updated.length} / 失敗 ${descRun.value.failed.length}`,
       );
     }
     for (const item of items) {

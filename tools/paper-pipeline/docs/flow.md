@@ -2,7 +2,7 @@
 
 Edu Share の画面は変えず、ログイン済み Chrome（`.chrome-profile`）を Playwright で操作する。公式 API はない。同じプロファイルは同時に開かない。Edu Share の `npm run dev` は止めない。
 
-入口は `npm start`（`orchestrate.ts`）。1 論文ごとに `cli.ts` を子プロセスとして呼ぶ。再開の正本は `PAPER_WORK_DIR/<stem>/state.json`。
+入口は `npm start`（`orchestrate.ts`）。inbox 直下の PDF だけを、1 論文ごとに `cli.ts` を子プロセスとして呼ぶ。作業フォルダの SciSpace メタ補修は `npm run repair-meta`（同じオーケストレータに `--repair-meta`）。再開の正本は `PAPER_WORK_DIR/<stem>/state.json`。
 
 ## 全体
 
@@ -31,7 +31,7 @@ flowchart TD
 
 終了コード: `0` 完了またはスキップ、`10` 生成待ち（4種を開始済み）、`11` Notebook 利用量待ち、`1` 失敗（4種が揃うまでは同じ論文を先に回す。揃ったあとは他の ready を先に回す）。
 
-待ちの再確認間隔: スライド 90s、動画 60s、クイズ/単語帳 20s。同じ論文で MP4 が取れない・SciSpace メタが進まないときは 5 分→15 分→45 分…（上限 2 時間）空ける。Studio がツールバーだけのままなら 15 分は開き直さず、1 時間を過ぎたら開始記録を捨ててキックオフし直す。クールダウン中は Chrome を開かない。
+待ちの再確認間隔: スライド 90s、動画 60s、クイズ/単語帳 20s。同じ論文で MP4 が取れない・SciSpace メタが進まないときは 10 分空ける。Studio がツールバーだけのままなら 15 分は開き直さず、1 時間を過ぎたら開始記録を捨ててキックオフし直す。クールダウン中は Chrome を開かない。
 
 Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短期枠)` / `(週枠)`）を読む。短期枠の利用量が 85% を超えているあいだは Studio 生成を止める。週枠が 100% なら `reset_at` まで待つ。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める。収集・Edu Share はキックオフ済みなら続ける。Chrome をもう一つ開いて Cookie を取り直すことはしない。
 
@@ -155,7 +155,8 @@ cd tools/paper-pipeline
 npm start -- --headed
 npm start -- --headless
 npm start -- --only paper.pdf --from sci-meta
+npm run repair-meta -- --headed
 npm run worker -- --only paper.pdf --headless
 ```
 
-止めるときは SIGINT（worker が Chrome を閉じてから終了）。inbox が空で `DONE` がある論文は、本物の MP4 が無いときだけ repair 対象。`--headless` はログインや追加確認のときだけ画面を出す。
+止めるときは SIGINT（worker が Chrome を閉じてから終了）。`npm start` は inbox の PDF だけを見る。作業フォルダだけの SciSpace メタ補修は `npm run repair-meta`。同じ Chrome プロファイルなので同時には起動しない。`--headless` はログインや追加確認のときだけ画面を出す。
