@@ -146,6 +146,8 @@ flowchart TD
 4. quiz.csv / vocab.csv / slides.pdf、動画は `POST /api/tests/{id}/material/video`
 5. SciSpace 個別 URL を保存し、PDF・スライド・動画・CSV 開始まで verify
 
+操作手順（inbox に置いて起動し、完了を見分けるまで）は [inbox.md](inbox.md)。
+
 ## 実行
 
 ```bash
