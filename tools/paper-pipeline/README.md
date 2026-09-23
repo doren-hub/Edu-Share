@@ -45,7 +45,7 @@ npm start -- --headless
 
 Export 拡張をまだ入れていなければ、開いた Chrome の `chrome://extensions` から読み込むか、`.env` に拡張フォルダのパスを書きます。
 
-フローチャートと段階の説明は [docs/flow.md](docs/flow.md)。
+inbox に置いてから完了までの操作手順は [docs/inbox.md](docs/inbox.md)。フローチャートと段階の説明は [docs/flow.md](docs/flow.md)。
 
 ## 動き
 
