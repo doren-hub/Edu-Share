@@ -13,12 +13,12 @@ import {
   retryUntilMs,
 } from "./waiting.ts";
 
-test("harvestBackoffMs: 失敗するほど間隔を空け、上限は 2 時間", () => {
+test("harvestBackoffMs: 失敗回数に関わらず 10 分固定", () => {
   assert.equal(harvestBackoffMs(0), HARVEST_RETRY_BASE_MS);
-  assert.equal(harvestBackoffMs(1), HARVEST_RETRY_BASE_MS * 3);
-  assert.equal(harvestBackoffMs(2), HARVEST_RETRY_BASE_MS * 9);
+  assert.equal(harvestBackoffMs(1), HARVEST_RETRY_BASE_MS);
   assert.equal(harvestBackoffMs(6), HARVEST_RETRY_MAX_MS);
   assert.equal(harvestBackoffMs(-1), HARVEST_RETRY_BASE_MS);
+  assert.equal(HARVEST_RETRY_BASE_MS, 10 * 60 * 1000);
 });
 
 test("applyHarvestFailure: 次の再試行時刻を書き、成功したら消す", () => {

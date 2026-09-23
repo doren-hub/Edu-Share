@@ -4,7 +4,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyState, type PaperState } from "./state.ts";
-import { hasAnyStudioArtifact, hasHarvestableWork, missingEduUploads, shouldSkipNotebookVisit } from "./harvest.ts";
+import {
+  hasAnyStudioArtifact,
+  hasHarvestableWork,
+  hasPendingStudioHarvest,
+  missingEduUploads,
+  shouldSkipNotebookVisit,
+} from "./harvest.ts";
 import { STUDIO_STAGES } from "./state.ts";
 
 function paper(dir: string, partial: Partial<PaperState> = {}): PaperState {
@@ -172,6 +178,28 @@ test("hasHarvestableWork: 収穫クールダウン中は同じ MP4 / メタ取�
     });
     assert.equal(hasHarvestableWork(state, STUDIO_STAGES), false);
     assert.equal(shouldSkipNotebookVisit(state, STUDIO_STAGES), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hasPendingStudioHarvest: SciSpace クールダウン中でも NotebookLM 収穫を優先", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pp-harvest-studio-"));
+  try {
+    const until = new Date(Date.now() + 10 * 60_000).toISOString();
+    const state = paper(dir, {
+      notebooklmUrl: "https://notebooklm.google.com/notebook/x",
+      completed: ["sci-upload", "sci-meta", "edu-upload", "nlm-slides", "nlm-video", "edu-materials", "verify"],
+      studioStarted: ["nlm-slides", "nlm-video", "nlm-quiz", "nlm-flashcards"],
+      harvestRetryAt: until,
+      harvestFailures: 1,
+      filesPaste: "a.pdf\nA title\n2024 · Ada\nvol. 98",
+      eduShareTestUrl: "http://localhost:3000/tests/x",
+      waitingFor: "nlm-quiz",
+    });
+    assert.equal(hasPendingStudioHarvest(state, STUDIO_STAGES), true);
+    assert.equal(hasHarvestableWork(state, STUDIO_STAGES), true);
+    assert.equal(shouldSkipNotebookVisit(state, STUDIO_STAGES), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

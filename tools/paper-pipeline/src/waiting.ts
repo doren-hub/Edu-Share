@@ -32,9 +32,9 @@ export const GENERATION_START_GRACE_MS = 20 * 60 * 1000;
 export const STUDIO_EMPTY_REVISIT_MS = 15 * 60 * 1000;
 /** この時間を過ぎても出力カードが無ければ開始記録を捨ててキックオフし直す */
 export const STUDIO_EMPTY_UNMARK_MS = 60 * 60 * 1000;
-/** MP4 取得失敗・SciSpace メタが前に進まないときの最初の間隔 */
-export const HARVEST_RETRY_BASE_MS = 5 * 60 * 1000;
-export const HARVEST_RETRY_MAX_MS = 2 * 60 * 60 * 1000;
+/** MP4 取得失敗・SciSpace メタが前に進まないときの再試行間隔（固定 10 分） */
+export const HARVEST_RETRY_BASE_MS = 10 * 60 * 1000;
+export const HARVEST_RETRY_MAX_MS = 10 * 60 * 1000;
 
 export type HarvestRetryState = {
   harvestRetryAt?: string;
@@ -42,9 +42,8 @@ export type HarvestRetryState = {
   kickoffRetryAt?: string;
 };
 
-export function harvestBackoffMs(failures: number): number {
-  const n = Math.max(0, Math.min(failures, 6));
-  return Math.min(HARVEST_RETRY_MAX_MS, HARVEST_RETRY_BASE_MS * 3 ** n);
+export function harvestBackoffMs(_failures: number): number {
+  return HARVEST_RETRY_BASE_MS;
 }
 
 export function retryUntilMs(state: HarvestRetryState, now = Date.now()): number {

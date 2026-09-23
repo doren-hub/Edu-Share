@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts";
 import { PACKAGE_ROOT } from "./env.ts";
-import { hasDoneMarker, listEduMaterialRepairPdfs, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair, type InboxPdf } from "./inbox.ts";
+import { hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, type InboxPdf } from "./inbox.ts";
 import { error as logError, log, warn } from "./log.ts";
 import { pickNextJob, type SchedJob, type SchedStatus } from "./schedule.ts";
 import {
@@ -21,7 +21,7 @@ import { EXIT_WAITING, recheckDelayMs, retryUntilMs } from "./waiting.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
 import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
-import { formatStudioGenerateArg, formatStudioGenerateJa } from "./studio-select.ts";
+import { formatStudioGenerateArg, formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
 
 const MAX_FAIL_RETRIES = 3;
 const CHROME_UNLOCK_MS = 2_500;
@@ -111,7 +111,8 @@ function initialStatus(
     if (
       needsLocalVideoFile(state) ||
       needsSciSpaceCardRecapture(state) ||
-      missingEduUploads(state, selected).length > 0
+      missingEduUploads(state, selected).length > 0 ||
+      missingStudioStages(state, selected).length > 0
     ) {
       return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: true };
     }
@@ -131,21 +132,22 @@ function initialStatus(
 
 function orchHelp(): string {
   return `${helpText()}
-呼び出し側（既定の npm start）:
-  既存の worker（1論文・1 Chrome）を順に呼びます。
+呼び出し側:
+  npm start は inbox 直下の PDF だけを、worker（1論文・1 Chrome）で順に処理します。
+  作業フォルダの SciSpace メタ補修は npm run repair-meta です。inbox に無い論文は対象にしません。
   --generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。
   指定した項目が生成待ちか完了になるまで、次の論文の生成には進みません。
-  Edu Share 済みの論文にも、足りない項目を後から生成できます。
   SciSpace への PDF 掲載は NotebookLM より先に行い、カードメタは Studio 後に取ります。
   Studio の生成（スライド・解説動画・クイズ・単語帳）が揃った論文は SciSpace メタ / Edu Share へ進みます。
   動画 MP4 は NotebookLM のダウンロードボタンで保存して Edu Share に載せます。
-  同じ Chrome プロファイルは同時に使いません。
+  同じ Chrome プロファイルは同時に使いません。npm start と npm run repair-meta も同時には起動しません。
   Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。
   そのあいだは SciSpace 掲載・メタ、できている生成物の Edu Share 登録を先に進めます。
   MP4 が取れない・Studio が空・SciSpace メタが進まないときは同じ論文をすぐ開き直さず、間隔を空けます。
 
   npm start
   npm start -- --headless
+  npm run repair-meta -- --headed
   npm run worker -- --only paper.pdf
 
   --headless はウィンドウなし。ログインや追加確認のときだけ画面を出します。
@@ -162,25 +164,23 @@ async function main(): Promise<void> {
   const cfg = loadConfig(overrides);
   assertConfigPaths(cfg);
 
-  const inbox = listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
-  const inboxNames = new Set(inbox.map((i) => i.filename));
-  const extras = [
-    ...listVideoRepairPdfs(cfg.workDir, cfg.onlyFilename),
-    ...listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename),
-    ...listEduMaterialRepairPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename),
-    ...listWorkPdfs(cfg.workDir, cfg.onlyFilename),
-    ...(cfg.studioGenerateExplicit
-      ? listStudioFollowupPdfs(cfg.workDir, cfg.studioGenerate, cfg.onlyFilename)
-      : []),
-  ];
-  const items = mergeInboxAndVideoRepair(inbox, extras);
+  const repairMeta = argv.includes("--repair-meta");
+  const items = repairMeta
+    ? listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename)
+    : listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
   if (cfg.onlyFilename && items.length === 0) {
-    log(`入力ディレクトリに ${cfg.onlyFilename} はありません`);
+    log(
+      repairMeta
+        ? `作業フォルダにメタ補修対象の ${cfg.onlyFilename} はありません`
+        : `inbox に ${cfg.onlyFilename} はありません`,
+    );
   }
   log(
-    `オーケストレータ: 入力 ${items.length} 件（Studio ${formatStudioGenerateJa(cfg.studioGenerate)} / ${
-      cfg.headed ? "画面付き" : "ヘッドレス"
-    }）`,
+    repairMeta
+      ? `オーケストレータ: メタ補修 ${items.length} 件（${cfg.headed ? "画面付き" : "ヘッドレス"}）`
+      : `オーケストレータ: inbox ${items.length} 件（Studio ${formatStudioGenerateJa(cfg.studioGenerate)} / ${
+          cfg.headed ? "画面付き" : "ヘッドレス"
+        }）`,
   );
 
   const skip = studioSkip(cfg);
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
       status: init.status,
       nextCheckAt: init.nextCheckAt,
       attempts: 0,
-      source: inboxNames.has(item.filename) ? "inbox" : "repair",
+      source: repairMeta ? "repair" : "inbox",
       kickoffBegun: init.kickoffBegun,
       kickoffSettled: init.kickoffSettled,
       harvestable: init.harvestable,

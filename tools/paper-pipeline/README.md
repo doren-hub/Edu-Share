@@ -34,6 +34,12 @@ npm start
 npm start -- --inbox /Users/doren/Developer/edu-share-papers/inbox --work /Users/doren/Developer/edu-share-papers/work
 ```
 
+`npm start` が読むのは inbox 直下の PDF だけです。作業フォルダにしか無い論文の SciSpace メタ補修は別コマンドです。同じ Chrome プロファイルなので同時には起動しません。
+
+```bash
+npm run repair-meta -- --headed
+```
+
 初回やログイン切れのときは Chrome が開くので、Google（NotebookLM）、SciSpace、Edu Share にログインしてください。`--headless` では通常ウィンドウを出さず、ログインや追加確認のときだけ画面を出して、終わったらヘッドレスに戻します。同じプロファイルを画面付きと同時には開かないでください。
 
 ```bash
@@ -50,11 +56,11 @@ inbox に置いてから完了までの操作手順は [docs/inbox.md](docs/inbo
 ## 動き
 
 1. Edu Share の論文一覧からタイトルと DOI を取る
-2. 入力ディレクトリ直下の PDF を変更日が古い順に処理
+2. inbox 直下の PDF を変更日が古い順に処理する。作業フォルダだけにある論文は対象にしない
 3. 作業フォルダに `DONE` がある、または一覧とタイトル/DOI が一致するものは無視（PDF は入力側に残す）
 4. 作業開始時に `PAPER_WORK_DIR/<ファイル名>/` を作り、スライド・動画・CSV をそこに保存
 5. **SciSpace 指定フォルダへ PDF を先に載せる**（カードメタはまだ待たない）
-6. NotebookLM の Studio は `--generate` で選んだ項目（省略時は 4 種）を開始（または完了）してから Chrome を明け渡し、次の論文の生成へ進む。Edu Share 済みの論文にも足りない項目を後から生成できる。**短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待つ**（taskdesk / 利用量ボードの Notebook 枠）。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める
+6. NotebookLM の Studio は `--generate` で選んだ項目（省略時は 4 種）を開始（または完了）してから Chrome を明け渡し、次の inbox の論文の生成へ進む。**短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待つ**（taskdesk / 利用量ボードの Notebook 枠）。そのあいだは、処理中の inbox の論文について SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める
 7. Studio が揃ったら SciSpace のカードメタと `/records/…` を取る（掲載から遅れて出るメタを、NotebookLM 待ちのあいだに進めておく）
 8. 業界はアップロード画面の PDF 自動入力と SciSpace メタから候補を選ぶ
 9. SciSpace のリンクはフォルダではなく個別レコード（`/records/…`）を保存する
@@ -66,11 +72,12 @@ inbox に置いてから完了までの操作手順は [docs/inbox.md](docs/inbo
 ```bash
 npm start -- --only paper.pdf --from sci-meta
 npm start -- --generate quiz,flashcards
-npm start -- --only hawking.pdf --generate slides,video
+npm start -- --only paper.pdf --generate slides,video
 npm start -- --generate all
+npm run repair-meta -- --headed
 ```
 
-`--generate` は `slides` / `video` / `quiz` / `flashcards` を複数指定できます。`all` で全部。省略時は 4 種すべて。`--skip-slides-video` は `--generate quiz,flashcards` と同じです。Edu Share に載済みの論文でも、足りない項目だけ後から生成できます。
+`--generate` は `slides` / `video` / `quiz` / `flashcards` を複数指定できます。`all` で全部。省略時は 4 種すべて。`--skip-slides-video` は `--generate quiz,flashcards` と同じです。対象は inbox にあるその PDF です。作業フォルダだけのメタの取り直しは `npm run repair-meta` です。
 
 ## 注意
 

@@ -1,6 +1,6 @@
 # inbox の論文をツールで処理する
 
-未処理の PDF は `PAPER_INBOX_DIR` の直下に置く。処理は `tools/paper-pipeline` の `npm start`（オーケストレータ）が行う。段階の中身は [flow.md](flow.md)。
+未処理の PDF は `PAPER_INBOX_DIR` の直下に置く。処理は `tools/paper-pipeline` の `npm start`（オーケストレータ）が行う。対象は inbox 直下の PDF だけ。作業フォルダの SciSpace メタ補修は `npm run repair-meta`。段階の中身は [flow.md](flow.md)。
 
 Edu Share の `npm run dev` は止めない。Chrome プロファイル（`tools/paper-pipeline/.chrome-profile/`）は同時に一つだけ開く。
 
@@ -16,7 +16,7 @@ inbox と作業ディレクトリは別にする。例は `.env.example` の `PA
 
 1. Edu Share が `EDU_SHARE_BASE_URL`（既定 `http://localhost:3000`）で動いている。
 2. `tools/paper-pipeline` で `npm install` 済み、`.env` がある。
-3. 同じプロファイルの Chrome と、別の `npm start` が動いていない。動いていれば新しい方は起動しない。
+3. 同じプロファイルの Chrome と、別の `npm start` または `npm run repair-meta` が動いていない。動いていれば新しい方は起動しない。
 4. 初回、または Google / SciSpace / Edu Share のログインが切れているときは画面付きで始める。
 
 ## 3. 起動する
@@ -73,6 +73,15 @@ worker を直接呼ぶとき（オーケストレータを経由しない）:
 npm run worker -- --only paper.pdf --headed
 ```
 
+作業フォルダの SciSpace メタ補修（inbox に PDF が無くても、Files 行が空・省略著者・画面文言の題名や掲載）:
+
+```bash
+npm run repair-meta -- --headed
+npm run repair-meta -- --only paper.pdf --headed
+```
+
+`npm start` はこの補修をしない。同じ Chrome プロファイルなので、`npm start` と同時には起動しない。
+
 ## 6. 終わりの見分け
 
 | 状態 | 置き場所 |
@@ -90,6 +99,6 @@ npm run worker -- --only paper.pdf --headed
 
 止めるときはオーケストレータへ SIGINT（Ctrl+C）。worker が Chrome を閉じてから終了する。
 
-再開は同じコマンドでよい。`DONE` がある論文は、本物の MP4 が無いときだけ補修対象になる。MP4 が取れない、Studio が空、SciSpace メタが進まない論文は、すぐ開き直さず間隔を空ける。クールダウン中は Chrome を開かない。
+再開は同じコマンドでよい。inbox に残っている PDF は、そのファイルの `state.json` の完了段階から再開する。作業フォルダだけのメタ補修は `npm run repair-meta`。MP4 が取れない、Studio が空、SciSpace メタが進まない論文は、すぐ開き直さず間隔を空ける。クールダウン中は Chrome を開かない。
 
 同じ失敗の即再試行や、ログが同じ論文で進まないときは、プロセスと `failures/` を見てから直す。直したあとの再開は画面付き（`--headed`）にする。

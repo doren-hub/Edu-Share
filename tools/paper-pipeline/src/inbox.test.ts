@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair, existingWorkPapersExcept } from "./inbox.ts";
+import { dedupeInboxPdfs, listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listVideoRepairPdfs, mergeInboxAndVideoRepair, existingWorkPapersExcept } from "./inbox.ts";
 import { STUDIO_STAGES } from "./state.ts";
 
 test("listInboxPdfs: 変更日が古い順（名前順ではない）", () => {
@@ -197,4 +197,16 @@ test("listExistingWorkPapers: work 内の PDF 名で既存判定する", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("dedupeInboxPdfs: 同じ filename は後勝ち", () => {
+  const a = { filename: "a.pdf", absPath: "/in/a.pdf", stem: "a", paperDir: "/work/a" };
+  const b = { filename: "a.pdf", absPath: "/work/a/a.pdf", stem: "a", paperDir: "/work/a" };
+  const c = { filename: "b.pdf", absPath: "/in/b.pdf", stem: "b", paperDir: "/work/b" };
+  const deduped = dedupeInboxPdfs([a, c, b]);
+  assert.equal(deduped.length, 2);
+  assert.equal(deduped.find((x) => x.filename === "a.pdf")?.absPath, "/work/a/a.pdf");
+  const merged = mergeInboxAndVideoRepair([a], [b, c]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((x) => x.filename === "a.pdf")?.absPath, "/work/a/a.pdf");
 });

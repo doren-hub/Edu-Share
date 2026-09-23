@@ -17,6 +17,9 @@ import {
   replaceYearAuthorLine,
   stripTldrSnippetNumbers,
   titleLooksLikeFilename,
+  titleLooksLikeBadSciSpaceCapture,
+  venueLooksLikeBadSciSpaceCapture,
+  looksLikePublisherOrPaywall,
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
@@ -1138,7 +1141,6 @@ function sciSpaceMetaStillIncomplete(state: PaperState, filename: string): boole
   if (titleLooksLikeFilename(state.title, filename)) return true;
   if (isDummySciSpacePaste(state.title) || isDummySciSpacePaste(state.filesPaste)) return true;
   if (!state.filesPaste.trim()) return true;
-  if (filesRowHasTruncatedAuthors(state.filesPaste)) return true;
   return false;
 }
 
@@ -1152,10 +1154,25 @@ function applyExtractedCard(
   card: ReturnType<typeof extractSciSpaceCardMeta>,
   dois: string[] = [],
 ): void {
-  if (card.title && !looksLikeSciSpaceNav(card.title) && !titleLooksLikeFilename(card.title, filename) && !looksLikeCitationTitle(card.title) && !looksLikeVenueLine(card.title) && !isDummySciSpacePaste(card.title) && !isDummySciSpacePaste(card.authors)) {
+  if (
+    card.title &&
+    !looksLikeSciSpaceNav(card.title) &&
+    !titleLooksLikeFilename(card.title, filename) &&
+    !titleLooksLikeBadSciSpaceCapture(card.title) &&
+    !looksLikeCitationTitle(card.title) &&
+    !looksLikeVenueLine(card.title) &&
+    !isDummySciSpacePaste(card.title) &&
+    !isDummySciSpacePaste(card.authors)
+  ) {
     state.title = card.title;
-  } else if (!state.title || isDummySciSpacePaste(state.title)) state.title = filename.replace(/\.pdf$/i, "");
-  if (card.venue && !looksLikeSciSpaceNav(card.venue)) state.venue = card.venue;
+  } else if (!state.title || isDummySciSpacePaste(state.title) || titleLooksLikeBadSciSpaceCapture(state.title)) {
+    state.title = filename.replace(/\.pdf$/i, "");
+  }
+  if (card.venue && !looksLikeSciSpaceNav(card.venue) && !venueLooksLikeBadSciSpaceCapture(card.venue)) {
+    state.venue = card.venue;
+  } else if (looksLikePublisherOrPaywall(state.venue)) {
+    state.venue = "";
+  }
   const doi = card.doi || dois.map((d) => doiFromHrefOrText(d)).find(Boolean) || "";
   if (doi) state.doi = doi;
   const filesTldrOpener =
@@ -1226,7 +1243,12 @@ async function fillTldrFallbacks(
 
 async function fillMetaFromRecordPage(page: Page, state: PaperState, filename: string): Promise<void> {
   log("SciSpace: Files カードが薄いので個別ページからメタを取ります");
-  await page.goto(state.scispaceUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  try {
+    await page.goto(state.scispaceUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  } catch (e) {
+    warn(`SciSpace: 個別ページを開けません（${filename}）: ${firstLine(e)}`);
+    return;
+  }
   await sleep(2_500);
   const h1 = ((await page.locator("h1").first().innerText({ timeout: 8_000 }).catch(() => "")) || "").trim();
   const og = ((await page.locator('meta[property="og:title"]').getAttribute("content").catch(() => "")) || "").trim();
@@ -1251,6 +1273,15 @@ async function fillMetaFromRecordPage(page: Page, state: PaperState, filename: s
     card.tldr = ogDesc.slice(0, 2000);
   }
   await fillTldrFallbacks(page, card, filename);
+  const filesCard = extractSciSpaceCardMeta(state.filesPaste, filename);
+  if (titleLooksLikeBadSciSpaceCapture(card.title) && filesCard.title) {
+    card.title = filesCard.title;
+    card.paste = metadataPasteFromCard(card, filename);
+  }
+  if (venueLooksLikeBadSciSpaceCapture(card.venue) && filesCard.venue) {
+    card.venue = filesCard.venue;
+    card.paste = metadataPasteFromCard(card, filename);
+  }
   applyExtractedCard(state, filename, card);
 }
 

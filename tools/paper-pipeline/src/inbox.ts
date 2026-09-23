@@ -11,10 +11,18 @@ import {
 import { basename, join } from "node:path";
 import { fileStem, normalizePdfFilename, type ExistingPaper } from "./match.ts";
 import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
-import { doneMarkerPath, emptyState, loadState, type PaperState, type StudioStageId } from "./state.ts";
+import {
+  doneMarkerPath,
+  emptyState,
+  isCompleted,
+  loadState,
+  type PaperState,
+  type StudioStageId,
+} from "./state.ts";
 import { missingStudioStages } from "./studio-select.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
 import { missingEduUploads } from "./harvest.ts";
+import { isStudioStage } from "./waiting.ts";
 
 export type InboxPdf = {
   filename: string;
@@ -198,6 +206,13 @@ export function listRawPasteRepairPdfs(workDir: string, onlyFilename = ""): Inbo
     const { state } = loadWorkPaper(workDir, name);
     if (onlyFilename && state.filename !== onlyFilename) continue;
     if (!needsSciSpaceCardRecapture(state)) continue;
+    if (
+      state.waitingFor &&
+      isStudioStage(state.waitingFor) &&
+      !isCompleted(state, state.waitingFor)
+    ) {
+      continue;
+    }
     const absPath = workPdfPath(state);
     if (!absPath) continue;
     out.push(toInboxPdf(state, absPath));
@@ -263,10 +278,22 @@ export function listStudioFollowupPdfs(
   return out.sort((a, b) => a.filename.localeCompare(b.filename, "en"));
 }
 
+/** 後勝ちで filename を1件にまとめる（followup を paste 補修より優先） */
+export function dedupeInboxPdfs(items: InboxPdf[]): InboxPdf[] {
+  const seen = new Set<string>();
+  const out: InboxPdf[] = [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    if (seen.has(item.filename)) continue;
+    seen.add(item.filename);
+    out.unshift(item);
+  }
+  return out;
+}
+
 export function mergeInboxAndVideoRepair(
   inbox: InboxPdf[],
   repairs: InboxPdf[],
 ): InboxPdf[] {
-  const seen = new Set(inbox.map((i) => i.filename));
-  return [...inbox, ...repairs.filter((r) => !seen.has(r.filename))];
+  return dedupeInboxPdfs([...inbox, ...repairs]);
 }
