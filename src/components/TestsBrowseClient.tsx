@@ -581,12 +581,12 @@ export function TestsBrowseClient({
                         autoComplete="off"
                       />
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+                    <div className="flex flex-wrap items-end gap-2 sm:shrink-0">
                       <button
                         type="button"
                         onClick={() => clearFilters()}
                         disabled={!hasActiveFilters}
-                        className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="min-h-[2.5rem] rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         条件をクリア
                       </button>
