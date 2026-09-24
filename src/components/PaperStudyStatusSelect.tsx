@@ -10,14 +10,16 @@ import {
 
 const toneClass: Record<PaperStudyStatus, string> = {
   unconfirmed: "border-zinc-200 bg-white text-zinc-800",
-  content_confirmed: "border-sky-200 bg-sky-50 text-sky-950",
+  checking: "border-violet-200 bg-violet-50 text-violet-950",
+  confirmed: "border-sky-200 bg-sky-50 text-sky-950",
   learning: "border-amber-200 bg-amber-50 text-amber-950",
   completed: "border-emerald-200 bg-emerald-50 text-emerald-950",
 };
 
 const badgeToneClass: Record<PaperStudyStatus, string> = {
   unconfirmed: "bg-zinc-100 text-zinc-700",
-  content_confirmed: "bg-sky-100 text-sky-900",
+  checking: "bg-violet-100 text-violet-900",
+  confirmed: "bg-sky-100 text-sky-900",
   learning: "bg-amber-100 text-amber-900",
   completed: "bg-blue-100 text-blue-900",
 };
