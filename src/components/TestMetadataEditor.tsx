@@ -18,7 +18,7 @@ export type TestMetadataInitial = {
   exam_department: string | null;
   exam_subject: string | null;
   exam_period: string | null;
-  industry: string | null;
+  industries: string[];
   publication_year: string | null;
   paper_authors?: unknown;
   paper_venue?: string | null;
@@ -39,7 +39,7 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
   const [examSubject, setExamSubject] = useState("");
   const [examPeriod, setExamPeriod] = useState("");
 
-  const [industry, setIndustry] = useState("");
+  const [industries, setIndustries] = useState<string[]>([""]);
   const [publicationYear, setPublicationYear] = useState("");
   const [paperAuthors, setPaperAuthors] = useState<string[]>([""]);
   const [paperVenue, setPaperVenue] = useState("");
@@ -59,7 +59,9 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
   }, [initial.exam_department, initial.exam_subject, initial.exam_period]);
 
   const applyPaperFromInitial = useCallback(() => {
-    setIndustry((initial.industry ?? "").trim());
+    setIndustries(
+      initial.industries.length > 0 ? initial.industries : [""],
+    );
     const y = (initial.publication_year ?? "").trim();
     setPublicationYear(y && /^\d{4}$/.test(y) ? y : "");
     setPaperVenue((initial.paper_venue ?? "").trim());
@@ -72,7 +74,7 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
       setPaperAuthors(sn ? [sn] : [""]);
     }
   }, [
-    initial.industry,
+    initial.industries,
     initial.publication_year,
     initial.paper_venue,
     initial.paper_doi,
@@ -101,7 +103,7 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
       setExamPeriod("");
       applyPaperFromInitial();
     } else if (prev === "paper" && documentType === "past_exam") {
-      setIndustry("");
+      setIndustries([""]);
       setPublicationYear("");
       setPaperAuthors([""]);
       setPaperVenue("");
@@ -226,7 +228,7 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
         payload.exam_department = dept.value;
         payload.exam_subject = sub.value;
         payload.exam_period = per.value;
-        payload.industry = null;
+        payload.industries = null;
         payload.publication_year = null;
         payload.paper_authors = null;
         payload.paper_venue = null;
@@ -251,19 +253,18 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
           }
           if (!resolvedAuthors.includes(exp.value)) resolvedAuthors.push(exp.value);
         }
-        let industryPayload: string | null = null;
-        if (industry.trim()) {
-          const ind = assertStoredPickWithOther(
-            industry,
-            indVals,
-            true,
-            "業界",
-          );
+        const industriesPayload: string[] = [];
+        for (const raw of industries) {
+          const v = raw.trim();
+          if (!v) continue;
+          const ind = assertStoredPickWithOther(v, indVals, true, "業界");
           if (!ind.ok) {
             setError(ind.message);
             return;
           }
-          industryPayload = ind.value;
+          if (!industriesPayload.includes(ind.value)) {
+            industriesPayload.push(ind.value);
+          }
         }
         let yearPayload: string | null = null;
         if (publicationYear.trim()) {
@@ -286,7 +287,7 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
         payload.paper_authors = resolvedAuthors;
         payload.paper_venue = paperVenue.trim() === "" ? null : paperVenue.trim();
         payload.paper_doi = paperDoi.trim() === "" ? null : paperDoi.trim();
-        payload.industry = industryPayload;
+        payload.industries = industriesPayload;
         payload.publication_year = yearPayload;
         payload.exam_department = null;
         payload.exam_subject = null;
@@ -424,8 +425,8 @@ export function TestMetadataEditor({ initial }: { initial: TestMetadataInitial }
                   onPaperVenue={setPaperVenue}
                   paperDoi={paperDoi}
                   onPaperDoi={setPaperDoi}
-                  industry={industry}
-                  onIndustry={setIndustry}
+                  industries={industries}
+                  onIndustries={setIndustries}
                   publicationYear={publicationYear}
                   onPublicationYear={setPublicationYear}
                 />

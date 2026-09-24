@@ -19,7 +19,7 @@ export type SciSpacePaperMetadataInitial = {
   paperAuthors: string[];
   paperVenue: string;
   paperDoi: string;
-  industry: string;
+  industries: string[];
   publicationYear: string;
 };
 
@@ -110,15 +110,16 @@ export function SciSpacePaperMetadataPaste({
         }
         if (!resolvedAuthors.includes(exp.value)) resolvedAuthors.push(exp.value);
       }
-      let industryPayload: string | null = null;
-      const industry = initialFields.industry.trim();
-      if (industry) {
-        const ind = assertStoredPickWithOther(industry, indVals, true, "業界");
+      const industriesPayload: string[] = [];
+      for (const raw of initialFields.industries) {
+        const v = raw.trim();
+        if (!v) continue;
+        const ind = assertStoredPickWithOther(v, indVals, true, "業界");
         if (!ind.ok) {
           setError(ind.message);
           return;
         }
-        industryPayload = ind.value;
+        if (!industriesPayload.includes(ind.value)) industriesPayload.push(ind.value);
       }
       let yearPayload: string | null = null;
       let yearEnsureNote: string | null = null;
@@ -149,7 +150,7 @@ export function SciSpacePaperMetadataPaste({
         paper_authors: resolvedAuthors,
         paper_venue: mergedVenue === "" ? null : mergedVenue,
         paper_doi: mergedDoi === "" ? null : mergedDoi,
-        industry: industryPayload,
+        industries: industriesPayload,
         publication_year: yearPayload,
       };
 

@@ -9,6 +9,7 @@ import type { PaperStudyStatus, PaperStudyStatusMap } from "@/lib/paper-study-st
 import { PaperAuthorsCollapsible } from "@/components/PaperAuthorsCollapsible";
 import { PaperDoiInteractive } from "@/components/PaperDoiInteractive";
 import { paperAuthorNamesForDisplay } from "@/lib/paper-authors";
+import { displayPaperIndustries } from "@/lib/paper-industries";
 import { normalizePaperDoiDisplay } from "@/lib/paper-doi";
 import {
   paperNotebookLmMaterialsComplete,
@@ -29,6 +30,7 @@ export type TestRow = {
   exam_subject?: string | null;
   exam_period?: string | null;
   industry?: string | null;
+  industries?: unknown;
   publication_year?: string | null;
   paper_authors?: unknown;
   paper_venue?: string | null;
@@ -76,7 +78,7 @@ function PaperMaterialHints({ t, compact }: { t: TestRow; compact: boolean }) {
 /** 論文カード（compact）で著者の後に続けるメタ（業界・年・掲載・DOI） */
 function paperCompactTailStringsNoDoi(t: TestRow): string[] {
   return [
-    t.industry ?? "",
+    displayPaperIndustries(t.industries, t.industry),
     t.publication_year ? `${t.publication_year}年` : "",
     (t.paper_venue ?? "").trim(),
   ]
@@ -113,8 +115,9 @@ function verboseMetaTitle(
         authorNames.length > 0 ? authorNames.join(", ") : "—";
       const venue = (t.paper_venue ?? "").trim();
       const doi = normalizePaperDoiDisplay(t.paper_doi);
+      const industriesText = displayPaperIndustries(t.industries, t.industry);
       parts.push(
-        `著者: ${authorsFull}${t.industry || t.publication_year ? ` · 業界: ${t.industry ?? "—"} · 発表年: ${t.publication_year ? `${t.publication_year}年` : "—"}` : ""}${venue ? ` · 掲載: ${venue}` : ""}${doi ? ` · DOI: ${doi}` : ""}`,
+        `著者: ${authorsFull}${industriesText || t.publication_year ? ` · 業界: ${industriesText || "—"} · 発表年: ${t.publication_year ? `${t.publication_year}年` : "—"}` : ""}${venue ? ` · 掲載: ${venue}` : ""}${doi ? ` · DOI: ${doi}` : ""}`,
       );
     } else {
       parts.push(
@@ -363,12 +366,12 @@ export function TestList({
                             sourceNameFallback={t.source_name}
                           />
                         </span>
-                        {(t.industry || t.publication_year) ? (
+                        {(displayPaperIndustries(t.industries, t.industry) || t.publication_year) ? (
                           <>
                             {" · "}
                             業界:{" "}
                             <span className="font-medium text-zinc-800">
-                              {t.industry ?? "—"}
+                              {displayPaperIndustries(t.industries, t.industry) || "—"}
                             </span>
                             {" · "}
                             発表年:{" "}

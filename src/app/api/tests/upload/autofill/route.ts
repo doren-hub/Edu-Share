@@ -133,7 +133,7 @@ export async function POST(req: Request) {
     paper_authors: [],
     paper_venue: "",
     paper_doi: "",
-    industry: "",
+    industries: [],
     publication_year: "",
   };
 
@@ -161,7 +161,8 @@ export async function POST(req: Request) {
     const expert = pickBestOption(experts, seed);
     payload.expert_name = expert;
     payload.paper_authors = expert ? [expert] : [];
-    payload.industry = pickBestOption(industries, seed);
+    const industry = pickBestOption(industries, seed);
+    payload.industries = industry ? [industry] : [];
     const year = pickYear(seed);
     payload.publication_year =
       years.includes(year) ? year : pickBestOption(years, seed);
