@@ -5,12 +5,18 @@ import {
   legacyNotebooklmVideoMp4StoragePath,
   notebooklmVideoMp4StoragePath,
 } from "@/lib/test-notebooklm-material-paths";
+import {
+  createObjectUploadUrl,
+  deleteObjects,
+  getObjectMetadata,
+} from "@/lib/object-storage";
 
 export const runtime = "nodejs";
 
-const expectedNameSuffix = "-notebooklm-video.mp4";
+const MAX_BYTES = 200 * 1024 * 1024;
+const MIN_BYTES = 20_000;
 
-export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id: testId } = await ctx.params;
 
   const supabase = await createClient();
@@ -48,26 +54,55 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   const storagePath = notebooklmVideoMp4StoragePath(test.uploaded_by, testId);
-  const expectedFileName = `${testId}${expectedNameSuffix}`;
+  const body = (await req.json().catch(() => ({}))) as {
+    action?: string;
+    size?: number;
+  };
 
-  const { data: listed, error: listErr } = await admin.storage
-    .from("pdfs")
-    .list(test.uploaded_by, { limit: 1000 });
+  if (body.action === "prepare") {
+    if (!Number.isFinite(body.size) || (body.size ?? 0) <= 0 || (body.size ?? 0) > MAX_BYTES) {
+      return NextResponse.json(
+        { error: `動画は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
+        { status: 413 },
+      );
+    }
+    try {
+      return NextResponse.json({
+        path: storagePath,
+        uploadUrl: await createObjectUploadUrl(storagePath, "video/mp4"),
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error: "R2アップロードURLの発行に失敗しました",
+          details: error instanceof Error ? error.message : String(error),
+        },
+        { status: 500 },
+      );
+    }
+  }
 
-  if (listErr) {
+  let uploaded;
+  try {
+    uploaded = await getObjectMetadata(storagePath);
+  } catch (error) {
     return NextResponse.json(
-      { error: "ストレージの確認に失敗しました", details: listErr.message },
+      {
+        error: "R2の確認に失敗しました",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 },
     );
   }
-
-  const found = listed?.some((f) => f.name === expectedFileName);
-  if (!found) {
+  if (
+    !uploaded.exists ||
+    (uploaded.size != null && (uploaded.size < MIN_BYTES || uploaded.size > MAX_BYTES)) ||
+    (uploaded.contentType != null && uploaded.contentType !== "video/mp4")
+  ) {
     return NextResponse.json(
       {
         error:
           "アップロードされたファイルが見つかりません。もう一度ファイルを選び直してください。",
-        details: `期待するファイル名: ${expectedFileName}`,
       },
       { status: 400 },
     );
@@ -88,9 +123,11 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     );
   }
 
-  await admin.storage
-    .from("pdfs")
-    .remove([legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId)]);
+  try {
+    await deleteObjects([legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId)]);
+  } catch {
+    // 旧キーの掃除は登録結果を失敗扱いにしない。
+  }
 
   return NextResponse.json({ ok: true, path: storagePath });
 }

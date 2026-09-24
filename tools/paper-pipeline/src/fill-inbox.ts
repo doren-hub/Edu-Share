@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import { listExistingWorkPapers, listInboxPdfs } from "./inbox.ts";
 import { normalizePdfFilename } from "./match.ts";
@@ -102,7 +103,7 @@ export function listLibraryPdfsViaFinder(root: string): SourcePdf[] {
 }
 
 function walkReadable(dir: string, out: SourcePdf[]): void {
-  let entries: ReturnType<typeof readdirSync>;
+  let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (e) {

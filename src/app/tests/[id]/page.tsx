@@ -26,6 +26,7 @@ import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { loadPaperStudyStatusForTest } from "@/lib/paper-study-status";
 import { createClient } from "@/lib/supabase/server";
 import { reconcileExistingPaperMaterialFiles } from "@/lib/reconcile-paper-material-files";
+import { createObjectReadUrl } from "@/lib/object-storage";
 import { canStartNewAutoQuiz, countDocumentChunksForTest } from "@/lib/document-chunks";
 import type { QuestionPerformanceRow } from "@/lib/question-performance";
 import {
@@ -161,21 +162,16 @@ async function signMaterialUrls(
   videoSigned: string | null;
   pdfSigned: string | null;
 }> {
-  const signOne = async (
-    admin: ReturnType<typeof createAdminClient>,
-    path: string | null | undefined,
-  ) => {
+  const signOne = async (path: string | null | undefined) => {
     const p = path?.trim();
     if (!p) return null;
-    const { data } = await admin.storage.from("pdfs").createSignedUrl(p, MATERIAL_SIGN_TTL_SEC);
-    return data?.signedUrl ?? null;
+    return createObjectReadUrl(p, MATERIAL_SIGN_TTL_SEC);
   };
   try {
-    const admin = createAdminClient();
     const [slideSigned, videoSigned, pdfSigned] = await Promise.all([
-      signOne(admin, slidePath),
-      signOne(admin, videoPath),
-      signOne(admin, pdfPath),
+      signOne(slidePath),
+      signOne(videoPath),
+      signOne(pdfPath),
     ]);
     return { slideSigned, videoSigned, pdfSigned };
   } catch {

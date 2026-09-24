@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ingestPdfForTest } from "@/lib/ingest-pdf";
+import { createObjectReadUrl, putObject } from "@/lib/object-storage";
 
 export const runtime = "nodejs";
 
 /**
  * 公開中のテスト教材（ready）の元PDFを、ログインユーザーに inline 配信する。
- * Storage RLS はアップロード者のみのため service role で読み出す。
+ * 認証確認後、R2 の公開 URL または短期署名 URL へリダイレクトする。
  */
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id: testId } = await ctx.params;
@@ -40,45 +41,17 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: "PDFを表示できません" }, { status: 404 });
   }
 
-  const { data: signed, error: signErr } = await admin.storage
-    .from("pdfs")
-    .createSignedUrl(test.pdf_storage_path, 3600);
-
-  if (!signErr && signed?.signedUrl) {
-    const upstream = await fetch(signed.signedUrl);
-    if (upstream.ok && upstream.body) {
-      return new NextResponse(upstream.body, {
-        status: 200,
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": "inline",
-          "Cache-Control": "private, max-age=300",
-        },
-      });
-    }
-  }
-
-  const { data: blob, error: dlErr } = await admin.storage
-    .from("pdfs")
-    .download(test.pdf_storage_path);
-
-  if (dlErr || !blob) {
+  try {
+    return NextResponse.redirect(await createObjectReadUrl(test.pdf_storage_path, 3600));
+  } catch (error) {
     return NextResponse.json(
-      { error: dlErr?.message || "PDFの取得に失敗しました" },
+      {
+        error: "PDFの取得に失敗しました",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 },
     );
   }
-
-  const buf = Buffer.from(await blob.arrayBuffer());
-
-  return new NextResponse(buf, {
-    status: 200,
-    headers: {
-      "Content-Type": "application/pdf",
-      "Content-Disposition": "inline",
-      "Cache-Control": "private, max-age=300",
-    },
-  });
 }
 
 /**
@@ -152,21 +125,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const { error: upErr } = await admin.storage.from("pdfs").upload(storagePath, bytes, {
-    contentType: "application/pdf",
-    upsert: true,
-  });
-
-  if (upErr) {
+  try {
+    await putObject(storagePath, bytes, "application/pdf");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
-        processing_error: upErr.message || "ストレージへのアップロードに失敗しました",
+        processing_error: message || "R2へのアップロードに失敗しました",
       })
       .eq("id", testId);
     return NextResponse.json(
-      { error: upErr.message || "ストレージへのアップロードに失敗しました" },
+      { error: message || "R2へのアップロードに失敗しました" },
       { status: 500 },
     );
   }
