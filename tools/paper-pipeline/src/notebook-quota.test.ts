@@ -98,6 +98,27 @@ test("notebookGenerationPause: 短期 85% ちょうどは止らない", () => {
   assert.equal(pause, null);
 });
 
+test("notebookGenerationPause: 短期の上限は引数の％を超えたときだけ", () => {
+  const now = Date.parse("2026-09-20T18:50:00+09:00");
+  const quota = {
+    shortUsed: 70,
+    shortRemaining: 30,
+    shortResetAt: Date.parse("2026-09-20T20:53:00+09:00"),
+    shortResetLabel: "2026-09-20 20:53",
+    weeklyUsed: 10,
+    weeklyRemaining: 90,
+    weeklyResetAt: Date.parse("2026-09-24T12:53:00+09:00"),
+    weeklyResetLabel: "2026-09-24 12:53",
+    source: "t",
+  };
+  assert.equal(notebookGenerationPause(quota, now, 70), null);
+  const pause = notebookGenerationPause({ ...quota, shortUsed: 70.1 }, now, 70);
+  assert.ok(pause);
+  assert.equal(pause.reason, "short");
+  assert.equal(pause.stopPercent, 70);
+  assert.match(formatQuotaPause(pause), /しきい値 70% 超/);
+});
+
 test("notebookGenerationPause: 短期 85% 超はリセットまで止める", () => {
   const now = Date.parse("2026-09-20T18:50:00+09:00");
   const pause = notebookGenerationPause(

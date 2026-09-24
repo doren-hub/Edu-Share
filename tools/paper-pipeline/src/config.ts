@@ -51,6 +51,8 @@ export type CliOverrides = {
   generate?: string[];
   ignoreNotebookQuota?: boolean;
   newestFirst?: boolean;
+  /** 短期枠の使用量がこの％を超えたら生成を止める */
+  notebookShortStopPercent?: number;
 };
 
 function stripTrailingSlash(u: string): string {
@@ -78,6 +80,12 @@ export function parseArgv(argv: string[]): CliOverrides {
       out.generate = [...(out.generate ?? []), ...tokens];
     } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
     else if (a === "--newest-first") out.newestFirst = true;
+    else if (a === "--notebook-short-stop-percent") {
+      out.notebookShortStopPercent = parseRequiredPercent(
+        "--notebook-short-stop-percent",
+        next(),
+      );
+    }
   }
   return out;
 }
@@ -174,10 +182,9 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
       process.env.NEWEST_FIRST === "true",
     notebookQuotaUrls: defaultNotebookQuotaUrls(),
     notebookQuotaFiles: defaultNotebookQuotaFiles(),
-    notebookShortStopPercent: envPercent(
-      "NOTEBOOK_SHORT_STOP_PERCENT",
-      DEFAULT_SHORT_STOP_PERCENT,
-    ),
+    notebookShortStopPercent:
+      overrides.notebookShortStopPercent ??
+      envPercent("NOTEBOOK_SHORT_STOP_PERCENT", DEFAULT_SHORT_STOP_PERCENT),
     notebookWeeklyStopPercent: envPercent(
       "NOTEBOOK_WEEKLY_STOP_PERCENT",
       DEFAULT_WEEKLY_STOP_PERCENT,
@@ -190,6 +197,16 @@ function envPercent(key: string, fallback: number): number {
   if (!raw) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** 0〜100。空や範囲外はエラー。ちょうどこの％では止めず、超えたら止める。 */
+export function parseRequiredPercent(flag: string, raw: string): number {
+  const t = raw.trim();
+  const n = Number(t);
+  if (!t || !Number.isFinite(n) || n < 0 || n > 100) {
+    throw new Error(`${flag} には 0 以上 100 以下の数を指定してください`);
+  }
+  return n;
 }
 
 export function helpText(): string {
@@ -206,7 +223,7 @@ export function helpText(): string {
   npm run fill-inbox -- --source "/path/to/papers" --count 3
   npm run worker -- --only paper.pdf --headless
 
-npm start は inbox 直下の PDF だけを、1論文ずつ worker で処理します。作業フォルダにあるだけの論文は対象にしません。SciSpace のメタ補修（Files 行が空、省略著者、画面文言の題名や掲載）は npm run repair-meta です。未処理 PDF をライブラリから inbox へ 3 件コピーするのは npm run fill-inbox です。npm start と同時には起動しません。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。同じプロファイルで Chrome を同時には開きません。Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。そのあいだは、処理中の inbox の論文について SciSpace と、できている生成物の Edu Share 登録を先に進めます。
+npm start は inbox 直下の PDF だけを、1論文ずつ worker で処理します。作業フォルダにあるだけの論文は対象にしません。SciSpace のメタ補修（Files 行が空、省略著者、画面文言の題名や掲載）は npm run repair-meta です。未処理 PDF をライブラリから inbox へ 3 件コピーするのは npm run fill-inbox です。npm start と同時には起動しません。--generate で slides / video / quiz / flashcards を選べます（複数可、all で全部）。指定した項目が生成待ちか完了になるまで次の論文の生成には進みません。同じプロファイルで Chrome を同時には開きません。Notebook の短期枠の使用量が上限（既定 85%、--notebook-short-stop-percent で変更）を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。そのあいだは、処理中の inbox の論文について SciSpace と、できている生成物の Edu Share 登録を先に進めます。
 
 必須: PAPER_INBOX_DIR と PAPER_WORK_DIR（.env または引数）
 
@@ -223,6 +240,9 @@ npm start は inbox 直下の PDF だけを、1論文ずつ worker で処理し�
                        環境変数 HEADLESS=1 でも可。引数が優先
   --skip-slides-video  --generate quiz,flashcards と同じ（互換）
   --newest-first       新しい論文（変更日が新しい PDF）から処理
+  --notebook-short-stop-percent N
+                       短期枠の使用量がこの％を超えたら生成を止める（既定 85、0〜100）
+                       環境変数 NOTEBOOK_SHORT_STOP_PERCENT より優先
   --ignore-notebook-quota  Notebook 利用量による停止をしない
 `;
 }

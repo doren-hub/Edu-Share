@@ -141,7 +141,7 @@ function orchHelp(): string {
   Studio の生成（スライド・解説動画・クイズ・単語帳）が揃った論文は SciSpace メタ / Edu Share へ進みます。
   動画 MP4 は NotebookLM のダウンロードボタンで保存して Edu Share に載せます。
   同じ Chrome プロファイルは同時に使いません。npm start と npm run repair-meta も同時には起動しません。
-  Notebook の短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。
+  Notebook の短期枠の使用量が上限（既定 85%、--notebook-short-stop-percent で変更）を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待ちます。
   そのあいだは SciSpace 掲載・メタ、できている生成物の Edu Share 登録を先に進めます。
   MP4 が取れない・Studio が空・SciSpace メタが進まないときは同じ論文をすぐ開き直さず、間隔を空けます。
 

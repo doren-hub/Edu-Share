@@ -49,7 +49,7 @@ npm start -- --headless
 
 作業の途中状態は同じフォルダの `state.json`。失敗しても次の PDF へ進む。1 件で止めるときは `--stop-on-error`。
 
-Notebook の短期枠が 85% を超えているあいだは生成を止める。週枠が 100% のときはリセット時刻まで待つ。そのあいだは SciSpace の掲載・メタと、できている生成物の Edu Share 登録を先に進める。止めないときは `--ignore-notebook-quota`。
+Notebook の短期枠の使用量が上限を超えているあいだは生成を止める。既定は 85% で、`--notebook-short-stop-percent 70` のように変えられる。週枠が 100% のときはリセット時刻まで待つ。そのあいだは SciSpace の掲載・メタと、できている生成物の Edu Share 登録を先に進める。止めないときは `--ignore-notebook-quota`。
 
 ## 5. 一部だけ進める
 
