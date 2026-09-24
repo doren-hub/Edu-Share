@@ -29,6 +29,8 @@ export type NotebookQuotaPause = {
   until: number | null;
   untilLabel: string;
   used: number;
+  /** この％を超えたら止める。短期は指定値、週枠は週の上限 */
+  stopPercent: number;
 };
 
 export class NotebookQuotaPauseError extends Error {
@@ -169,6 +171,7 @@ export function notebookGenerationPause(
       until: quota.weeklyResetAt,
       untilLabel: quota.weeklyResetLabel,
       used: quota.weeklyUsed,
+      stopPercent: weeklyStop,
     };
   }
   if (quota.shortUsed != null && quota.shortUsed > shortStop) {
@@ -178,6 +181,7 @@ export function notebookGenerationPause(
       until: quota.shortResetAt,
       untilLabel: quota.shortResetLabel,
       used: quota.shortUsed,
+      stopPercent: shortStop,
     };
   }
   return null;
@@ -188,7 +192,7 @@ export function formatQuotaPause(pause: NotebookQuotaPause, quota?: NotebookQuot
   if (pause.reason === "weekly") {
     return `Notebook 週枠が ${fmtPct(pause.used)}% のため ${until} まで生成を止めます${sourceSuffix(quota)}`;
   }
-  return `Notebook 短期枠が ${fmtPct(pause.used)}%（しきい値 ${DEFAULT_SHORT_STOP_PERCENT}% 超）のため ${until} まで生成を止めます${sourceSuffix(quota)}`;
+  return `Notebook 短期枠が ${fmtPct(pause.used)}%（しきい値 ${fmtPct(pause.stopPercent)}% 超）のため ${until} まで生成を止めます${sourceSuffix(quota)}`;
 }
 
 export async function loadNotebookQuota(

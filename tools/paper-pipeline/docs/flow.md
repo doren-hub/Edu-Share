@@ -14,7 +14,7 @@ flowchart TD
   orch -->|spawn 1本| worker[cli.ts]
   worker --> chrome[永続 Chrome]
   chrome --> sciUp[sci-upload: Files に PDF]
-  sciUp --> quota{Notebook 短期>85% または 週枠100%?}
+  sciUp --> quota{Notebook 短期>上限 または 週枠100%?}
   quota -->|余裕あり| nlm[NotebookLM Studio]
   quota -->|利用量超え| harvest[SciSpace / できた生成物を Edu Share へ]
   harvest --> orch
@@ -33,7 +33,7 @@ flowchart TD
 
 待ちの再確認間隔: スライド 90s、動画 60s、クイズ/単語帳 20s。同じ論文で MP4 が取れない・SciSpace メタが進まないときは 10 分空ける。Studio がツールバーだけのままなら 15 分は開き直さず、1 時間を過ぎたら開始記録を捨ててキックオフし直す。クールダウン中は Chrome を開かない。
 
-Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短期枠)` / `(週枠)`）を読む。短期枠の利用量が 85% を超えているあいだは Studio 生成を止める。週枠が 100% なら `reset_at` まで待つ。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める。収集・Edu Share はキックオフ済みなら続ける。Chrome をもう一つ開いて Cookie を取り直すことはしない。
+Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短期枠)` / `(週枠)`）を読む。短期枠の利用量が上限（既定 85%、`--notebook-short-stop-percent`）を超えているあいだは Studio 生成を止める。週枠が 100% なら `reset_at` まで待つ。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める。収集・Edu Share はキックオフ済みなら続ける。Chrome をもう一つ開いて Cookie を取り直すことはしない。
 
 ## 1 論文の段階
 
@@ -48,7 +48,7 @@ flowchart TD
   adopt --> sciUp
   sciUp[sci-upload] --> nlm[nlm-create / nlm-upload]
   nlm --> quota{利用量 OK?}
-  quota -->|短期>85% / 週枠100%| pause[生成停止して待つ]
+  quota -->|短期>上限 / 週枠100%| pause[生成停止して待つ]
   pause --> quota
   quota -->|はい| studio[Studio 並列キックオフ]
   studio --> wait{4種そろった?}

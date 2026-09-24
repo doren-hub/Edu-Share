@@ -61,7 +61,7 @@ inbox に置いてから完了までの操作手順は [docs/inbox.md](docs/inbo
 3. 作業フォルダに `DONE` がある、または一覧とタイトル/DOI が一致するものは無視（PDF は入力側に残す）
 4. 作業開始時に `PAPER_WORK_DIR/<ファイル名>/` を作り、スライド・動画・CSV をそこに保存
 5. **SciSpace 指定フォルダへ PDF を先に載せる**（カードメタはまだ待たない）
-6. NotebookLM の Studio は `--generate` で選んだ項目（省略時は 4 種）を開始（または完了）してから Chrome を明け渡し、次の inbox の論文の生成へ進む。**短期枠が 85% を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待つ**（taskdesk / 利用量ボードの Notebook 枠）。そのあいだは、処理中の inbox の論文について SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める
+6. NotebookLM の Studio は `--generate` で選んだ項目（省略時は 4 種）を開始（または完了）してから Chrome を明け渡し、次の inbox の論文の生成へ進む。**短期枠の使用量が上限（既定 85%、`--notebook-short-stop-percent` で変更）を超えているあいだは生成を止め、週枠が 100% ならリセット時刻まで待つ**（taskdesk / 利用量ボードの Notebook 枠）。そのあいだは、処理中の inbox の論文について SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める
 7. Studio が揃ったら SciSpace のカードメタと `/records/…` を取る（掲載から遅れて出るメタを、NotebookLM 待ちのあいだに進めておく）
 8. 業界はアップロード画面の PDF 自動入力と SciSpace メタから候補を選ぶ
 9. SciSpace のリンクはフォルダではなく個別レコード（`/records/…`）を保存する
@@ -84,6 +84,6 @@ npm run repair-meta -- --headed
 
 - SciSpace のカードメタは PDF 掲載から遅れるので、掲載は NotebookLM より先、メタ取得は Studio のあとです
 - NotebookLM の Studio は、同じ論文のスライド・動画・クイズ・単語帳がすべて生成待ちか完了になってから次の論文の生成に進みます。動画は数十分かかることがあります。MP4 が取れない・Studio が空・SciSpace メタが進まないときは同じ論文をすぐ開き直さず、間隔を空けます
-- Notebook の短期枠（Gemini Notebook）が 85% を超えているあいだは生成を止めます。週枠が 100% のときはリセット日時まで待ちます。値は taskdesk と同じ利用量 JSON をリアルタイムに読みます。止めないときは `--ignore-notebook-quota`
+- Notebook の短期枠（Gemini Notebook）の使用量が上限を超えているあいだは生成を止めます。既定は 85% で、`--notebook-short-stop-percent 70` のように変えられます（環境変数 `NOTEBOOK_SHORT_STOP_PERCENT` より引数が優先）。ちょうどその％では止めず、超えたら止めます。週枠が 100% のときはリセット日時まで待ちます。値は taskdesk と同じ利用量 JSON をリアルタイムに読みます。止めないときは `--ignore-notebook-quota`
 - 利用量が回復するまでは、SciSpace への PDF 掲載・メタ反映と、1 種でもできている生成物の Edu Share 登録を先に進めます。残りの生成は枠が空いてから再開します
 - 公式 API ではないため、ボタン文言が変わると失敗します。失敗時は論文フォルダの `failures/` にスクリーンショットが残ります
