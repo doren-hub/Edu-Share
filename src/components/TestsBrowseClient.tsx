@@ -307,6 +307,59 @@ export function TestsBrowseClient({
     setStudyById(studyStatuses);
   }, [studyStatuses]);
 
+  // ブラウザの再読み込みでも絞り込み・並び順を維持するため sessionStorage に保存する
+  const storageKey = `tests-browse-conditions:${category}`;
+  const [conditionsRestored, setConditionsRestored] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw) {
+        const s = JSON.parse(raw) as Record<string, string>;
+        setPastSchoolKey(s.pastSchoolKey ?? "");
+        setPaperAuthor(s.paperAuthor ?? "");
+        setPaperIndustry(s.paperIndustry ?? "");
+        setPaperYear(s.paperYear ?? "");
+        setPaperStudyStatus((s.paperStudyStatus ?? "") as PaperStudyStatus | "");
+        setTextSearch(s.textSearch ?? "");
+        if (s.paperSort) setPaperSort(s.paperSort as PaperSortKey);
+      }
+    } catch {
+      /* 保存領域が使えない場合は既定値のまま */
+    }
+    setConditionsRestored(true);
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!conditionsRestored) return;
+    try {
+      sessionStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          pastSchoolKey,
+          paperAuthor,
+          paperIndustry,
+          paperYear,
+          paperStudyStatus,
+          textSearch,
+          paperSort,
+        }),
+      );
+    } catch {
+      /* noop */
+    }
+  }, [
+    conditionsRestored,
+    storageKey,
+    pastSchoolKey,
+    paperAuthor,
+    paperIndustry,
+    paperYear,
+    paperStudyStatus,
+    textSearch,
+    paperSort,
+  ]);
+
   const pastSchoolOptions = usePastSchoolFilterOptions(tests, category);
   const paperIndustryOpts = usePaperIndustryOptions(tests, category);
   const paperAuthorOptions = usePaperAuthorOptions(tests, category, paperIndustry);
