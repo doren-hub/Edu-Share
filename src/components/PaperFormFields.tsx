@@ -1,6 +1,7 @@
 "use client";
 
 import { PaperAuthorsPicklistList } from "@/components/PaperAuthorsPicklistList";
+import { PaperIndustriesPicklistList } from "@/components/PaperIndustriesPicklistList";
 import { PicklistField } from "@/components/PicklistField";
 
 type Props = {
@@ -12,8 +13,8 @@ type Props = {
   onPaperVenue: (v: string) => void;
   paperDoi: string;
   onPaperDoi: (v: string) => void;
-  industry: string;
-  onIndustry: (v: string) => void;
+  industries: string[];
+  onIndustries: (v: string[]) => void;
   publicationYear: string;
   onPublicationYear: (v: string) => void;
 };
@@ -26,8 +27,8 @@ export function PaperFormFields({
   onPaperVenue,
   paperDoi,
   onPaperDoi,
-  industry,
-  onIndustry,
+  industries,
+  onIndustries,
   publicationYear,
   onPublicationYear,
 }: Props) {
@@ -65,16 +66,12 @@ export function PaperFormFields({
         </label>
       </div>
 
+      <PaperIndustriesPicklistList
+        values={industries}
+        onChange={onIndustries}
+      />
+
       <div className="grid gap-4 sm:grid-cols-2">
-        <PicklistField
-          category="paper_industry"
-          label="業界（任意）"
-          id="paper-industry"
-          value={industry}
-          onChange={onIndustry}
-          allowOther
-          required={false}
-        />
         <PicklistField
           category="publication_year"
           label="発表年（任意）"

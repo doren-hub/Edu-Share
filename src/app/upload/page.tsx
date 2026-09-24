@@ -33,7 +33,7 @@ export default function UploadPage() {
   const [paperAuthors, setPaperAuthors] = useState<string[]>([""]);
   const [paperVenue, setPaperVenue] = useState("");
   const [paperDoi, setPaperDoi] = useState("");
-  const [industry, setIndustry] = useState("");
+  const [industries, setIndustries] = useState<string[]>([""]);
   const [publicationYear, setPublicationYear] = useState("");
 
   const [file, setFile] = useState<File | null>(null);
@@ -60,7 +60,7 @@ export default function UploadPage() {
       setPaperAuthors([""]);
       setPaperVenue("");
       setPaperDoi("");
-      setIndustry("");
+      setIndustries([""]);
       setPublicationYear("");
     }
   }, [documentType]);
@@ -94,7 +94,7 @@ export default function UploadPage() {
               paper_authors?: string[];
               paper_venue?: string;
               paper_doi?: string;
-              industry?: string;
+              industries?: string[];
               publication_year?: string;
             };
           }
@@ -123,7 +123,11 @@ export default function UploadPage() {
       }
       setPaperVenue(a.paper_venue ?? "");
       setPaperDoi(a.paper_doi ?? "");
-      setIndustry(a.industry ?? "");
+      setIndustries(
+        Array.isArray(a.industries) && a.industries.length > 0
+          ? a.industries.map(String)
+          : [""],
+      );
       setPublicationYear(a.publication_year ?? "");
       setAutoFillNote("PDF内容から項目を自動入力しました。内容を確認してから送信してください。");
     } catch (e) {
@@ -172,7 +176,10 @@ export default function UploadPage() {
       fd.set("paper_authors", JSON.stringify(authors));
       fd.set("paper_venue", paperVenue.trim());
       fd.set("paper_doi", paperDoi.trim());
-      fd.set("industry", industry.trim());
+      fd.set(
+        "industries",
+        JSON.stringify(industries.map((v) => v.trim()).filter(Boolean)),
+      );
       fd.set("publication_year", publicationYear.trim());
     }
 
@@ -481,8 +488,8 @@ export default function UploadPage() {
               onPaperVenue={setPaperVenue}
               paperDoi={paperDoi}
               onPaperDoi={setPaperDoi}
-              industry={industry}
-              onIndustry={setIndustry}
+              industries={industries}
+              onIndustries={setIndustries}
               publicationYear={publicationYear}
               onPublicationYear={setPublicationYear}
             />

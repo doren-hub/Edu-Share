@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ingestPdfForTest } from "@/lib/ingest-pdf";
 import { joinPaperAuthorsForSourceName } from "@/lib/paper-authors";
+import { MAX_INDUSTRIES } from "@/lib/paper-industries";
 import { assertStoredPickWithOther } from "@/lib/picklist-parse";
 import { mergePicklistOptionsForSelect } from "@/lib/picklist-merge";
 import { fetchPicklistOptionRows } from "@/lib/supabase/picklist-table";
@@ -116,7 +117,6 @@ const uploadFormSchema = z
     expert_name: z.string().max(200).optional(),
     paper_venue: z.string().max(400).optional(),
     paper_doi: z.string().max(200).optional(),
-    industry: z.string().max(120).optional(),
     publication_year: z.string().max(32).optional(),
     exam_department: z.string().max(120).optional(),
     exam_subject: z.string().max(120).optional(),
@@ -160,7 +160,6 @@ export async function POST(req: Request) {
       ? String(form.get("paper_venue"))
       : undefined,
     paper_doi: form.get("paper_doi") ? String(form.get("paper_doi")) : undefined,
-    industry: form.get("industry") ? String(form.get("industry")) : undefined,
     publication_year: form.get("publication_year")
       ? String(form.get("publication_year"))
       : undefined,
@@ -200,12 +199,12 @@ export async function POST(req: Request) {
   const examDepartmentTrim = (d.exam_department ?? "").trim();
   const examSubjectTrim = (d.exam_subject ?? "").trim();
   const examPeriodTrim = (d.exam_period ?? "").trim();
-  const industryTrim = (d.industry ?? "").trim();
   const publicationYearTrim = (d.publication_year ?? "").trim();
   const paperVenueTrim = (d.paper_venue ?? "").trim();
   const paperDoiTrim = (d.paper_doi ?? "").trim();
 
   let paperAuthorsResolved: string[] = [];
+  const industriesResolved: string[] = [];
   const paRaw = form.get("paper_authors");
   if (typeof paRaw === "string" && paRaw.trim()) {
     try {
@@ -249,6 +248,41 @@ export async function POST(req: Request) {
     }
     paperAuthorsResolved = next;
     source_name = joinPaperAuthorsForSourceName(paperAuthorsResolved);
+
+    let industriesRaw: string[] = [];
+    const indRaw = form.get("industries");
+    if (typeof indRaw === "string" && indRaw.trim()) {
+      try {
+        const j = JSON.parse(indRaw) as unknown;
+        if (Array.isArray(j)) {
+          industriesRaw = j.map((x) => String(x).trim()).filter(Boolean);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (industriesRaw.length > MAX_INDUSTRIES) {
+      return NextResponse.json(
+        { error: `業界は${MAX_INDUSTRIES}件までです` },
+        { status: 400 },
+      );
+    }
+    if (industriesRaw.length > 0) {
+      const { rows: indRows } = await fetchPicklistOptionRows("paper_industry");
+      const indVals = mergePicklistOptionsForSelect(indRows, {
+        category: "paper_industry",
+      }).map((r) => r.value);
+      const indSeen = new Set<string>();
+      for (const raw of industriesRaw) {
+        const r = assertStoredPickWithOther(raw, indVals, true, "業界");
+        if (!r.ok) {
+          return NextResponse.json({ error: r.message }, { status: 400 });
+        }
+        if (indSeen.has(r.value)) continue;
+        indSeen.add(r.value);
+        industriesResolved.push(r.value);
+      }
+    }
   }
 
   let admin;
@@ -325,7 +359,8 @@ export async function POST(req: Request) {
     exam_subject:
       document_type === "past_exam" ? examSubjectTrim || null : null,
     exam_period: document_type === "past_exam" ? examPeriodTrim || null : null,
-    industry: document_type === "paper" ? industryTrim || null : null,
+    industry: document_type === "paper" ? industriesResolved[0] ?? null : null,
+    industries: document_type === "paper" ? industriesResolved : null,
     publication_year:
       document_type === "paper" ? publicationYearTrim || null : null,
     paper_doi: document_type === "paper" ? paperDoiTrim || null : null,

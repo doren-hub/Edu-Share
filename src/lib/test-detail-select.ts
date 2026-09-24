@@ -1,7 +1,7 @@
 /** 詳細ページ: マイグレーション未適用の列は外して再取得する */
 
 export const TEST_DETAIL_BASE_SELECT =
-  "id,title,description,source_name,processing_status,processing_error,created_at,document_type,exam_department,exam_subject,exam_period,industry,publication_year,paper_doi,paper_venue,paper_authors,uploaded_by,quiz_source,notebooklm_questions_json,notebooklm_vocab_questions_json";
+  "id,title,description,source_name,processing_status,processing_error,created_at,document_type,exam_department,exam_subject,exam_period,industry,industries,publication_year,paper_doi,paper_venue,paper_authors,uploaded_by,quiz_source,notebooklm_questions_json,notebooklm_vocab_questions_json";
 
 /** pdf_filename が無い DB でも Notebook / SciSpace URL は落とさない。先頭は現行スキーマで成功する列順 */
 export const TEST_DETAIL_SELECT_VARIANTS = [

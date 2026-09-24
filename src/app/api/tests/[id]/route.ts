@@ -9,6 +9,10 @@ import {
   notebooklmVideoMp4StoragePath,
 } from "@/lib/test-notebooklm-material-paths";
 import { joinPaperAuthorsForSourceName } from "@/lib/paper-authors";
+import {
+  MAX_INDUSTRIES,
+  normalizePaperIndustriesFromDb,
+} from "@/lib/paper-industries";
 import { assertStoredPickWithOther } from "@/lib/picklist-parse";
 import { mergePicklistOptionsForSelect } from "@/lib/picklist-merge";
 import { fetchPicklistOptionRows } from "@/lib/supabase/picklist-table";
@@ -29,7 +33,7 @@ const patchSchema = z
     exam_department: z.string().min(1).max(120).nullable().optional(),
     exam_subject: z.string().min(1).max(120).nullable().optional(),
     exam_period: z.string().min(1).max(120).nullable().optional(),
-    industry: z.string().max(120).nullable().optional(),
+    industries: z.array(z.string().min(1).max(120)).max(MAX_INDUSTRIES).optional(),
     publication_year: z.string().max(32).nullable().optional(),
     paper_authors: z.array(z.string().min(1).max(200)).max(24).optional(),
     paper_venue: z.string().max(400).nullable().optional(),
@@ -82,7 +86,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const { data: row, error: fetchErr } = await admin
     .from("tests")
     .select(
-      "id, uploaded_by, document_type, exam_department, exam_subject, exam_period, source_name, industry, publication_year, paper_doi, paper_venue, paper_authors",
+      "id, uploaded_by, document_type, exam_department, exam_subject, exam_period, source_name, industry, industries, publication_year, paper_doi, paper_venue, paper_authors",
     )
     .eq("id", testId)
     .single();
@@ -156,8 +160,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       : row.exam_subject;
   const mergedPeriod =
     patch.exam_period !== undefined ? patch.exam_period : row.exam_period;
-  const mergedIndustry =
-    patch.industry !== undefined ? patch.industry : row.industry;
+  const mergedIndustries =
+    patch.industries !== undefined
+      ? patch.industries.map((s) => s.trim()).filter((s) => s.length > 0)
+      : normalizePaperIndustriesFromDb(row.industries, row.industry);
   const mergedYear =
     patch.publication_year !== undefined
       ? patch.publication_year
@@ -187,7 +193,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
   const touchesPaperMeta =
     docTypeChanged ||
-    patch.industry !== undefined ||
+    patch.industries !== undefined ||
     patch.publication_year !== undefined ||
     patch.source_name !== undefined ||
     patch.paper_authors !== undefined ||
@@ -214,7 +220,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   let resolvedPaperAuthors: string[] | null = null;
-  let resolvedIndustry: string | null = null;
+  let resolvedIndustries: string[] = [];
   let resolvedYear: string | null = null;
 
   if (mergedDoc === "paper" && touchesPaperMeta) {
@@ -227,7 +233,6 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         { status: 400 },
       );
     }
-    const ind = String(mergedIndustry ?? "").trim();
     const yr = String(mergedYear ?? "").trim();
 
     const expRes = await fetchPicklistOptionRows("expert_name");
@@ -247,18 +252,21 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     }
     resolvedPaperAuthors = authorsOut;
 
-    if (ind) {
+    if (mergedIndustries.length > 0) {
       const { rows: indRows } = await fetchPicklistOptionRows("paper_industry");
       const indVals = mergePicklistOptionsForSelect(indRows, {
         category: "paper_industry",
       }).map((r) => r.value);
-      const indOk = assertStoredPickWithOther(ind, indVals, true, "業界");
-      if (!indOk.ok) {
-        return NextResponse.json({ error: indOk.message }, { status: 400 });
+      const indSeen = new Set<string>();
+      for (const raw of mergedIndustries) {
+        const indOk = assertStoredPickWithOther(raw, indVals, true, "業界");
+        if (!indOk.ok) {
+          return NextResponse.json({ error: indOk.message }, { status: 400 });
+        }
+        if (indSeen.has(indOk.value)) continue;
+        indSeen.add(indOk.value);
+        resolvedIndustries.push(indOk.value);
       }
-      resolvedIndustry = indOk.value;
-    } else {
-      resolvedIndustry = null;
     }
 
     if (yr) {
@@ -314,6 +322,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       updates.exam_period = null;
     } else {
       updates.industry = null;
+      updates.industries = null;
       updates.publication_year = null;
       updates.paper_doi = null;
       updates.paper_venue = null;
@@ -326,7 +335,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       updates.paper_authors = resolvedPaperAuthors;
       updates.source_name = joinPaperAuthorsForSourceName(resolvedPaperAuthors);
     }
-    updates.industry = resolvedIndustry;
+    updates.industries = resolvedIndustries;
+    updates.industry = resolvedIndustries[0] ?? null;
     updates.publication_year = resolvedYear;
   }
 
@@ -369,7 +379,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     .update(updates)
     .eq("id", testId)
     .select(
-      "id,title,description,source_type,source_name,document_type,exam_department,exam_subject,exam_period,industry,publication_year,paper_doi,paper_venue,paper_authors,processing_status",
+      "id,title,description,source_type,source_name,document_type,exam_department,exam_subject,exam_period,industry,industries,publication_year,paper_doi,paper_venue,paper_authors,processing_status",
     )
     .single();
 

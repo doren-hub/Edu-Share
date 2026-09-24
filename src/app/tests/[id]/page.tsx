@@ -59,6 +59,10 @@ import {
 } from "@/lib/review-mode";
 import { PaperAuthorsCollapsible } from "@/components/PaperAuthorsCollapsible";
 import { normalizePaperAuthorsFromDb } from "@/lib/paper-authors";
+import {
+  displayPaperIndustries,
+  normalizePaperIndustriesFromDb,
+} from "@/lib/paper-industries";
 import { normalizePaperDoiDisplay, paperDoiHref } from "@/lib/paper-doi";
 import {
   TEST_DETAIL_LINK_COLUMNS,
@@ -133,6 +137,7 @@ type TestDetailRow = {
   exam_subject?: string | null;
   exam_period?: string | null;
   industry?: string | null;
+  industries?: unknown;
   publication_year?: string | null;
   paper_authors?: unknown;
   paper_venue?: string | null;
@@ -548,7 +553,7 @@ export default async function TestDetailPage({
               <div>
                 <dt className="text-zinc-500">業界</dt>
                 <dd className="font-medium text-zinc-900">
-                  {test.industry ?? "—"}
+                  {displayPaperIndustries(test.industries, test.industry) || "—"}
                 </dd>
               </div>
               <div>
@@ -611,7 +616,10 @@ export default async function TestDetailPage({
               exam_department: test.exam_department ?? null,
               exam_subject: test.exam_subject ?? null,
               exam_period: test.exam_period ?? null,
-              industry: test.industry ?? null,
+              industries: normalizePaperIndustriesFromDb(
+                test.industries,
+                test.industry,
+              ),
               publication_year: test.publication_year ?? null,
               paper_authors: (test as { paper_authors?: unknown }).paper_authors,
               paper_venue: (test as { paper_venue?: string | null }).paper_venue,
@@ -686,8 +694,10 @@ export default async function TestDetailPage({
                             "",
                           paperDoi:
                             (test as { paper_doi?: string | null }).paper_doi?.trim() ?? "",
-                          industry:
-                            (test as { industry?: string | null }).industry?.trim() ?? "",
+                          industries: normalizePaperIndustriesFromDb(
+                            test.industries,
+                            test.industry,
+                          ),
                           publicationYear: (() => {
                             const y = String(
                               (test as { publication_year?: string | null })

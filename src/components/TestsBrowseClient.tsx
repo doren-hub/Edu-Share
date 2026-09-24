@@ -12,6 +12,7 @@ import {
   PAPER_STUDY_STATUS_LABEL,
 } from "@/lib/paper-study-status";
 import { normalizePaperAuthorsFromDb } from "@/lib/paper-authors";
+import { normalizePaperIndustriesFromDb } from "@/lib/paper-industries";
 import { TESTS_LIST_PATHS } from "@/lib/tests-list-paths";
 
 type TestsCategory = "past_exam" | "paper";
@@ -132,12 +133,20 @@ function usePastSchoolFilterOptions(
   }, [tests, category]);
 }
 
+function rowIndustries(t: TestRow): string[] {
+  return normalizePaperIndustriesFromDb(t.industries, t.industry);
+}
+
+function matchesIndustryFilter(t: TestRow, industry: string): boolean {
+  if (!industry) return true;
+  const list = rowIndustries(t);
+  if (industry === EMPTY_SENTINEL) return list.length === 0;
+  return list.includes(industry);
+}
+
 function paperRowsMatchingIndustry(tests: TestRow[], industry: string): TestRow[] {
   if (!industry) return tests;
-  if (industry === EMPTY_SENTINEL) {
-    return tests.filter((t) => (t.industry ?? "").trim() === "");
-  }
-  return tests.filter((t) => (t.industry ?? "").trim() === industry);
+  return tests.filter((t) => matchesIndustryFilter(t, industry));
 }
 
 /** 業界は全件から候補（著者に依存しない） */
@@ -150,9 +159,9 @@ function usePaperIndustryOptions(
     const set = new Set<string>();
     let hasEmpty = false;
     for (const t of tests) {
-      const i = (t.industry ?? "").trim();
-      if (i) set.add(i);
-      else hasEmpty = true;
+      const list = rowIndustries(t);
+      for (const i of list) set.add(i);
+      if (list.length === 0) hasEmpty = true;
     }
     return {
       values: Array.from(set).sort((a, b) => a.localeCompare(b, "ja", { sensitivity: "base" })),
@@ -211,9 +220,7 @@ function matchesPaperAxisFilters(
   year: string,
 ): boolean {
   if (author && (t.source_name?.trim() ?? "") !== author) return false;
-  if (industry === EMPTY_SENTINEL) {
-    if ((t.industry ?? "").trim() !== "") return false;
-  } else if (industry && (t.industry ?? "").trim() !== industry) return false;
+  if (!matchesIndustryFilter(t, industry)) return false;
   if (year === EMPTY_SENTINEL) {
     const y = (t.publication_year ?? "").trim();
     if (/^\d{4}$/.test(y)) return false;
@@ -229,7 +236,7 @@ function testRowSearchBlob(t: TestRow, category: TestsCategory): string {
     t.exam_department,
     t.exam_subject,
     t.exam_period,
-    t.industry,
+    rowIndustries(t).join(" "),
     t.publication_year,
     t.paper_venue,
     t.paper_doi,
