@@ -9,22 +9,25 @@ import {
   parsePaperStudyStatus,
 } from "./paper-study-status.ts";
 
-test("学習ステータスは4つで、表示名が付く", () => {
+test("学習ステータスは5つで、表示名が付く", () => {
   assert.deepEqual(PAPER_STUDY_STATUSES, [
     "unconfirmed",
-    "content_confirmed",
+    "checking",
+    "confirmed",
     "learning",
     "completed",
   ]);
   assert.deepEqual(
     PAPER_STUDY_STATUSES.map((status) => PAPER_STUDY_STATUS_LABEL[status]),
-    ["未確認", "内容確認", "学習中", "学習完了"],
+    ["未確認", "確認中", "確認済み", "学習中", "学習済み"],
   );
 });
 
 test("画面から渡せる値だけを受け付ける", () => {
   assert.equal(parsePaperStudyStatus("unconfirmed"), "unconfirmed");
-  assert.equal(parsePaperStudyStatus("content_confirmed"), "content_confirmed");
+  assert.equal(parsePaperStudyStatus("checking"), "checking");
+  assert.equal(parsePaperStudyStatus("confirmed"), "confirmed");
+  assert.equal(parsePaperStudyStatus("content_confirmed"), null);
   assert.equal(parsePaperStudyStatus("learning"), "learning");
   assert.equal(parsePaperStudyStatus("completed"), "completed");
   assert.equal(parsePaperStudyStatus("未確認"), null);
@@ -34,7 +37,9 @@ test("画面から渡せる値だけを受け付ける", () => {
 
 test("保存値以外は未確認になる", () => {
   assert.equal(paperStudyStatusFromStored("learning"), "learning");
-  assert.equal(paperStudyStatusFromStored("content_confirmed"), "content_confirmed");
+  assert.equal(paperStudyStatusFromStored("checking"), "checking");
+  assert.equal(paperStudyStatusFromStored("confirmed"), "confirmed");
+  assert.equal(paperStudyStatusFromStored("content_confirmed"), "unconfirmed");
   assert.equal(paperStudyStatusFromStored("completed"), "completed");
   assert.equal(paperStudyStatusFromStored(null), "unconfirmed");
   assert.equal(paperStudyStatusFromStored("unconfirmed"), "unconfirmed");

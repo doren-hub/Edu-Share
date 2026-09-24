@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** 画面上の4状態。未確認は行が無いときの既定。 */
+/** 画面上の5状態。未確認は行が無いときの既定。 */
 export const PAPER_STUDY_STATUSES = [
   "unconfirmed",
-  "content_confirmed",
+  "checking",
+  "confirmed",
   "learning",
   "completed",
 ] as const;
@@ -12,7 +13,8 @@ export type PaperStudyStatus = (typeof PAPER_STUDY_STATUSES)[number];
 
 /** テーブルに保存する値。未確認は行を消す。 */
 export const STORED_PAPER_STUDY_STATUSES = [
-  "content_confirmed",
+  "checking",
+  "confirmed",
   "learning",
   "completed",
 ] as const;
@@ -21,9 +23,10 @@ export type StoredPaperStudyStatus = (typeof STORED_PAPER_STUDY_STATUSES)[number
 
 export const PAPER_STUDY_STATUS_LABEL: Record<PaperStudyStatus, string> = {
   unconfirmed: "未確認",
-  content_confirmed: "内容確認",
+  checking: "確認中",
+  confirmed: "確認済み",
   learning: "学習中",
-  completed: "学習完了",
+  completed: "学習済み",
 };
 
 const STORED = new Set<string>(STORED_PAPER_STUDY_STATUSES);
@@ -56,6 +59,12 @@ export function humanizePaperStudyStatusDbError(message: string): string {
   if (m.includes("paper_study_status_not_paper")) {
     return "過去問には学習ステータスを付けられません";
   }
+  if (m.includes("paper_study_statuses_status_chk")) {
+    return (
+      "DB が旧仕様のままです。Supabase の SQL Editor で " +
+      "supabase/migrations/027_paper_study_status_five.sql を実行してください。"
+    );
+  }
   if (
     m.includes("paper_study_statuses") &&
     (m.includes("does not exist") ||
@@ -64,7 +73,7 @@ export function humanizePaperStudyStatusDbError(message: string): string {
   ) {
     return (
       "paper_study_statuses がありません。Supabase の SQL Editor で " +
-      "supabase/migrations/026_paper_study_status.sql を実行してください。"
+      "supabase/migrations/026_paper_study_status.sql と 027_paper_study_status_five.sql を実行してください。"
     );
   }
   return "";
