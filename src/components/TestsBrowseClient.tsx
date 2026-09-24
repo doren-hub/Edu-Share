@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { RecentTestsByCategory, TestList, type TestRow } from "@/components/TestList";
 import type { BookmarkMarks } from "@/lib/bookmarks";
 import {
@@ -299,6 +300,12 @@ export function TestsBrowseClient({
   const [textSearch, setTextSearch] = useState("");
   const [paperSort, setPaperSort] = useState<PaperSortKey>("created_desc");
   const [studyById, setStudyById] = useState<PaperStudyStatusMap>(studyStatuses);
+  const router = useRouter();
+  const [isRefreshing, startRefresh] = useTransition();
+
+  useEffect(() => {
+    setStudyById(studyStatuses);
+  }, [studyStatuses]);
 
   const pastSchoolOptions = usePastSchoolFilterOptions(tests, category);
   const paperIndustryOpts = usePaperIndustryOptions(tests, category);
@@ -386,6 +393,11 @@ export function TestsBrowseClient({
       : Boolean(paperAuthor || paperIndustry || paperYear || paperStudyStatus);
   const hasTextFilter = textSearch.trim() !== "";
   const hasActiveFilters = hasAxisFilter || hasTextFilter;
+
+  /** サーバーデータだけ取り直す。絞り込み・並び順はクライアント state のまま残る */
+  function reloadKeepingConditions() {
+    startRefresh(() => router.refresh());
+  }
 
   function clearFilters() {
     setPastSchoolKey("");
@@ -590,6 +602,17 @@ export function TestsBrowseClient({
                       >
                         条件をクリア
                       </button>
+                      {category === "paper" ? (
+                        <button
+                          type="button"
+                          onClick={reloadKeepingConditions}
+                          disabled={isRefreshing}
+                          title="絞り込み・並び順はそのままで最新の一覧を読み込みます"
+                          className="min-h-[2.5rem] rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isRefreshing ? "読み込み中…" : "再読み込み"}
+                        </button>
+                      ) : null}
                       {category === "paper" ? (
                         <div className="flex w-full min-w-[12rem] flex-col gap-1 sm:w-auto">
                           <label htmlFor="paper-sort" className="text-xs font-medium text-zinc-600">
