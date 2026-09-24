@@ -130,7 +130,11 @@ export function NotebookLmMaterialUploadForm({
       ]);
       const upErr = timed.error;
       if (upErr) {
-        setError(`ストレージへのアップロードに失敗しました\n${upErr.message}`);
+        setError(
+          /exceeded the maximum allowed size/i.test(upErr.message)
+            ? "ファイルが Supabase Storage のサイズ上限を超えています。動画を圧縮するか、Supabase 側の上限を引き上げてください"
+            : `ストレージへのアップロードに失敗しました\n${upErr.message}`,
+        );
         return;
       }
 
