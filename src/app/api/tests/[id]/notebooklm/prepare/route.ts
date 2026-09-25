@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NOTEBOOKLM_APP_URL } from "@/lib/notebooklm";
+import { createObjectReadUrl } from "@/lib/object-storage";
 
 export const runtime = "nodejs";
 
@@ -43,13 +44,15 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "PDFを利用できません" }, { status: 404 });
   }
 
-  const { data: signed, error: signErr } = await admin.storage
-    .from("pdfs")
-    .createSignedUrl(test.pdf_storage_path, SIGNED_URL_TTL_SEC);
-
-  if (signErr || !signed?.signedUrl) {
+  let signedUrl: string;
+  try {
+    signedUrl = await createObjectReadUrl(test.pdf_storage_path, SIGNED_URL_TTL_SEC);
+  } catch (error) {
     return NextResponse.json(
-      { error: signErr?.message || "署名付き URL の発行に失敗しました" },
+      {
+        error: "PDF URL の発行に失敗しました",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 },
     );
   }
@@ -57,7 +60,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_SEC * 1000).toISOString();
 
   return NextResponse.json({
-    signedUrl: signed.signedUrl,
+    signedUrl,
     expiresAt,
     expiresInSeconds: SIGNED_URL_TTL_SEC,
     notebookLmAppUrl: NOTEBOOKLM_APP_URL,

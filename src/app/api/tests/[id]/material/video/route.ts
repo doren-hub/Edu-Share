@@ -3,8 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   looksLikeVideoMp4,
-  uploadPdfsObjectUserThenAdmin,
 } from "@/lib/pdfs-bucket-upload";
+import { deleteObjects, putObject } from "@/lib/object-storage";
 import {
   legacyNotebooklmVideoMp4StoragePath,
   notebooklmVideoMp4StoragePath,
@@ -74,23 +74,23 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   const storagePath = notebooklmVideoMp4StoragePath(test.uploaded_by, testId);
 
-  const { error: uploadErr } = await uploadPdfsObjectUserThenAdmin(
-    supabase,
-    admin,
-    storagePath,
-    buf,
-    "video/mp4",
-  );
-  if (uploadErr) {
+  try {
+    await putObject(storagePath, buf, "video/mp4");
+  } catch (error) {
     return NextResponse.json(
-      { error: "ストレージへのアップロードに失敗しました", details: uploadErr },
+      {
+        error: "R2へのアップロードに失敗しました",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 },
     );
   }
 
-  await admin.storage
-    .from("pdfs")
-    .remove([legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId)]);
+  try {
+    await deleteObjects([legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId)]);
+  } catch {
+    // 旧キーの掃除は登録結果を失敗扱いにしない。
+  }
 
   const { error: dbErr } = await admin
     .from("tests")
@@ -152,7 +152,7 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
 
   const storagePath = notebooklmVideoMp4StoragePath(test.uploaded_by, testId);
   const legacyPath = legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId);
-  await admin.storage.from("pdfs").remove([storagePath, legacyPath]);
+  await deleteObjects([storagePath, legacyPath]);
 
   const { error: dbErr } = await admin
     .from("tests")

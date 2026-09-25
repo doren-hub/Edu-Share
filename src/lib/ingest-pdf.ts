@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getObjectBytes } from "@/lib/object-storage";
 import { chunkText } from "@/lib/chunk-text";
 import { embedTexts, openAiEmbeddingsEnabled } from "@/lib/embeddings";
 import { extractPdfTextByPage, guessPdfPageForChunk } from "@/lib/pdf-text-by-page";
@@ -10,14 +11,7 @@ export async function ingestPdfForTest(params: {
   storagePath: string;
 }): Promise<void> {
   const admin = createAdminClient();
-  const { data: file, error: dlErr } = await admin.storage
-    .from("pdfs")
-    .download(params.storagePath);
-  if (dlErr || !file) {
-    throw new Error(dlErr?.message || "PDFの取得に失敗しました");
-  }
-
-  const buf = Buffer.from(await file.arrayBuffer());
+  const buf = Buffer.from(await getObjectBytes(params.storagePath));
   const pdfParse = (await import("pdf-parse")).default as (
     b: Buffer,
   ) => Promise<{ text: string }>;

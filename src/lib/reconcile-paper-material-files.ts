@@ -1,6 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
-  dropMissingPaperMaterialStoragePaths,
+  reconcilePaperMaterialObjectPaths,
   type PaperMaterialStorageRow,
 } from "@/lib/paper-notebooklm-storage";
 
@@ -11,7 +11,7 @@ export async function reconcileExistingPaperMaterialFiles<
   if (rows.length === 0) return rows;
   try {
     const admin = createAdminClient();
-    return await dropMissingPaperMaterialStoragePaths(admin, rows);
+    return await reconcilePaperMaterialObjectPaths(admin, rows);
   } catch {
     return rows;
   }

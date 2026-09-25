@@ -4,8 +4,8 @@ import { createRequire } from "node:module";
 import { dirname, extname, join } from "node:path";
 
 export const VIDEO_MIN_BYTES = 100_000;
-/** Supabase Storage のオブジェクト上限（50MB）を少し下回る */
-export const VIDEO_UPLOAD_MAX_BYTES = 45 * 1024 * 1024;
+/** Edu Share の動画アップロード上限（200MB）を少し下回る */
+export const VIDEO_UPLOAD_MAX_BYTES = 190 * 1024 * 1024;
 
 const require = createRequire(import.meta.url);
 
@@ -208,7 +208,7 @@ function transcodeWithFfmpeg(bin: string, src: string, dest: string, preset: "mi
   return run.status === 0 && fileSize(dest) > VIDEO_MIN_BYTES;
 }
 
-/** Edu Share / Supabase に載せるため、50MB 超なら小さくしたコピーを返す */
+/** Edu Share / R2 に載せるため、上限超過時は小さくしたコピーを返す */
 export function ensureUploadableVideo(src: string): string {
   const size = fileSize(src);
   if (size <= VIDEO_UPLOAD_MAX_BYTES) return src;

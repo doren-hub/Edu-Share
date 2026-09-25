@@ -72,7 +72,7 @@ test("ensureUploadableVideo: 上限以下はそのまま返す", () => {
     const p = join(dir, "video.mp4");
     writeFileSync(p, fakeMp4(120_000));
     assert.equal(ensureUploadableVideo(p), p);
-    assert.ok(VIDEO_UPLOAD_MAX_BYTES < 50 * 1024 * 1024);
+    assert.ok(VIDEO_UPLOAD_MAX_BYTES < 200 * 1024 * 1024);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

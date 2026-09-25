@@ -10,6 +10,7 @@ import {
   stripForClient,
 } from "@/lib/claude-quiz";
 import { attachSourcePdfHighlightsToQuestions } from "@/lib/attach-source-pdf-highlights";
+import { getObjectBytes } from "@/lib/object-storage";
 import { makeQuestionPerformanceKey } from "@/lib/question-performance";
 import type { StoredQuestion } from "@/lib/types";
 import { isStoredQuestionLike } from "@/lib/is-stored-question";
@@ -708,16 +709,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
         const pdfPath = test.pdf_storage_path?.trim();
         if (pdfPath) {
-          const { data: pdfBlob, error: dlErr } = await admin.storage
-            .from("pdfs")
-            .download(pdfPath);
-          if (!dlErr && pdfBlob) {
-            try {
-              const buf = Buffer.from(await pdfBlob.arrayBuffer());
-              await attachSourcePdfHighlightsToQuestions(questions, buf);
-            } catch (e) {
-              console.warn("[tests/start] attachSourcePdfHighlightsToQuestions:", e);
-            }
+          try {
+            const buf = Buffer.from(await getObjectBytes(pdfPath));
+            await attachSourcePdfHighlightsToQuestions(questions, buf);
+          } catch (e) {
+            console.warn("[tests/start] attachSourcePdfHighlightsToQuestions:", e);
           }
         }
       }

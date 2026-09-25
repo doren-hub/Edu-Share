@@ -1,6 +1,5 @@
 /**
- * pdfs バケット内。メイン PDF（{userId}/{testId}.pdf）と同じく先頭が uploaded_by の2階層に揃える
- *（3階層だと Storage / RLS まわりで失敗する環境があるため）。
+ * R2 内。メイン PDF（{userId}/{testId}.pdf）と同じく先頭を uploaded_by に揃える。
  */
 export function notebooklmSlidePdfStoragePath(uploadedBy: string, testId: string): string {
   return `${uploadedBy}/${testId}-notebooklm-slide.pdf`;

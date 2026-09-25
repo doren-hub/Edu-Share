@@ -1,16 +1,11 @@
 "use client";
 
-import { createClient } from "@/lib/supabase/client";
 import {
   looksLikeSlidePdf,
   looksLikeVideoMp4,
 } from "@/lib/pdfs-bucket-upload";
-import {
-  notebooklmSlidePdfStoragePath,
-  notebooklmVideoMp4StoragePath,
-} from "@/lib/test-notebooklm-material-paths";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 async function readApiError(res: Response): Promise<string> {
   const text = await res.text();
@@ -27,6 +22,41 @@ async function readApiError(res: Response): Promise<string> {
   }
 }
 
+async function uploadDirectlyToR2(
+  commitUrl: string,
+  file: File,
+  contentType: "application/pdf" | "video/mp4",
+): Promise<void> {
+  const prepare = await fetch(commitUrl, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "prepare", size: file.size }),
+  });
+  if (!prepare.ok) throw new Error(await readApiError(prepare));
+  const prepared = (await prepare.json()) as { uploadUrl?: string };
+  if (!prepared.uploadUrl) throw new Error("R2アップロードURLを取得できませんでした");
+
+  const upload = await fetch(prepared.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: file,
+  });
+  if (!upload.ok) {
+    throw new Error(
+      `R2へのアップロードに失敗しました（HTTP ${upload.status}）。R2 バケットの CORS 設定を確認してください。`,
+    );
+  }
+
+  const commit = await fetch(commitUrl, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "commit" }),
+  });
+  if (!commit.ok) throw new Error(await readApiError(commit));
+}
+
 export function NotebookLmMaterialUploadForm({
   testId,
   hasSlidePdf,
@@ -37,7 +67,6 @@ export function NotebookLmMaterialUploadForm({
   hasVideoMp4: boolean;
 }) {
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
   const slideInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const [slideBusy, setSlideBusy] = useState(false);
@@ -55,39 +84,11 @@ export function NotebookLmMaterialUploadForm({
         return;
       }
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        setError("ログインが必要です");
-        return;
-      }
-
-      const path = notebooklmSlidePdfStoragePath(user.id, testId);
-      const upload = supabase.storage.from("pdfs").upload(path, file, {
-        upsert: true,
-        contentType: "application/pdf",
-      });
-      const timed = await Promise.race([
-        upload,
-        new Promise<{ error: { message: string } }>((resolve) =>
-          setTimeout(() => resolve({ error: { message: "アップロードが時間切れです（90秒）" } }), 90_000),
-        ),
-      ]);
-      const upErr = timed.error;
-      if (upErr) {
-        setError(`ストレージへのアップロードに失敗しました\n${upErr.message}`);
-        return;
-      }
-
-      const res = await fetch(`/api/tests/${testId}/material/slide/commit`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!res.ok) {
-        setError(await readApiError(res));
-        return;
-      }
+      await uploadDirectlyToR2(
+        `/api/tests/${testId}/material/slide/commit`,
+        file,
+        "application/pdf",
+      );
 
       setNote("スライド用 PDF を登録しました。");
       router.refresh();
@@ -109,43 +110,11 @@ export function NotebookLmMaterialUploadForm({
         return;
       }
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        setError("ログインが必要です");
-        return;
-      }
-
-      const path = notebooklmVideoMp4StoragePath(user.id, testId);
-      const upload = supabase.storage.from("pdfs").upload(path, file, {
-        upsert: true,
-        contentType: "video/mp4",
-      });
-      const timed = await Promise.race([
-        upload,
-        new Promise<{ error: { message: string } }>((resolve) =>
-          setTimeout(() => resolve({ error: { message: "アップロードが時間切れです（90秒）" } }), 90_000),
-        ),
-      ]);
-      const upErr = timed.error;
-      if (upErr) {
-        setError(
-          /exceeded the maximum allowed size/i.test(upErr.message)
-            ? "ファイルが Supabase Storage のサイズ上限を超えています。動画を圧縮するか、Supabase 側の上限を引き上げてください"
-            : `ストレージへのアップロードに失敗しました\n${upErr.message}`,
-        );
-        return;
-      }
-
-      const res = await fetch(`/api/tests/${testId}/material/video/commit`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!res.ok) {
-        setError(await readApiError(res));
-        return;
-      }
+      await uploadDirectlyToR2(
+        `/api/tests/${testId}/material/video/commit`,
+        file,
+        "video/mp4",
+      );
 
       setNote("動画 MP4 を登録しました。");
       router.refresh();
@@ -202,7 +171,7 @@ export function NotebookLmMaterialUploadForm({
       <h4 className="text-sm font-semibold text-zinc-900">スライド・動画（ファイル）</h4>
       <p className="mt-1 text-xs text-zinc-600">
         スライドは <strong>PDF</strong>、動画は <strong>MP4</strong> をアップロードしてください（大きなファイルはブラウザから
-        Supabase へ直接送ります）。登録後、下の資料枠を横にスライドして表示できます。
+        R2 へ直接送ります）。登録後、下の資料枠を横にスライドして表示できます。
       </p>
 
       <div className="mt-3 grid gap-4 sm:grid-cols-2">

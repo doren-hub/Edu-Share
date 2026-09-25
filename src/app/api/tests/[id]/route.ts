@@ -8,6 +8,7 @@ import {
   notebooklmSlidePdfStoragePath,
   notebooklmVideoMp4StoragePath,
 } from "@/lib/test-notebooklm-material-paths";
+import { deleteObjects } from "@/lib/object-storage";
 import { joinPaperAuthorsForSourceName } from "@/lib/paper-authors";
 import {
   MAX_INDUSTRIES,
@@ -416,7 +417,9 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
 
   const { data: test, error: fetchErr } = await admin
     .from("tests")
-    .select("id, uploaded_by, pdf_storage_path")
+    .select(
+      "id, uploaded_by, pdf_storage_path, notebooklm_slide_pdf_storage_path, notebooklm_video_mp4_storage_path",
+    )
     .eq("id", testId)
     .single();
 
@@ -430,7 +433,11 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     );
   }
 
-  const pathsToRemove = [test.pdf_storage_path];
+  const pathsToRemove = [
+    test.pdf_storage_path,
+    test.notebooklm_slide_pdf_storage_path,
+    test.notebooklm_video_mp4_storage_path,
+  ];
   if (test.uploaded_by) {
     pathsToRemove.push(
       notebooklmSlidePdfStoragePath(test.uploaded_by, testId),
@@ -440,7 +447,17 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     );
   }
 
-  await admin.storage.from("pdfs").remove(pathsToRemove);
+  try {
+    await deleteObjects(pathsToRemove);
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "R2のファイル削除に失敗しました",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 },
+    );
+  }
 
   const { error: delErr } = await admin.from("tests").delete().eq("id", testId);
   if (delErr) {

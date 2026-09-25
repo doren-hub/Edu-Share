@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { extractPdfTextByPage } from "@/lib/pdf-text-by-page";
+import { getObjectBytes } from "@/lib/object-storage";
 import { generateLlmText } from "@/lib/llm-text";
 
 export const runtime = "nodejs";
@@ -96,18 +97,21 @@ export async function POST(
     );
   }
 
-  const { data: pdfBin, error: dlErr } = await admin.storage
-    .from("pdfs")
-    .download(row.pdf_storage_path);
-  if (dlErr || !pdfBin) {
+  let pdfBin: Uint8Array;
+  try {
+    pdfBin = await getObjectBytes(row.pdf_storage_path);
+  } catch (error) {
     return NextResponse.json(
-      { error: "PDFの取得に失敗しました" },
+      {
+        error: "PDFの取得に失敗しました",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 },
     );
   }
 
   try {
-    const bytes = Buffer.from(await pdfBin.arrayBuffer());
+    const bytes = Buffer.from(pdfBin);
     const pages = await extractPdfTextByPage(bytes);
     const raw = pages.slice(0, 10).join("\n");
     let summary = "";
@@ -133,4 +137,3 @@ export async function POST(
     );
   }
 }
-

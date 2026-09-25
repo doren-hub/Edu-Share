@@ -10,6 +10,7 @@ import { assertStoredPickWithOther } from "@/lib/picklist-parse";
 import { mergePicklistOptionsForSelect } from "@/lib/picklist-merge";
 import { fetchPicklistOptionRows } from "@/lib/supabase/picklist-table";
 import { normalizePdfFilename } from "@/lib/pdf-filename";
+import { putObject } from "@/lib/object-storage";
 import type { UserRole } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -57,7 +58,7 @@ function describeTestsInsertError(message: string | undefined, code?: string): s
       "データベースに tests テーブルがありません（マイグレーション未実行の可能性が高いです）。" +
       "手順: (1) Supabase → Database → Extensions で「vector」を有効化 " +
       "(2) SQL Editor → New query でリポジトリの supabase/apply_all_migrations.sql をすべて貼り付けて Run " +
-      "(3) 数十秒待ってからアプリを再読み込み。Storage にバケット「pdfs」が無い場合は SQL 内の insert かダッシュボードで作成してください。"
+      "(3) 数十秒待ってからアプリを再読み込みしてください。"
     );
   }
 
@@ -396,22 +397,14 @@ export async function POST(req: Request) {
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const { error: upErr } = await admin.storage
-    .from("pdfs")
-    .upload(storagePath, bytes, {
-      contentType: "application/pdf",
-      upsert: false,
-    });
-
-  if (upErr) {
+  try {
+    await putObject(storagePath, bytes, "application/pdf");
+  } catch (error) {
     await admin.from("tests").delete().eq("id", testId);
-    const storageHint =
-      upErr.message?.trim() ||
-      JSON.stringify(upErr, Object.keys(upErr).sort(), 2);
     return NextResponse.json(
       {
-        error: "ストレージへのアップロードに失敗しました",
-        details: storageHint,
+        error: "R2へのアップロードに失敗しました",
+        details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 },
     );
