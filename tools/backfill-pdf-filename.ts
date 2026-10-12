@@ -11,20 +11,106 @@ function required(name: string): string {
 
 const DEFAULT_PAPER_WORK_DIR = "/Users/doren/Developer/edu-share-papers/work";
 
-interface StateJson {
+export interface StateJson {
   filename?: string;
   eduShareTestId?: string;
   title?: string;
 }
 
-interface BackfillTarget {
+export interface BackfillTarget {
   testId: string;
   originalFilename: string;
   normalizedFilename: string;
   workDir: string;
 }
 
-async function collectTargets(workDir: string): Promise<BackfillTarget[]> {
+export interface DbTestRow {
+  id: string;
+  title: string | null;
+  document_type: string | null;
+  processing_status: string | null;
+  pdf_filename: string | null;
+}
+
+export interface ClassifyResult {
+  toUpdate: BackfillTarget[];
+  alreadySet: BackfillTarget[];
+  notFoundInDb: BackfillTarget[];
+  skippedNotPaper: BackfillTarget[];
+  skippedCollision: Array<{ target: BackfillTarget; reason: string }>;
+  unmatchedDbPapers: DbTestRow[];
+}
+
+export function classifyTargets(
+  targets: BackfillTarget[],
+  dbTests: DbTestRow[]
+): ClassifyResult {
+  const dbMap = new Map(dbTests.map((t) => [t.id, t]));
+  const targetIdSet = new Set(targets.map((t) => t.testId));
+
+  const existingDbFilenameNorms = new Set(
+    dbTests
+      .filter((t) => t.document_type === "paper" && t.pdf_filename && t.pdf_filename.trim())
+      .map((t) => normalizePdfFilename(t.pdf_filename!))
+  );
+
+  const toUpdate: BackfillTarget[] = [];
+  const alreadySet: BackfillTarget[] = [];
+  const notFoundInDb: BackfillTarget[] = [];
+  const skippedNotPaper: BackfillTarget[] = [];
+  const skippedCollision: Array<{ target: BackfillTarget; reason: string }> = [];
+
+  for (const t of targets) {
+    if (!t.normalizedFilename) {
+      skippedCollision.push({
+        target: t,
+        reason: "正規化ファイル名が空です",
+      });
+      continue;
+    }
+
+    const dbRow = dbMap.get(t.testId);
+    if (!dbRow) {
+      notFoundInDb.push(t);
+      continue;
+    }
+
+    if (dbRow.document_type !== "paper") {
+      skippedNotPaper.push(t);
+      continue;
+    }
+
+    if (dbRow.pdf_filename && dbRow.pdf_filename.trim()) {
+      alreadySet.push(t);
+      continue;
+    }
+
+    if (existingDbFilenameNorms.has(t.normalizedFilename)) {
+      skippedCollision.push({
+        target: t,
+        reason: `DB内に既に同一の正規化ファイル名が存在 (${t.normalizedFilename})`,
+      });
+      continue;
+    }
+
+    toUpdate.push(t);
+  }
+
+  const unmatchedDbPapers = dbTests.filter(
+    (t) => t.document_type === "paper" && !targetIdSet.has(t.id)
+  );
+
+  return {
+    toUpdate,
+    alreadySet,
+    notFoundInDb,
+    skippedNotPaper,
+    skippedCollision,
+    unmatchedDbPapers,
+  };
+}
+
+export async function collectTargets(workDir: string): Promise<BackfillTarget[]> {
   const dirs = await readdir(workDir, { withFileTypes: true });
   const targets: BackfillTarget[] = [];
 
@@ -34,23 +120,52 @@ async function collectTargets(workDir: string): Promise<BackfillTarget[]> {
     try {
       const raw = await readFile(statePath, "utf8");
       const state = JSON.parse(raw) as StateJson;
-      if (state.eduShareTestId && state.filename) {
+      const original = (state.filename ?? "").trim();
+      const norm = normalizePdfFilename(original);
+      if (state.eduShareTestId && original && norm) {
         targets.push({
           testId: state.eduShareTestId.trim(),
-          originalFilename: state.filename.trim(),
-          normalizedFilename: normalizePdfFilename(state.filename),
+          originalFilename: original,
+          normalizedFilename: norm,
           workDir: dir.name,
         });
       }
     } catch {
-      // state.json が無い、または壊れているディレクトリは無視
+      // state.json が存在しないかパースできない場合はスキップ
     }
   }
 
   return targets;
 }
 
-async function main() {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllDbTests(supabase: any): Promise<DbTestRow[]> {
+  const rows: DbTestRow[] = [];
+  const pageSize = 1000;
+  let from = 0;
+
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabase
+      .from("tests")
+      .select("id, title, document_type, processing_status, pdf_filename")
+      .range(from, to);
+
+    if (error) {
+      throw new Error(`DB tests の取得に失敗しました: ${error.message}`);
+    }
+
+    if (!data || data.length === 0) break;
+    rows.push(...(data as DbTestRow[]));
+
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return rows;
+}
+
+export async function main() {
   const isDryRun = process.argv.includes("--dry-run");
   const workDir = process.env.PAPER_WORK_DIR?.trim() || DEFAULT_PAPER_WORK_DIR;
 
@@ -92,119 +207,83 @@ async function main() {
     process.exit(1);
   }
 
-  // 2. DB 接続して現状を確認
+  // 2. DB 接続して現状を確認 (ページネーション対応)
   const supabaseUrl = required("NEXT_PUBLIC_SUPABASE_URL");
   const supabaseKey = required("SUPABASE_SERVICE_ROLE_KEY");
   const supabase = createClient(supabaseUrl, supabaseKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data: dbTests, error: fetchErr } = await supabase
-    .from("tests")
-    .select("id, title, document_type, processing_status, pdf_filename");
-
-  if (fetchErr || !dbTests) {
-    console.error("DB から tests の取得に失敗しました:", fetchErr);
-    process.exit(1);
-  }
-
+  const dbTests = await fetchAllDbTests(supabase);
   console.log(`DB の tests 総行数: ${dbTests.length} 件`);
 
-  const dbMap = new Map(dbTests.map((t) => [t.id, t]));
-  const existingDbFilenameNorms = new Set(
-    dbTests
-      .filter((t) => t.document_type === "paper" && t.pdf_filename)
-      .map((t) => normalizePdfFilename(t.pdf_filename!))
-  );
-
-  const toUpdate: BackfillTarget[] = [];
-  const skippedCollision: Array<{ target: BackfillTarget; reason: string }> = [];
-  const notFoundInDb: BackfillTarget[] = [];
-  const alreadySet: BackfillTarget[] = [];
-
-  for (const t of targets) {
-    const dbRow = dbMap.get(t.testId);
-    if (!dbRow) {
-      notFoundInDb.push(t);
-      continue;
-    }
-
-    if (dbRow.pdf_filename) {
-      alreadySet.push(t);
-      continue;
-    }
-
-    // 既に他の paper で同じ normalized filename があるか（一意制約衝突防止）
-    if (existingDbFilenameNorms.has(t.normalizedFilename)) {
-      skippedCollision.push({
-        target: t,
-        reason: `DB内に既に同一の正規化ファイル名が存在 (${t.normalizedFilename})`,
-      });
-      continue;
-    }
-
-    toUpdate.push(t);
-  }
+  const classified = classifyTargets(targets, dbTests);
 
   console.log("\n【分類結果】");
-  console.log(`- 更新対象 (更新可): ${toUpdate.length} 件`);
-  console.log(`- 既に pdf_filename 設定済み: ${alreadySet.length} 件`);
-  console.log(`- DB にテストIDが存在しない: ${notFoundInDb.length} 件`);
-  console.log(`- 一意制約衝突のためスキップ: ${skippedCollision.length} 件`);
+  console.log(`- 更新対象 (更新可): ${classified.toUpdate.length} 件`);
+  console.log(`- 既に pdf_filename 設定済み: ${classified.alreadySet.length} 件`);
+  console.log(`- DB にテストIDが存在しない: ${classified.notFoundInDb.length} 件`);
+  console.log(`- 論文 (document_type = paper) ではないためスキップ: ${classified.skippedNotPaper.length} 件`);
+  console.log(`- 一意制約衝突のためスキップ: ${classified.skippedCollision.length} 件`);
 
-  if (skippedCollision.length > 0) {
+  if (classified.skippedCollision.length > 0) {
     console.log("\n一意制約衝突によりスキップされた一覧:");
-    for (const s of skippedCollision) {
+    for (const s of classified.skippedCollision) {
       console.log(`  - ID: ${s.target.testId}, ファイル名: ${s.target.normalizedFilename}, 理由: ${s.reason}`);
     }
   }
 
-  // 手元に対応が無い DB 上の論文
-  const unmatchedDbPapers = dbTests.filter(
-    (t) => t.document_type === "paper" && !seenId.has(t.id)
-  );
-  console.log(`\n手元の state.json に対応が無い DB 上の論文: ${unmatchedDbPapers.length} 件`);
-  for (const u of unmatchedDbPapers) {
+  console.log(`\n手元の state.json に対応が無い DB 上の論文: ${classified.unmatchedDbPapers.length} 件`);
+  for (const u of classified.unmatchedDbPapers) {
     console.log(`  - ID: ${u.id} [${u.processing_status}] タイトル: ${u.title}`);
   }
 
-  if (toUpdate.length === 0) {
+  if (classified.toUpdate.length === 0) {
     console.log("\n更新が必要なレコードはありません。終了します。");
     return;
   }
 
   if (isDryRun) {
     console.log("\n[DRY-RUN] 以下の更新が予定されています (DBは変更されません):");
-    for (const t of toUpdate.slice(0, 5)) {
+    for (const t of classified.toUpdate) {
       console.log(`  - ID: ${t.testId} -> pdf_filename: "${t.normalizedFilename}"`);
-    }
-    if (toUpdate.length > 5) {
-      console.log(`  ... 他 ${toUpdate.length - 5} 件`);
     }
     console.log("\n--dry-run 完了");
     return;
   }
 
-  console.log(`\nDB 更新を開始します (${toUpdate.length} 件)...`);
+  console.log(`\nDB 更新を開始します (${classified.toUpdate.length} 件)...`);
   let updatedCount = 0;
-  for (const t of toUpdate) {
-    const { error: updateErr } = await supabase
+  let zeroRowCount = 0;
+
+  for (const t of classified.toUpdate) {
+    const { data, error: updateErr } = await supabase
       .from("tests")
       .update({ pdf_filename: t.normalizedFilename })
       .eq("id", t.testId)
-      .is("pdf_filename", null); // 既存値を誤って上書きしない安全ガード
+      .is("pdf_filename", null)
+      .select("id");
 
     if (updateErr) {
       console.error(`ID: ${t.testId} の更新に失敗:`, updateErr.message);
       process.exit(1);
     }
-    updatedCount++;
+
+    if (data && data.length > 0) {
+      updatedCount += data.length;
+    } else {
+      zeroRowCount++;
+      console.warn(`ID: ${t.testId} は更新されませんでした (0行更新)`);
+    }
   }
 
-  console.log(`正常に更新完了: ${updatedCount} 件`);
+  console.log(`\n更新結果: 正常更新 ${updatedCount} 件, 0行更新 ${zeroRowCount} 件`);
 }
 
-main().catch((err) => {
-  console.error("エラーが発生しました:", err);
-  process.exit(1);
-});
+// 直接実行された場合のみ main() を呼び出す
+if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/^[A-Za-z]:/, ""))) {
+  main().catch((err) => {
+    console.error("エラーが発生しました:", err);
+    process.exit(1);
+  });
+}
