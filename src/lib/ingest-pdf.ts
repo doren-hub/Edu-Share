@@ -23,7 +23,8 @@ export async function ingestPdfForTest(params: {
     const pageTexts = await extractPdfTextByPage(buf);
     if (pageTexts.length > 0) {
       const joined = pageTexts.map((t) => t.replace(/\r\n/g, "\n")).join("\n");
-      const body = stripReferencesSection(joined);
+      const sanitized = sanitizeExtractedPdfText(joined);
+      const body = stripReferencesSection(sanitized);
       chunks = chunkText(body);
       pdfPages = chunks.map((c) => guessPdfPageForChunk(c, pageTexts));
     } else {
