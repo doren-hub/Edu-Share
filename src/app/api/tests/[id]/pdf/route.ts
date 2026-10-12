@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ingestPdfForTest } from "@/lib/ingest-pdf";
 import { createObjectReadUrl, putObject } from "@/lib/object-storage";
+import { sanitizeProcessingError } from "@/lib/sanitize-processing-error";
 
 export const runtime = "nodejs";
 
@@ -150,11 +151,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     await ingestPdfForTest({ testId, storagePath });
   } catch (e) {
+    const safeError = sanitizeProcessingError(e);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
-        processing_error: e instanceof Error ? e.message : "PDFの取り込みに失敗しました",
+        processing_error: safeError,
       })
       .eq("id", testId);
     return NextResponse.json(

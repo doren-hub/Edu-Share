@@ -551,7 +551,7 @@ export default function UploadPage() {
                 href={`/tests/${duplicateConflict.testId}`}
                 className="inline-flex items-center font-medium text-sky-800 underline hover:text-sky-950"
               >
-                既存のテストページを開く（PDF の確認・再アップロード） →
+                既存のテストページを開く（内容・PDF の確認） →
               </Link>
             </div>
           </div>

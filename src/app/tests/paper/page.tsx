@@ -45,7 +45,12 @@ export default async function PaperTestsPage() {
 
   const tests = (listed.data ?? []) as unknown as Record<string, unknown>[];
 
-  const list = tests.map((row) => toPaperBrowseListRow(row)) as TestRow[];
+  const list = tests
+    .map((row) => toPaperBrowseListRow(row))
+    .map((r) => ({
+      ...r,
+      processing_error: r.processing_status === "failed" ? null : r.processing_error,
+    })) as TestRow[];
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;
 
   return (

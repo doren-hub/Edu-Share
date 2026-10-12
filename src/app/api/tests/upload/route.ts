@@ -11,6 +11,7 @@ import { mergePicklistOptionsForSelect } from "@/lib/picklist-merge";
 import { fetchPicklistOptionRows } from "@/lib/supabase/picklist-table";
 import { normalizePdfFilename } from "@/lib/pdf-filename";
 import { putObject } from "@/lib/object-storage";
+import { sanitizeProcessingError } from "@/lib/sanitize-processing-error";
 import type { UserRole } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -422,11 +423,12 @@ export async function POST(req: Request) {
   try {
     await ingestPdfForTest({ testId, storagePath });
   } catch (e) {
+    const safeError = sanitizeProcessingError(e);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
-        processing_error: e instanceof Error ? e.message : "処理に失敗しました",
+        processing_error: safeError,
       })
       .eq("id", testId);
 

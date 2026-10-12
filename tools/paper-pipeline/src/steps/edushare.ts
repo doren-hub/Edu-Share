@@ -266,7 +266,7 @@ async function ensureIndustry(page: Page, haystack: string): Promise<void> {
 
 async function uploadFormAlert(page: Page): Promise<string> {
   const loc = page
-    .locator(".bg-red-50, p.text-red-800, p.text-red-700")
+    .locator(".bg-red-50, p.text-red-800, p.text-red-700, .bg-amber-50")
     .filter({ hasNotText: /このページを削除|削除中/ });
   const n = await loc.count().catch(() => 0);
   for (let i = 0; i < n; i++) {

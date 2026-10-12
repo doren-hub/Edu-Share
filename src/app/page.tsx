@@ -67,8 +67,17 @@ export default async function Home() {
   const paperRows = (listedPapers.data ?? []) as unknown as Record<string, unknown>[];
 
   const list: TestRow[] = [
-    ...((recentPast ?? []) as TestRow[]),
-    ...(paperRows.map((row) => toPaperBrowseListRow(row)) as TestRow[]),
+    ...(((recentPast ?? []) as TestRow[]).map((row) => ({
+      ...row,
+      processing_error: row.processing_status === "failed" ? null : row.processing_error,
+    }))),
+    ...(paperRows.map((row) => {
+      const r = toPaperBrowseListRow(row) as TestRow;
+      return {
+        ...r,
+        processing_error: r.processing_status === "failed" ? null : r.processing_error,
+      };
+    })),
   ];
 
   return (
