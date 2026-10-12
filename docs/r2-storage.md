@@ -38,3 +38,19 @@ npm run storage:migrate:r2 -- --delete-source
 ```
 
 削除は、各オブジェクトが R2 に存在しサイズ検証が通った後だけ行います。DB の保存キーは変えないため、DB更新は不要です。
+
+## Supabase が止まっているときの移行
+
+プロジェクトが一時停止または利用制限中で Storage API が読めない場合は、paper-pipeline の作業フォルダ（`PAPER_WORK_DIR`）に残っている PDF・`slides.pdf`・`video.mp4` を R2 へ上げ直します。各論文フォルダの `state.json` にあるテスト ID と、`--user-id`（`tests.uploaded_by` の UUID）から保存キーを組み立てます。
+
+最初に `--dry-run` でキーの対応と合計サイズだけを表示します。`--dry-run` は R2 へ接続しません。
+
+```bash
+npm run storage:migrate:r2 -- --from-work-dir ~/Developer/edu-share-papers/work --user-id <UUID> --dry-run
+```
+
+```bash
+npm run storage:migrate:r2 -- --from-work-dir ~/Developer/edu-share-papers/work --user-id <UUID>
+```
+
+このモードは Supabase 側を削除しません（`--delete-source` とは併用不可）。パイプラインを通さず画面から上げたファイルは対象外です。プロジェクトを再開した後に `npm run storage:migrate:r2 -- --delete-source` を実行すると、R2 に同じサイズで存在するものはコピーを省略して Supabase 側だけ削除します。
