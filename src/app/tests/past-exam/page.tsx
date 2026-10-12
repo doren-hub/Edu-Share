@@ -4,6 +4,7 @@ import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
 import type { TestRow } from "@/components/TestList";
+import { sanitizeBrowseTestRows } from "@/lib/sanitize-browse-test-row";
 import { TEST_BROWSE_COLUMNS } from "@/lib/test-browse-select";
 
 export const metadata: Metadata = {
@@ -38,10 +39,7 @@ export default async function PastExamTestsPage() {
       loadBookmarkMarks(supabase),
     ]);
 
-  const list = (tests ?? []).map((t) => ({
-    ...t,
-    processing_error: t.processing_status === "failed" ? null : t.processing_error,
-  })) as TestRow[];
+  const list = sanitizeBrowseTestRows((tests ?? []) as TestRow[]);
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;
 
   return (

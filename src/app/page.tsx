@@ -12,6 +12,7 @@ import {
   TEST_BROWSE_COLUMNS,
   TEST_BROWSE_PAPER_LIST_COLUMNS,
 } from "@/lib/test-browse-select";
+import { sanitizeBrowseTestRows } from "@/lib/sanitize-browse-test-row";
 
 export const dynamic = "force-dynamic";
 
@@ -66,19 +67,10 @@ export default async function Home() {
 
   const paperRows = (listedPapers.data ?? []) as unknown as Record<string, unknown>[];
 
-  const list: TestRow[] = [
-    ...(((recentPast ?? []) as TestRow[]).map((row) => ({
-      ...row,
-      processing_error: row.processing_status === "failed" ? null : row.processing_error,
-    }))),
-    ...(paperRows.map((row) => {
-      const r = toPaperBrowseListRow(row) as TestRow;
-      return {
-        ...r,
-        processing_error: r.processing_status === "failed" ? null : r.processing_error,
-      };
-    })),
-  ];
+  const list: TestRow[] = sanitizeBrowseTestRows([
+    ...((recentPast ?? []) as TestRow[]),
+    ...(paperRows.map((row) => toPaperBrowseListRow(row)) as TestRow[]),
+  ]);
 
   return (
     <div className="space-y-8">

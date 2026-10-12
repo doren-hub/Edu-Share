@@ -26,9 +26,11 @@ test("sanitizeProcessingError: 本文自動抽出エラーはそのまま保持�
   assert.equal(sanitizeProcessingError(msg), msg);
 });
 
-test("sanitizeProcessingError: 未知の長大な例外メッセージは切り詰めて安全にする", () => {
-  const longErr = "Some unknown internal database error ".repeat(10);
+test("sanitizeProcessingError: 未知の例外メッセージは安全な定型文へ置き換える", () => {
+  const longErr = "Some unknown internal database error: relation tests does not exist";
   const result = sanitizeProcessingError(new Error(longErr));
-  assert.ok(result.length <= 120);
-  assert.ok(result.endsWith("..."));
+  assert.equal(
+    result,
+    "PDFの取り込みに失敗しました。時間をおいて再試行するか、別のPDFをお試しください。",
+  );
 });

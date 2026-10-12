@@ -134,16 +134,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     await putObject(storagePath, bytes, "application/pdf");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const safeError = sanitizeProcessingError(error);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
-        processing_error: message || "R2へのアップロードに失敗しました",
+        processing_error: safeError,
       })
       .eq("id", testId);
     return NextResponse.json(
-      { error: message || "R2へのアップロードに失敗しました" },
+      { error: safeError || "R2へのアップロードに失敗しました" },
       { status: 500 },
     );
   }
