@@ -325,7 +325,7 @@ export async function POST(req: Request) {
   if (document_type === "paper" && pdfFilename) {
     const { data: existingPapers, error: dupLookupErr } = await admin
       .from("tests")
-      .select("id,pdf_filename,processing_status")
+      .select("id,pdf_filename,processing_status,uploaded_by")
       .eq("document_type", "paper")
       .not("pdf_filename", "is", null);
     if (!dupLookupErr) {
@@ -337,8 +337,11 @@ export async function POST(req: Request) {
       );
       if (hit?.id) {
         const isFailed = hit.processing_status === "failed";
+        const isOwner = hit.uploaded_by === user.id;
         const message = isFailed
-          ? "同じ PDF ファイル名で処理失敗の論文が既に登録されています。テスト詳細ページから PDF を再アップロードして取り込み直すことができます。"
+          ? isOwner
+            ? "同じ PDF ファイル名で処理失敗の論文が既に登録されています。テスト詳細ページから PDF を再アップロードして取り込み直すことができます。"
+            : "同じ PDF ファイル名で処理失敗の論文が既に登録されています。テスト詳細ページから内容を確認できます。"
           : "同じ PDF ファイル名の論文が既にあります";
         return NextResponse.json(
           {

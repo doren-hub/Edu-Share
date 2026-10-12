@@ -73,6 +73,7 @@ export default function UploadPage() {
   async function onPickFile(nextFile: File | null) {
     setFile(nextFile);
     setAutoFillNote(null);
+    setDuplicateConflict(null);
     if (!nextFile) return;
 
     setAutoFilling(true);
@@ -229,14 +230,18 @@ export default function UploadPage() {
 
     if (!res.ok) {
       if (res.status === 409 && typeof json?.testId === "string" && json.testId) {
-        setDuplicateConflict({
-          testId: json.testId,
-          message:
-            json.message ||
-            json.error ||
-            "同じ PDF ファイル名の論文が既に登録されています。",
-          isFailed: json.processingStatus === "failed",
-        });
+        if (json.processingStatus === "failed") {
+          setDuplicateConflict({
+            testId: json.testId,
+            message:
+              json.message ||
+              json.error ||
+              "同じ PDF ファイル名で処理失敗の論文が既に登録されています。",
+            isFailed: true,
+          });
+          return;
+        }
+        router.push(`/tests/${json.testId}`);
         return;
       }
       if (res.status === 413) {
@@ -536,9 +541,7 @@ export default function UploadPage() {
         {duplicateConflict ? (
           <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
             <p className="font-semibold text-amber-900">
-              {duplicateConflict.isFailed
-                ? "同じ PDF ファイル名で処理失敗の論文が既に登録されています"
-                : "同じ PDF ファイル名の論文が既に登録されています"}
+              同じ PDF ファイル名の論文が既に登録されています
             </p>
             <p className="mt-1 whitespace-pre-wrap text-amber-800">
               {duplicateConflict.message}

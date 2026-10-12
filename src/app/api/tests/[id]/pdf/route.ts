@@ -7,7 +7,7 @@ import { createObjectReadUrl, putObject } from "@/lib/object-storage";
 export const runtime = "nodejs";
 
 /**
- * 公開中のテスト教材（ready）の元PDFを、ログインユーザーに inline 配信する。
+ * テスト教材（ready または failed）の元PDFを、ログインユーザーに inline 配信する。
  * 認証確認後、R2 の公開 URL または短期署名 URL へリダイレクトする。
  */
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {

@@ -488,9 +488,23 @@ export default async function TestDetailPage({
                 />
               </div>
             ) : null}
-            <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
-              {test.processing_status}
-            </span>
+            {test.processing_status === "failed" ? (
+              <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-900">
+                処理失敗
+              </span>
+            ) : test.processing_status === "ready" && test.processing_error ? (
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
+                テキスト未抽出
+              </span>
+            ) : test.processing_status === "ready" ? (
+              <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
+                準備完了
+              </span>
+            ) : (
+              <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
+                {test.processing_status}
+              </span>
+            )}
           </div>
         </div>
 
