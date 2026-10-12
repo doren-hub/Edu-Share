@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --test \"src/**/*.test.ts\"",
-    "storage:migrate:r2": "node --env-file-if-exists=.env.local --experimental-strip-types tools/migrate-storage-to-r2.ts"
+    "storage:migrate:r2": "node --env-file-if-exists=.env.local --experimental-strip-types tools/migrate-storage-to-r2.ts",
+    "backfill:pdf-filename": "node --env-file-if-exists=.env.local --experimental-strip-types tools/backfill-pdf-filename.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
