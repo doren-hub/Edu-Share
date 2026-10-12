@@ -1006,4 +1006,19 @@ update public.tests
 set processing_error = '埋め込みAPIの認証に失敗しました。管理者へお問い合わせください。'
 where processing_status = 'failed' and processing_error like '%Incorrect API key%';
 
+-- 上記以外の未知・生例外が残っている場合は安全な定型文で上書き
+update public.tests
+set processing_error = 'PDFの取り込みに失敗しました。時間をおいて再試行するか、別のPDFをお試しください。'
+where processing_status = 'failed'
+  and processing_error is not null
+  and processing_error not in (
+    'PDF本文に含まれるUnicode文字の処理に失敗しました。',
+    '埋め込みAPIの認証に失敗しました。管理者へお問い合わせください。',
+    'ファイルストレージへの保存に失敗しました。時間をおいて再試行してください。',
+    'PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）。',
+    'PDFから本文テキストを自動抽出できませんでした（画像のみ・スキャンなどの可能性）。テキストがコピーできるPDFへの差し替えを推奨します。',
+    'API呼び出しの上限に達しました。時間をおいて再試行してください。',
+    'PDFの取り込みに失敗しました。時間をおいて再試行するか、別のPDFをお試しください。'
+  );
+
 notify pgrst, 'reload schema';

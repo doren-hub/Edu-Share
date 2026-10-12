@@ -15,7 +15,10 @@ export function sanitizeProcessingError(e: unknown): string {
   if (/\b(?:R2へのアップロード|storage|R2|S3)\b/i.test(msg)) {
     return "ファイルストレージへの保存に失敗しました。時間をおいて再試行してください。";
   }
-  if (/\b(?:PDFの解析に失敗しました|pdf-parse|no pages|Invalid PDF)\b/i.test(msg)) {
+  if (
+    /PDFの解析に失敗しました/i.test(msg) ||
+    /\b(?:pdf-parse|no pages|Invalid PDF|password)\b/i.test(msg)
+  ) {
     return "PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）。";
   }
   if (/PDFから本文テキストを自動抽出できませんでした/i.test(msg)) {

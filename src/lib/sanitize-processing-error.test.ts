@@ -16,7 +16,11 @@ test("sanitizeProcessingError: 既知のエラー文言を安全な日本語メ�
     "ファイルストレージへの保存に失敗しました。時間をおいて再試行してください。",
   );
   assert.equal(
-    sanitizeProcessingError(new Error("PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）: invalid pdf")),
+    sanitizeProcessingError(new Error("PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）: No password given")),
+    "PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）。",
+  );
+  assert.equal(
+    sanitizeProcessingError(new Error("PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）: corrupt stream")),
     "PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）。",
   );
 });
