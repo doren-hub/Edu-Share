@@ -149,6 +149,7 @@ async function fetchAllDbTests(supabase: any): Promise<DbTestRow[]> {
     const { data, error } = await supabase
       .from("tests")
       .select("id, title, document_type, processing_status, pdf_filename")
+      .order("id")
       .range(from, to);
 
     if (error) {
