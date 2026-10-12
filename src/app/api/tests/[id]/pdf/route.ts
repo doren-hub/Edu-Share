@@ -37,7 +37,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     .eq("id", testId)
     .single();
 
-  if (tErr || !test || test.processing_status !== "ready" || !test.pdf_storage_path) {
+  if (
+    tErr ||
+    !test ||
+    (test.processing_status !== "ready" && test.processing_status !== "failed") ||
+    !test.pdf_storage_path
+  ) {
     return NextResponse.json({ error: "PDFを表示できません" }, { status: 404 });
   }
 

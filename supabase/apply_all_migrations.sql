@@ -957,3 +957,44 @@ alter table public.paper_study_statuses
   );
 
 notify pgrst, 'reload schema';
+
+-- ----- 028_pdfs_bucket_size_limit.sql -----
+update storage.buckets
+set file_size_limit = 200 * 1024 * 1024
+where id = 'pdfs';
+
+-- ----- 029_paper_industries.sql -----
+alter table public.tests
+  add column if not exists industries text[];
+
+comment on column public.tests.industries is '論文の業界（保存値の配列。過去問では未使用）';
+
+update public.tests
+set
+  industries = array[trim(industry)]
+where
+  document_type = 'paper'
+  and (industries is null or cardinality(industries) = 0)
+  and coalesce(trim(industry), '') <> '';
+
+notify pgrst, 'reload schema';
+
+-- ----- 030_r2_object_key_comments.sql -----
+comment on column public.tests.pdf_storage_path is 'R2 に保存した元 PDF のオブジェクトキー';
+comment on column public.tests.notebooklm_slide_pdf_storage_path is 'R2 に保存したスライド PDF のオブジェクトキー';
+comment on column public.tests.notebooklm_video_mp4_storage_path is 'R2 に保存した動画 MP4 のオブジェクトキー';
+
+-- ----- 031_expose_failed_tests.sql -----
+drop policy if exists "tests_select_authenticated" on public.tests;
+create policy "tests_select_authenticated"
+  on public.tests for select
+  to authenticated
+  using (processing_status in ('ready', 'failed'));
+
+drop policy if exists "tests_select_anon" on public.tests;
+create policy "tests_select_anon"
+  on public.tests for select
+  to anon
+  using (processing_status in ('ready', 'failed'));
+
+notify pgrst, 'reload schema';
