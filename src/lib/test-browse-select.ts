@@ -1,4 +1,4 @@
-/** 一覧・最近追加で共通利用する tests の select 列 */
+/** 一覧・最近追加で共通利用する tests の select 列（processing_status = ready の「テキスト未抽出」判定等で使用） */
 export const TEST_BROWSE_COLUMNS =
   "id,title,description,source_name,processing_status,processing_error,created_at,document_type,exam_department,exam_subject,exam_period,industry,industries,publication_year,paper_doi,paper_venue,paper_authors";
 

@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
 import type { TestRow } from "@/components/TestList";
 import { toPaperBrowseListRow } from "@/lib/paper-notebooklm-materials";
+import { sanitizeBrowseTestRows } from "@/lib/sanitize-browse-test-row";
 import { TEST_BROWSE_PAPER_LIST_COLUMNS } from "@/lib/test-browse-select";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +46,9 @@ export default async function PaperTestsPage() {
 
   const tests = (listed.data ?? []) as unknown as Record<string, unknown>[];
 
-  const list = tests.map((row) => toPaperBrowseListRow(row)) as TestRow[];
+  const list = sanitizeBrowseTestRows(
+    tests.map((row) => toPaperBrowseListRow(row)) as TestRow[],
+  );
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;
 
   return (

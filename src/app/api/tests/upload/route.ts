@@ -11,6 +11,7 @@ import { mergePicklistOptionsForSelect } from "@/lib/picklist-merge";
 import { fetchPicklistOptionRows } from "@/lib/supabase/picklist-table";
 import { normalizePdfFilename } from "@/lib/pdf-filename";
 import { putObject } from "@/lib/object-storage";
+import { sanitizeProcessingError } from "@/lib/sanitize-processing-error";
 import type { UserRole } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -325,7 +326,7 @@ export async function POST(req: Request) {
   if (document_type === "paper" && pdfFilename) {
     const { data: existingPapers, error: dupLookupErr } = await admin
       .from("tests")
-      .select("id,pdf_filename")
+      .select("id,pdf_filename,processing_status,uploaded_by")
       .eq("document_type", "paper")
       .not("pdf_filename", "is", null);
     if (!dupLookupErr) {
@@ -336,10 +337,19 @@ export async function POST(req: Request) {
           normalizePdfFilename(row.pdf_filename) === want,
       );
       if (hit?.id) {
+        const isFailed = hit.processing_status === "failed";
+        const isOwner = hit.uploaded_by === user.id;
+        const message = isFailed
+          ? isOwner
+            ? "同じ PDF ファイル名で処理失敗の論文が既に登録されています。テスト詳細ページから PDF を再アップロードして取り込み直すことができます。"
+            : "同じ PDF ファイル名で処理失敗の論文が既に登録されています。テスト詳細ページから内容を確認できます。"
+          : "同じ PDF ファイル名の論文が既にあります";
         return NextResponse.json(
           {
-            error: "同じ PDF ファイル名の論文が既にあります",
+            error: message,
+            message,
             testId: hit.id,
+            processingStatus: hit.processing_status,
           },
           { status: 409 },
         );
@@ -413,11 +423,12 @@ export async function POST(req: Request) {
   try {
     await ingestPdfForTest({ testId, storagePath });
   } catch (e) {
+    const safeError = sanitizeProcessingError(e);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
-        processing_error: e instanceof Error ? e.message : "処理に失敗しました",
+        processing_error: safeError,
       })
       .eq("id", testId);
 

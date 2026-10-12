@@ -957,3 +957,68 @@ alter table public.paper_study_statuses
   );
 
 notify pgrst, 'reload schema';
+
+-- ----- 028_pdfs_bucket_size_limit.sql -----
+update storage.buckets
+set file_size_limit = 200 * 1024 * 1024
+where id = 'pdfs';
+
+-- ----- 029_paper_industries.sql -----
+alter table public.tests
+  add column if not exists industries text[];
+
+comment on column public.tests.industries is '論文の業界（保存値の配列。過去問では未使用）';
+
+update public.tests
+set
+  industries = array[trim(industry)]
+where
+  document_type = 'paper'
+  and (industries is null or cardinality(industries) = 0)
+  and coalesce(trim(industry), '') <> '';
+
+notify pgrst, 'reload schema';
+
+-- ----- 030_r2_object_key_comments.sql -----
+comment on column public.tests.pdf_storage_path is 'R2 に保存した元 PDF のオブジェクトキー';
+comment on column public.tests.notebooklm_slide_pdf_storage_path is 'R2 に保存したスライド PDF のオブジェクトキー';
+comment on column public.tests.notebooklm_video_mp4_storage_path is 'R2 に保存した動画 MP4 のオブジェクトキー';
+
+-- ----- 031_expose_failed_tests.sql -----
+drop policy if exists "tests_select_authenticated" on public.tests;
+create policy "tests_select_authenticated"
+  on public.tests for select
+  to authenticated
+  using (processing_status in ('ready', 'failed'));
+
+drop policy if exists "tests_select_anon" on public.tests;
+create policy "tests_select_anon"
+  on public.tests for select
+  to anon
+  using (processing_status in ('ready', 'failed'));
+
+-- 既存の failed 行に含まれる生エラーメッセージ（内部キーや生例外）を安全な文言にクリーンアップ
+update public.tests
+set processing_error = 'PDF本文に含まれるUnicode文字の処理に失敗しました。'
+where processing_status = 'failed' and processing_error like '%unsupported Unicode escape sequence%';
+
+update public.tests
+set processing_error = '埋め込みAPIの認証に失敗しました。管理者へお問い合わせください。'
+where processing_status = 'failed' and processing_error like '%Incorrect API key%';
+
+-- 上記以外の未知・生例外が残っている場合は安全な定型文で上書き
+update public.tests
+set processing_error = 'PDFの取り込みに失敗しました。時間をおいて再試行するか、別のPDFをお試しください。'
+where processing_status = 'failed'
+  and processing_error is not null
+  and processing_error not in (
+    'PDF本文に含まれるUnicode文字の処理に失敗しました。',
+    '埋め込みAPIの認証に失敗しました。管理者へお問い合わせください。',
+    'ファイルストレージへの保存に失敗しました。時間をおいて再試行してください。',
+    'PDFの解析に失敗しました（暗号化PDFや破損ファイルの可能性があります）。',
+    'PDFから本文テキストを自動抽出できませんでした（画像のみ・スキャンなどの可能性）。テキストがコピーできるPDFへの差し替えを推奨します。',
+    'API呼び出しの上限に達しました。時間をおいて再試行してください。',
+    'PDFの取り込みに失敗しました。時間をおいて再試行するか、別のPDFをお試しください。'
+  );
+
+notify pgrst, 'reload schema';

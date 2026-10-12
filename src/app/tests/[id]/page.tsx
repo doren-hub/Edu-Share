@@ -194,9 +194,13 @@ export default async function TestDetailPage({
   ]);
 
   if (!loaded) notFound();
-  const test = loaded as TestDetailRow;
-
+  const testRaw = loaded as TestDetailRow;
   const user = authRes.data.user;
+  const test: TestDetailRow = {
+    ...testRaw,
+    processing_error: user ? testRaw.processing_error : null,
+  };
+
   const isPaper = (test.document_type ?? "past_exam") === "paper";
   const ready = test.processing_status === "ready";
 
@@ -484,9 +488,23 @@ export default async function TestDetailPage({
                 />
               </div>
             ) : null}
-            <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
-              {test.processing_status}
-            </span>
+            {test.processing_status === "failed" ? (
+              <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-900">
+                処理失敗
+              </span>
+            ) : test.processing_status === "ready" && test.processing_error ? (
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
+                テキスト未抽出
+              </span>
+            ) : test.processing_status === "ready" ? (
+              <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
+                準備完了
+              </span>
+            ) : (
+              <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-700">
+                {test.processing_status}
+              </span>
+            )}
           </div>
         </div>
 
@@ -624,14 +642,7 @@ export default async function TestDetailPage({
           />
         ) : null}
 
-        {user?.id &&
-        test.uploaded_by === user.id &&
-        (test.processing_status === "failed" ||
-          test.processing_status === "pending") ? (
-          <TestPdfReupload testId={test.id} />
-        ) : null}
-
-        {test.processing_status === "ready" ? (
+        {test.processing_status === "ready" || test.processing_status === "failed" ? (
           <section className="mt-10 border-t border-zinc-100 pt-8">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0 flex-1">

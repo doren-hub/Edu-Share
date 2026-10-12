@@ -195,6 +195,9 @@ export function TestList({
           statusReadyOk && isPaper && paperMaterialsComplete;
         const showHints = showPaperMaterialHints || isPaper;
         const statusLabel = (() => {
+          if (t.processing_status === "failed") {
+            return "処理失敗";
+          }
           if (t.processing_status === "ready" && t.processing_error) {
             return "テキスト未抽出";
           }
@@ -203,7 +206,17 @@ export function TestList({
           return "受験可能";
         })();
         const statusBadge =
-          t.processing_status === "ready" && t.processing_error ? (
+          t.processing_status === "failed" ? (
+            <span
+              className={
+                compact
+                  ? "rounded-md bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-900"
+                  : "rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-900"
+              }
+            >
+              処理失敗
+            </span>
+          ) : t.processing_status === "ready" && t.processing_error ? (
             <span
               className={
                 compact

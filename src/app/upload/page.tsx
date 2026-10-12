@@ -45,6 +45,11 @@ export default function UploadPage() {
   const [paperMetadataPaste, setPaperMetadataPaste] = useState("");
   const [authorsPicklistKey, setAuthorsPicklistKey] = useState(0);
   const [pastingPaperMeta, setPastingPaperMeta] = useState(false);
+  const [duplicateConflict, setDuplicateConflict] = useState<{
+    testId: string;
+    message: string;
+    isFailed: boolean;
+  } | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setReady(!!data.user));
@@ -68,6 +73,7 @@ export default function UploadPage() {
   async function onPickFile(nextFile: File | null) {
     setFile(nextFile);
     setAutoFillNote(null);
+    setDuplicateConflict(null);
     if (!nextFile) return;
 
     setAutoFilling(true);
@@ -145,6 +151,7 @@ export default function UploadPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setDuplicateConflict(null);
     if (!file) {
       setError("PDFを選択してください");
       return;
@@ -208,6 +215,7 @@ export default function UploadPage() {
       message?: string;
       details?: unknown;
       testId?: string;
+      processingStatus?: string;
     };
     let json: UploadJson | null = null;
     try {
@@ -222,6 +230,17 @@ export default function UploadPage() {
 
     if (!res.ok) {
       if (res.status === 409 && typeof json?.testId === "string" && json.testId) {
+        if (json.processingStatus === "failed") {
+          setDuplicateConflict({
+            testId: json.testId,
+            message:
+              json.message ||
+              json.error ||
+              "同じ PDF ファイル名で処理失敗の論文が既に登録されています。",
+            isFailed: true,
+          });
+          return;
+        }
         router.push(`/tests/${json.testId}`);
         return;
       }
@@ -517,6 +536,25 @@ export default function UploadPage() {
           <p className="whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
             {autoFillNote}
           </p>
+        ) : null}
+
+        {duplicateConflict ? (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+            <p className="font-semibold text-amber-900">
+              同じ PDF ファイル名の論文が既に登録されています
+            </p>
+            <p className="mt-1 whitespace-pre-wrap text-amber-800">
+              {duplicateConflict.message}
+            </p>
+            <div className="mt-3">
+              <Link
+                href={`/tests/${duplicateConflict.testId}`}
+                className="inline-flex items-center font-medium text-sky-800 underline hover:text-sky-950"
+              >
+                既存のテストページを開く（内容・PDF の確認） →
+              </Link>
+            </div>
+          </div>
         ) : null}
 
         {error ? (

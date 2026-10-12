@@ -3,11 +3,12 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ingestPdfForTest } from "@/lib/ingest-pdf";
 import { createObjectReadUrl, putObject } from "@/lib/object-storage";
+import { sanitizeProcessingError } from "@/lib/sanitize-processing-error";
 
 export const runtime = "nodejs";
 
 /**
- * 公開中のテスト教材（ready）の元PDFを、ログインユーザーに inline 配信する。
+ * テスト教材（ready または failed）の元PDFを、ログインユーザーに inline 配信する。
  * 認証確認後、R2 の公開 URL または短期署名 URL へリダイレクトする。
  */
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -37,7 +38,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     .eq("id", testId)
     .single();
 
-  if (tErr || !test || test.processing_status !== "ready" || !test.pdf_storage_path) {
+  if (
+    tErr ||
+    !test ||
+    (test.processing_status !== "ready" && test.processing_status !== "failed") ||
+    !test.pdf_storage_path
+  ) {
     return NextResponse.json({ error: "PDFを表示できません" }, { status: 404 });
   }
 
@@ -128,16 +134,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     await putObject(storagePath, bytes, "application/pdf");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const safeError = sanitizeProcessingError(error);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
-        processing_error: message || "R2へのアップロードに失敗しました",
+        processing_error: safeError,
       })
       .eq("id", testId);
     return NextResponse.json(
-      { error: message || "R2へのアップロードに失敗しました" },
+      { error: safeError || "R2へのアップロードに失敗しました" },
       { status: 500 },
     );
   }
@@ -145,11 +151,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     await ingestPdfForTest({ testId, storagePath });
   } catch (e) {
+    const safeError = sanitizeProcessingError(e);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
-        processing_error: e instanceof Error ? e.message : "PDFの取り込みに失敗しました",
+        processing_error: safeError,
       })
       .eq("id", testId);
     return NextResponse.json(
