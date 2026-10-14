@@ -589,6 +589,7 @@ export async function processOnePaper(
       filename: item.filename,
       paperDir: item.paperDir,
       state,
+      pdfPath: item.absPath,
     });
     if (state.eduShareTestUrl && state.filesPaste.trim()) {
       await applySciSpaceMetaToPaperPage(page, { paperDir: item.paperDir, state });

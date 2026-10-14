@@ -23,6 +23,7 @@ import {
   reconcileMetaFromFilesPaste,
   looksLikeCitationTitle,
   looksLikeSciSpaceNav,
+  looksLikeUnansweredSciSpaceResponse,
   tldrUsable,
   descriptionUsable,
   descriptionLooksIncomplete,
@@ -767,3 +768,50 @@ test("looksLikeSciSpaceNav: ページ先頭の Skip to Main Content は題名に
   assert.equal(looksLikeSciSpaceNav("Skip to content"), true);
   assert.equal(looksLikeSciSpaceNav("Planck stars"), false);
 });
+
+test("looksLikeUnansweredSciSpaceResponse: 論文から答えが取れなかった返事を判定する", () => {
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not addressed in the paper."), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not addressed in the paper"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not mentioned"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("not specified"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not stated in the paper"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not provided"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not found in the paper."), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("No information provided"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("The paper does not mention the authors"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("N/A"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("None"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("該当なし"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("論文内には記載がありません"), true);
+
+  // 通常の論文タイトルや要約は false
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Attention Is All You Need"), false);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Deep Residual Learning for Image Recognition"), false);
+  assert.equal(
+    looksLikeUnansweredSciSpaceResponse(
+      "This paper proposes a novel framework for deep residual networks that achieves state of the art results.",
+    ),
+    false,
+  );
+});
+
+test("titleLooksLikeBadSciSpaceCapture: Not addressed in the paper. を弾く", () => {
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Not addressed in the paper."), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Not mentioned"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("not specified"), true);
+});
+
+test("extractSciSpaceCardMeta: Not addressed などの未回答文言はタイトル・著者・要約に採用しない", () => {
+  const paste = [
+    "test.pdf",
+    "Not addressed in the paper.",
+    "2023 · Not specified",
+    "Uploaded on 18 Sep 2026",
+    "Not mentioned in the paper.",
+  ].join("\n");
+  const meta = extractSciSpaceCardMeta(paste, "test.pdf");
+  assert.equal(meta.title, "");
+  assert.equal(meta.authors, "");
+  assert.equal(meta.tldr, "");
+});
+
