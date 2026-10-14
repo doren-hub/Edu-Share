@@ -34,3 +34,7 @@ yarn-error.log*
 # paper-pipeline（ローカル実行）
 tools/paper-pipeline/node_modules/
 tools/paper-pipeline/.chrome-profile/
+
+# Antigravity への委任（scripts/run-issues.sh / scripts/claude-review.sh のログ）
+/.run-issues/
+/.review/
