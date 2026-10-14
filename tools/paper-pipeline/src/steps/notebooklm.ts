@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Locator, Page } from "playwright";
+import { dirname, join } from "node:path";
+import type { Locator, Page, Route } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isTargetClosedError } from "../browser.ts";
@@ -31,6 +31,8 @@ import {
   isChatCustomizeLabel,
   isStudioGenerateLabel,
   scanStudioVideoOutputs,
+  FLASHCARD_CARD,
+  studioText,
   shouldKickoffSlides,
   shouldKickoffVideo,
   studioOutputScanIncomplete,
@@ -1792,6 +1794,107 @@ async function clickNotebookLmVideoDownload(page: Page): Promise<boolean> {
   return false;
 }
 
+const STUDIO_DOWNLOAD_URL = /usercontent\.google\.com\/download/i;
+
+async function fetchStudioVideoByIntercept(
+  page: Page,
+  destPath: string,
+  clickDownload: () => Promise<void>,
+): Promise<boolean> {
+  const context = page.context();
+  // Chrome が落ちたあとでも使えるよう、クリックの前に取っておく
+  const cookies = (await context.cookies().catch(() => [])) as BrowserCookie[];
+  const userAgent = String(await page.evaluate("navigator.userAgent").catch(() => "Mozilla/5.0"));
+  let captured = "";
+  const handler = async (route: Route) => {
+    const req = route.request();
+    const u = req.url();
+    const studioFile =
+      STUDIO_DOWNLOAD_URL.test(u) ||
+      (req.isNavigationRequest() && /googleusercontent\.com\/notebooklm\//i.test(u));
+    if (!captured && studioFile) {
+      captured = u;
+      log(`動画ダウンロード URL を横取りしました: ${u.slice(0, 100)}`);
+      await route.abort().catch(() => undefined);
+      return;
+    }
+    const type = req.resourceType();
+    if ((req.isNavigationRequest() || type === "media") && !/notebook(?:lm)?\.google\.com/i.test(u)) {
+      log(`動画候補リクエスト: ${type} ${u.slice(0, 140)}`);
+    }
+    await route.continue().catch(() => undefined);
+  };
+  await context.route("**/*", handler);
+  try {
+    await clickDownload();
+    const start = Date.now();
+    while (!captured && Date.now() - start < 10_000) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  } finally {
+    await context.unroute("**/*", handler).catch(() => undefined);
+  }
+  if (!captured) return false;
+  try {
+    // クリックの数秒後に Chrome が落ちることがあるので、ブラウザに頼らず Node から取りにいく
+    const res = await fetchFollowingRedirects(captured, cookies, userAgent);
+    if (!res.ok) {
+      warn(`動画 URL の取得に失敗: HTTP ${res.status}`);
+      return false;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length <= VIDEO_MIN_BYTES) {
+      warn(`動画 URL の応答が小さすぎます: ${buf.length} bytes`);
+      return false;
+    }
+    writeFileSync(destPath, buf);
+    if (!isRealVideoFile(destPath)) {
+      warn(`動画 URL の応答が MP4 ではありません（先頭 ${buf.subarray(0, 8).toString("latin1")}）`);
+      try {
+        unlinkSync(destPath);
+      } catch {
+        /* 次の取得で上書きする */
+      }
+      return false;
+    }
+    log(`保存: ${destPath}（${buf.length} bytes）`);
+    return true;
+  } catch (e) {
+    warn(`動画 URL の取得に失敗: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}`);
+    return false;
+  }
+}
+
+type BrowserCookie = { name: string; value: string; domain: string; path: string; secure: boolean };
+
+function cookieHeaderFor(cookies: BrowserCookie[], target: URL): string {
+  return cookies
+    .filter((c) => {
+      const domain = c.domain.startsWith(".") ? c.domain.slice(1) : c.domain;
+      const hostOk = target.hostname === domain || target.hostname.endsWith(`.${domain}`);
+      return hostOk && target.pathname.startsWith(c.path || "/") && (!c.secure || target.protocol === "https:");
+    })
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+}
+
+async function fetchFollowingRedirects(src: string, cookies: BrowserCookie[], userAgent: string): Promise<Response> {
+  let url = new URL(src);
+  for (let hop = 0; hop < 10; hop++) {
+    const headers: Record<string, string> = { "User-Agent": userAgent, "Accept-Encoding": "identity" };
+    const cookie = cookieHeaderFor(cookies, url);
+    if (cookie) headers.Cookie = cookie;
+    const res = await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(180_000) });
+    const location = res.headers.get("location");
+    if (res.status >= 300 && res.status < 400 && location) {
+      url = new URL(location, url);
+      continue;
+    }
+    return res;
+  }
+  throw new Error("リダイレクトが多すぎます");
+}
+
 async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<void> {
   await withTimeout(
     (async () => {
@@ -1809,7 +1912,12 @@ async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<voi
         }
         throw new Error("ダウンロード操作が見つかりません");
       };
-      await waitForDownloadTo(page, destPath, clickDownload, 180_000, VIDEO_MIN_BYTES);
+      // Chrome 自身に保存させると、ダウンロード開始直後にブラウザごと落ちることがある（Chrome 154）。
+      // リクエストを横取りして止め、同じ URL を Playwright 側で取りにいく。
+      if (!(await fetchStudioVideoByIntercept(page, destPath, clickDownload))) {
+        warn("動画のダウンロード URL を横取りできなかったので、Chrome の保存を待ちます");
+        await waitForDownloadTo(page, destPath, async () => undefined, 180_000, VIDEO_MIN_BYTES);
+      }
       if (!isRealVideoFile(destPath)) {
         throw new Error("Studio の「動画をダウンロード」で MP4 を保存できませんでした");
       }
@@ -1847,12 +1955,8 @@ function csvCell(s: string): string {
 
 function pickText(obj: Record<string, unknown>, keys: string[]): string {
   for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      const t = (v as { text?: unknown }).text;
-      if (typeof t === "string" && t.trim()) return t.trim();
-    }
+    const t = studioText(obj[k]);
+    if (t) return t;
   }
   return "";
 }
@@ -2052,6 +2156,17 @@ async function exportCsvViaExtension(page: Page, destPath: string): Promise<void
   );
 }
 
+/** 読み取れなかったビューアの中身を failures/ に残す。形が変わったときの調査用 */
+function dumpStudioAppData(destPath: string, kind: string, data: unknown): void {
+  try {
+    const out = join(dirname(destPath), "failures", `${kind}-app-data.json`);
+    writeFileSync(out, JSON.stringify(data, null, 1).slice(0, 400_000), "utf8");
+    warn(`読み取れなかった中身を残しました: ${out}`);
+  } catch {
+    /* 調査用。書けなくても続行 */
+  }
+}
+
 async function saveStudioArtifactCsv(
   page: Page,
   destPath: string,
@@ -2075,6 +2190,7 @@ async function saveStudioArtifactCsv(
     } else {
       const cards = walkFindCards(data);
       if (cards.length < 3) {
+        dumpStudioAppData(destPath, "flashcards", data);
         throw new Error(`単語帳カードが足りません（${cards.length} 件）`);
       }
       writeFileSync(destPath, cardsToCsv(cards), "utf8");
@@ -2290,9 +2406,9 @@ async function collectReadyStudio(
       if (existsSync(dest) && statSync(dest).size > 80) {
         state.vocabCsvPath = dest;
         markCompleted(state, "nlm-flashcards");
-      } else if (await studioHasCardMatching(page, /フラッシュ|単語帳|Flashcard/i)) {
+      } else if (await studioHasCardMatching(page, FLASHCARD_CARD)) {
         log("既存の単語帳を開きます（再生成しません）");
-        if (!(await openStudioCardMatching(page, /フラッシュ|単語帳|Flashcard/i))) {
+        if (!(await openStudioCardMatching(page, FLASHCARD_CARD))) {
           await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
         }
         await page.waitForTimeout(1500);
@@ -2416,7 +2532,7 @@ async function runStudioParallel(
     else await kick("nlm-quiz", [/^クイズ$/, /^Quiz$/i], QUIZ_MS);
   }
   if (want("nlm-flashcards") && !isCompleted(state, "nlm-flashcards")) {
-    if (await studioHasCardMatching(page, /フラッシュ|単語帳|Flashcard/i)) {
+    if (await studioHasCardMatching(page, FLASHCARD_CARD)) {
       markStudioStarted(state, "nlm-flashcards");
     } else {
       await kick(

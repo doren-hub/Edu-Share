@@ -761,3 +761,9 @@ test("SciSpace のプロンプト列は長くても説明にしない", () => {
   assert.equal(descriptionUsable(s), false);
   assert.equal(tldrUsable(s), false);
 });
+
+test("looksLikeSciSpaceNav: ページ先頭の Skip to Main Content は題名にしない", () => {
+  assert.equal(looksLikeSciSpaceNav("Skip to Main Content"), true);
+  assert.equal(looksLikeSciSpaceNav("Skip to content"), true);
+  assert.equal(looksLikeSciSpaceNav("Planck stars"), false);
+});

@@ -2,11 +2,14 @@
 export const STUDIO_RELATIVE_TIME =
   /(?:\d+\s*(?:秒前|分前|時間前|日前|週間前|か月前|ヶ月前)|たった今|昨日|おととい|just now|\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?)\s+ago|yesterday)/i;
 
+/** 単語帳の出力カード。NotebookLM は「単語帳」「暗記カード」など名前を変える */
+export const FLASHCARD_CARD = /フラッシュ|単語帳|暗記カード|Flashcard/i;
+
 const NON_VIDEO =
-  /フラッシュカード|単語帳|クイズ|マインドマップ|インフォグラフィ|スライド資料|Slide deck/i;
+  /フラッシュカード|単語帳|暗記カード|クイズ|マインドマップ|インフォグラフィ|スライド資料|Slide deck/i;
 
 const NON_SLIDE_CARD =
-  /フラッシュカード|単語帳|クイズ|マインドマップ|インフォグラフィ|Data Table|音声解説|Audio overview|新しいメモ|sticky_note|Add note|レポートを作成/i;
+  /フラッシュカード|単語帳|暗記カード|クイズ|マインドマップ|インフォグラフィ|Data Table|音声解説|Audio overview|新しいメモ|sticky_note|Add note|レポートを作成/i;
 
 const EXPLAINER_DURATION =
   /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明)\b/gi;
@@ -169,4 +172,28 @@ export function looksLikeOverflowMenuLabel(text: string): boolean {
   if (/more_vert|more_horiz/i.test(t)) return true;
   if (/その他の操作|More options|More actions/i.test(t)) return true;
   return /^(その他|メニュー|More)$/i.test(t);
+}
+
+/**
+ * Studio のビューアが持つ文字列を取り出す。
+ * 文字列、{ text }、{ flashcardContentBlock: [{ type: "text", content }] } の形がある。
+ */
+export function studioText(v: unknown): string {
+  if (typeof v === "string") return v.trim();
+  if (!v || typeof v !== "object") return "";
+  if (Array.isArray(v)) {
+    return v.map((x) => studioText(x)).filter(Boolean).join("\n").trim();
+  }
+  const o = v as Record<string, unknown>;
+  for (const key of ["text", "content"]) {
+    const t = o[key];
+    if (typeof t === "string" && t.trim()) return t.trim();
+  }
+  for (const key of ["flashcardContentBlock", "contentBlock", "blocks"]) {
+    if (Array.isArray(o[key])) {
+      const t = studioText(o[key]);
+      if (t) return t;
+    }
+  }
+  return "";
 }
