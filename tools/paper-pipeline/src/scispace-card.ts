@@ -71,6 +71,8 @@ export function looksLikeSciSpaceNav(s: string): boolean {
   if (!t) return true;
   if (NAV.test(t)) return true;
   if (/^files\s*\(/i.test(t)) return true;
+  // 出版社サイトの PDF に入っているページ先頭の案内。題名として拾わない
+  if (/^skip to (main )?content$/i.test(t)) return true;
   if (/^uploaded on\b/i.test(t)) return true;
   if (/^pdf upload$/i.test(t)) return true;
   if (/\bpdf upload\b/i.test(t) && /\buploaded on\b/i.test(t)) return true;

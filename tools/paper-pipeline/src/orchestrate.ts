@@ -23,6 +23,8 @@ import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
 import { formatStudioGenerateArg, formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
 
+import { emptyGiveUpTrack, holdWaiting, noteDisconnect, noteFailRound, noteWaiting, type GiveUpTrack } from "./give-up.ts";
+
 const MAX_FAIL_RETRIES = 3;
 const CHROME_UNLOCK_MS = 2_500;
 
@@ -30,6 +32,7 @@ type Track = {
   item: InboxPdf;
   retries: number;
   fromUsed: boolean;
+  giveUp: GiveUpTrack;
 };
 
 function mtimeMs(path: string): number {
@@ -186,7 +189,7 @@ async function main(): Promise<void> {
   const skip = studioSkip(cfg);
   const tracks = new Map<string, Track>();
   const jobs: SchedJob[] = items.map((item) => {
-    tracks.set(item.filename, { item, retries: 0, fromUsed: false });
+    tracks.set(item.filename, { item, retries: 0, fromUsed: false, giveUp: emptyGiveUpTrack() });
     const init = initialStatus(item, skip, cfg.studioGenerate);
     return {
       id: item.filename,
@@ -254,6 +257,7 @@ async function main(): Promise<void> {
     if (code === EXIT_QUOTA) {
       const state = loadPaperState(track.item);
       applyKickoff(job, state, skip, cfg.studioGenerate);
+      holdWaiting(track.giveUp, Date.now());
       job.status = "waiting";
       job.nextCheckAt = Date.now() + 60_000;
       log(
@@ -269,6 +273,16 @@ async function main(): Promise<void> {
       applyKickoff(job, state, skip, cfg.studioGenerate);
       const stage = state.waitingFor || "nlm-video";
       const cooldownUntil = retryUntilMs(state);
+      if (generationBlocked || cooldownUntil > Date.now()) {
+        holdWaiting(track.giveUp, Date.now());
+      } else if (noteWaiting(track.giveUp, stage, Date.now())) {
+        job.status = "failed";
+        failed.push(track.item.filename);
+        warn(
+          `オーケストレータ: ${track.item.filename} は ${stage} 待ちが長く続いたのであきらめます。ほかの論文を続けます`,
+        );
+        continue;
+      }
       if (!job.kickoffSettled && !generationBlocked && cooldownUntil <= Date.now()) {
         job.status = "ready";
         job.nextCheckAt = 0;
@@ -304,6 +318,12 @@ async function main(): Promise<void> {
     applyKickoff(job, loadPaperState(track.item), skip, cfg.studioGenerate);
     const disconnected = isTargetClosedMessage(loadPaperState(track.item).lastError);
     if (disconnected) {
+      if (noteDisconnect(track.giveUp)) {
+        job.status = "failed";
+        failed.push(track.item.filename);
+        warn(`オーケストレータ: ${track.item.filename} はブラウザ切断が続いたのであきらめます。ほかの論文を続けます`);
+        continue;
+      }
       job.status = "waiting";
       job.nextCheckAt = Date.now() + 60_000;
       log(
@@ -323,6 +343,12 @@ async function main(): Promise<void> {
       break;
     }
     if (track.retries >= MAX_FAIL_RETRIES) {
+      if (noteFailRound(track.giveUp)) {
+        job.status = "failed";
+        failed.push(track.item.filename);
+        warn(`オーケストレータ: ${track.item.filename} は失敗が続いたのであきらめます。ほかの論文を続けます`);
+        continue;
+      }
       const delay = 120_000;
       track.retries = 0;
       job.status = "waiting";

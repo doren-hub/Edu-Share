@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  FLASHCARD_CARD,
   STUDIO_RELATIVE_TIME,
+  studioText,
   formatVideoScan,
   isChatCustomizeLabel,
   isExplainerVideoCardText,
@@ -181,4 +183,25 @@ test("動画ダウンロードは download / ダウンロード / メニュー�
   assert.equal(looksLikeOverflowMenuLabel("more_vert"), true);
   assert.equal(looksLikeOverflowMenuLabel("more_vert more_vert"), true);
   assert.equal(looksLikeOverflowMenuLabel("more_horiz"), true);
+});
+
+test("FLASHCARD_CARD: 単語帳は「暗記カード」という名前でも見つける", () => {
+  assert.equal(FLASHCARD_CARD.test("copy 量子力学 暗記カード 1 件のソース · 11 日前"), true);
+  assert.equal(FLASHCARD_CARD.test("copy メタンハイドレート 単語帳 1 件のソース"), true);
+  assert.equal(FLASHCARD_CARD.test("quiz メタンハイドレート クイズ 1 件のソース"), false);
+});
+
+test("studioText: 文字列・text・flashcardContentBlock のどの形でも本文を取る", () => {
+  assert.equal(studioText("  表  "), "表");
+  assert.equal(studioText({ text: "裏" }), "裏");
+  assert.equal(
+    studioText({ flashcardContentBlock: [{ type: "text", content: "減圧法とは何か？" }] }),
+    "減圧法とは何か？",
+  );
+  assert.equal(
+    studioText({ flashcardContentBlock: [{ type: "text", content: "一行目" }, { type: "text", content: "二行目" }] }),
+    "一行目\n二行目",
+  );
+  assert.equal(studioText({ c: 1 }), "");
+  assert.equal(studioText(null), "");
 });
