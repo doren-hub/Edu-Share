@@ -3,6 +3,19 @@
  * メタ = タイトル・著者・年・掲載・DOI。TL;DR = 説明本文。混ぜない。
  */
 
+export {
+  MIN_PDF_TEXT_CHARS,
+  PDF_TITLE_CHECK_PREFIX_CHARS,
+  MIN_TITLE_WORD_MATCH_RATIO,
+  MIN_DESCRIPTION_WORD_MATCH_RATIO,
+  MIN_DESCRIPTION_MATCHED_WORDS,
+  STOP_WORDS,
+  extractSignificantWords,
+  isScannedPdfText,
+  isTitleGroundedInPdfText,
+  isDescriptionGroundedInPdfText,
+} from "./pdf-grounding.ts";
+
 const MIDDLE_DOT = String.raw`[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]`;
 const YEAR_AUTHOR = new RegExp(`^((?:19|20)\\d{2})\\s*${MIDDLE_DOT}\\s*(.+)$`, "u");
 
@@ -66,10 +79,41 @@ export function isDummySciSpacePaste(paste: string): boolean {
   return /\ba\.\s*k\.\s*dewdney\b|first law of robotics revisited/i.test(paste);
 }
 
+const UNANSWERED_PATTERNS = [
+  /^not addressed(\s+in(\s+the)?\s+paper)?$/i,
+  /^not mentioned(\s+in(\s+the)?\s+paper)?$/i,
+  /^not specified(\s+in(\s+the)?\s+paper)?$/i,
+  /^not stated(\s+in(\s+the)?\s+paper)?$/i,
+  /^not provided(\s+in(\s+the)?\s+paper)?$/i,
+  /^not found(\s+in(\s+the)?\s+paper)?$/i,
+  /^not discussed(\s+in(\s+the)?\s+paper)?$/i,
+  /^not available(\s+in(\s+the)?\s+paper)?$/i,
+  /^no information(\s+(is\s+)?provided|\s+(is\s+)?available)?(\s+in(\s+the)?\s+paper)?$/i,
+  /^(information|details)(\s+is|\s+are)?\s+not (provided|available|found)(\s+in(\s+the)?\s+paper)?$/i,
+  /^(it is |it's )?not (addressed|mentioned|specified|stated|provided|found|discussed|available)(\s+in(\s+the)?\s+paper)?$/i,
+  /^(the|this)\s+paper does not (mention|address|specify|state|provide|discuss|contain)\b/i,
+  /^there is no (mention|information|data|statement) (of|about|provided|available)\b/i,
+  /^(n\/a|none|null|undefined|-)$/i,
+  /^(該当なし|記載なし|言及なし)$/,
+  /^(論文|本文)?(内|中)?(に)?(は)?(記載|言及|記述|情報)が?(ありません|ない|なし)/,
+  /^(記載|言及|記述)されてい?ません/,
+];
+
+/**
+ * SciSpace が論文から答えが取れなかったことを表す短い返事かどうか。
+ * 題名・著者・説明のいずれにも採用しない。
+ */
+export function looksLikeUnansweredSciSpaceResponse(s: string): boolean {
+  const t = s.trim().replace(/^["'`“]+|["'`”]+$/g, "").replace(/[.!?。！？]+$/g, "").trim();
+  if (!t) return false;
+  return UNANSWERED_PATTERNS.some((re) => re.test(t));
+}
+
 export function looksLikeSciSpaceNav(s: string): boolean {
   const t = s.trim();
   if (!t) return true;
   if (NAV.test(t)) return true;
+  if (looksLikeUnansweredSciSpaceResponse(t)) return true;
   if (/^files\s*\(/i.test(t)) return true;
   // 出版社サイトの PDF に入っているページ先頭の案内。題名として拾わない
   if (/^skip to (main )?content$/i.test(t)) return true;
@@ -86,11 +130,11 @@ export function looksLikeSciSpaceNav(s: string): boolean {
 }
 
 export function sciSpaceTitleLooksLikeChrome(title: string): boolean {
-  return Boolean(title.trim() && looksLikeSciSpaceNav(title));
+  return Boolean(title.trim() && (looksLikeSciSpaceNav(title) || looksLikeUnansweredSciSpaceResponse(title)));
 }
 
 export function sciSpaceTldrLooksLikeChrome(tldr: string): boolean {
-  return Boolean(tldr.trim() && looksLikeSciSpaceNav(tldr));
+  return Boolean(tldr.trim() && (looksLikeSciSpaceNav(tldr) || looksLikeUnansweredSciSpaceResponse(tldr)));
 }
 
 /** 空の TL;DR は未取得であり、画面の文言ではない。タイトルと TL;DR は別判定 */
@@ -310,13 +354,14 @@ function pickTitle(lines: string[], filename: string): string {
 }
 
 function isJunkVenueLine(s: string): boolean {
-  return /^(null|undefined|none|n\/a|-)$/i.test(s.trim());
+  return /^(null|undefined|none|n\/a|-)$/i.test(s.trim()) || looksLikeUnansweredSciSpaceResponse(s);
 }
 
 /** SciSpace 個別ページなどから誤って取れたタイトル */
 export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
   const t = title.trim();
   if (!t) return true;
+  if (looksLikeUnansweredSciSpaceResponse(t)) return true;
   if (/\.pdf$/i.test(t)) return true;
   if (/^ISSN\s/i.test(t)) return true;
   if (/^vol\.?\s*\d/i.test(t)) return true;
@@ -366,14 +411,23 @@ export function hasBadPaperMeta(state: {
 
 /** Files 行の方が正しいとき、state のタイトル・掲載・DOI を戻す */
 export function reconcileMetaFromFilesPaste(
-  state: { title: string; venue: string; doi: string; filesPaste: string; filename: string },
+  state: {
+    title: string;
+    venue: string;
+    doi: string;
+    filesPaste: string;
+    filename: string;
+    sciTitleRejected?: boolean;
+  },
 ): boolean {
   const card = extractSciSpaceCardMeta(state.filesPaste, state.filename);
   let changed = false;
   if (
+    !state.sciTitleRejected &&
     card.title &&
     !titleLooksLikeFilename(card.title, state.filename) &&
-    (titleLooksLikeBadSciSpaceCapture(state.title) || !state.title.trim())
+    !looksLikeUnansweredSciSpaceResponse(card.title) &&
+    (titleLooksLikeBadSciSpaceCapture(state.title) || looksLikeUnansweredSciSpaceResponse(state.title) || !state.title.trim())
   ) {
     state.title = card.title;
     changed = true;
@@ -427,9 +481,19 @@ export function isTldrBodyLine(s: string): boolean {
 export function metadataPasteFromCard(
   card: Pick<SciSpaceCardMeta, "title" | "yearAuthorLine" | "venue">,
   filename: string,
+  options?: { currentTitle?: string; sciTitleRejected?: boolean },
 ): string {
-  const title =
+  let title =
     card.title && !titleLooksLikeFilename(card.title, filename) ? card.title.trim() : "";
+  if (options?.sciTitleRejected) {
+    title = "";
+  } else if (
+    options?.currentTitle &&
+    titleLooksLikeFilename(options.currentTitle, filename) &&
+    card.title.trim() !== options.currentTitle.trim()
+  ) {
+    title = "";
+  }
   return [title, card.yearAuthorLine, card.venue]
     .map((l) => l.trim())
     .filter(Boolean)
@@ -438,10 +502,14 @@ export function metadataPasteFromCard(
 }
 
 /** Edu Share のメタ貼り付け欄。Files 原文や TL;DR 本文は入れない */
-export function eduShareSciSpaceMetadataPaste(paste: string, filename: string): string {
+export function eduShareSciSpaceMetadataPaste(
+  paste: string,
+  filename: string,
+  options?: { currentTitle?: string; sciTitleRejected?: boolean },
+): string {
   if (isDummySciSpacePaste(paste)) return "";
   const card = extractSciSpaceCardMeta(paste, filename);
-  const out = metadataPasteFromCard(card, filename);
+  const out = metadataPasteFromCard(card, filename, options);
   if (!out) return "";
   if (isDummySciSpacePaste(out) || isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors)) return "";
   if (!card.yearAuthorLine && titleLooksLikeFilename(card.title, filename)) return "";
@@ -455,6 +523,7 @@ function pickTldr(text: string, lines: string[], title: string): string {
       p.length > 80 &&
       TLDR_OPENER.test(p) &&
       !looksLikeSciSpaceNav(p) &&
+      !looksLikeUnansweredSciSpaceResponse(p) &&
       !parseYearAuthor(p) &&
       !/^home\b/i.test(p),
   );
@@ -463,11 +532,13 @@ function pickTldr(text: string, lines: string[], title: string): string {
   }
 
   const m = text.match(
-    /\b((?:This paper|The paper|本研究[はが]|本論文[はが])[\s\S]{40,1200}?)(?:\n\s*\n|Column Settings|$)/i,
+    /(?:^|\n|[.!?。！？]\s+)((?:This paper|The paper|本研究[はが]|本論文[はが])\b[\s\S]{40,1200}?)(?:\n\s*\n|Column Settings|$)/i,
   );
   if (m?.[1]) {
     const t = m[1].replace(/\s+/g, " ").trim();
-    if (t.length > 80 && !/agent gallery/i.test(t)) return stripTldrSnippetNumbers(t.slice(0, 1500));
+    if (t.length > 80 && !/agent gallery/i.test(t) && !looksLikeUnansweredSciSpaceResponse(t)) {
+      return stripTldrSnippetNumbers(t.slice(0, 1500));
+    }
   }
 
   const fallback = lines
@@ -477,6 +548,7 @@ function pickTldr(text: string, lines: string[], title: string): string {
         p !== title &&
         !isPdfFilenameLine(p) &&
         !looksLikeSciSpaceNav(p) &&
+        !looksLikeUnansweredSciSpaceResponse(p) &&
         !looksLikeCitationTitle(p) &&
         !parseYearAuthor(p) &&
         !/^[a-z]/.test(p) &&
@@ -595,16 +667,20 @@ export function pickAbstractSection(text: string): string {
 export function extractSciSpaceCardMeta(raw: string, filename: string): SciSpaceCardMeta {
   const isolated = isolateSciSpaceCardText(raw, filename);
   const lines = linesOf(isolated);
-  const title = pickTitle(lines, filename);
+  const rawTitle = pickTitle(lines, filename);
+  const title = looksLikeUnansweredSciSpaceResponse(rawTitle) ? "" : rawTitle;
   const yaLine = lines.find((l) => parseYearAuthor(l)) ?? "";
   const ya = yaLine ? parseYearAuthor(yaLine) : null;
   const venue = pickVenue(lines, filename, title);
-  const tldr = pickAbstractSection(isolated) || pickTldr(isolated, lines, title);
+  const rawTldr = pickAbstractSection(isolated) || pickTldr(isolated, lines, title);
+  const tldr = looksLikeUnansweredSciSpaceResponse(rawTldr) ? "" : rawTldr;
   const doi = doiFromHrefOrText(isolated);
+  const rawAuthors = ya?.authors ?? "";
+  const authors = looksLikeUnansweredSciSpaceResponse(rawAuthors) ? "" : rawAuthors;
   const meta = {
     title,
-    yearAuthorLine: yaLine,
-    authors: ya?.authors ?? "",
+    yearAuthorLine: authors ? yaLine : "",
+    authors,
     publicationYear: ya?.year ?? "",
     venue,
     doi,
@@ -630,7 +706,12 @@ export function scoreSciSpaceCardCandidate(raw: string, filename: string): numbe
   if (!isolated.trim()) return Number.NEGATIVE_INFINITY;
   if (isDummySciSpacePaste(raw) || isDummySciSpacePaste(isolated)) return Number.NEGATIVE_INFINITY;
   const card = extractSciSpaceCardMeta(raw, filename);
-  if (isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors)) {
+  if (
+    isDummySciSpacePaste(card.title) ||
+    isDummySciSpacePaste(card.authors) ||
+    looksLikeUnansweredSciSpaceResponse(card.title) ||
+    looksLikeUnansweredSciSpaceResponse(card.authors)
+  ) {
     return Number.NEGATIVE_INFINITY;
   }
   let s = 0;

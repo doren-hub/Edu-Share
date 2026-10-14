@@ -62,6 +62,8 @@ export type PaperState = {
   harvestFailures: number;
   /** Edu Share に載せ済みの Studio 成果物。利用量待ちの途中アップロード用 */
   eduUploaded: StudioStageId[];
+  /** SciSpace カード等の題名が本文と合わない等の理由で弾かれたフラグ。Edu Share への反映を防ぐ */
+  sciTitleRejected?: boolean;
 };
 
 export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath" | "paperDir">): PaperState {
@@ -93,6 +95,7 @@ export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath"
     harvestRetryAt: "",
     harvestFailures: 0,
     eduUploaded: [],
+    sciTitleRejected: false,
   };
 }
 
@@ -126,6 +129,7 @@ export function loadState(paperDir: string, fallback: PaperState): PaperState {
         parsed.kickoffRetryStage && isStageId(parsed.kickoffRetryStage) ? parsed.kickoffRetryStage : "",
       harvestRetryAt: typeof parsed.harvestRetryAt === "string" ? parsed.harvestRetryAt : "",
       harvestFailures: Math.max(0, Math.floor(Number(parsed.harvestFailures) || 0)),
+      sciTitleRejected: Boolean(parsed.sciTitleRejected),
       paperDir,
       inboxPdfPath: fallback.inboxPdfPath,
     };

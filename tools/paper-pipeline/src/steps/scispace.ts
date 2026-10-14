@@ -20,9 +20,13 @@ import {
   titleLooksLikeBadSciSpaceCapture,
   venueLooksLikeBadSciSpaceCapture,
   looksLikePublisherOrPaywall,
+  looksLikeUnansweredSciSpaceResponse,
+  isTitleGroundedInPdfText,
+  isDescriptionGroundedInPdfText,
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
+import { extractPdfText } from "../pdf-text.ts";
 import { arxivIdFromFilename, fetchArxivAbstract, fetchArxivAtom, parseArxivAtomAuthors, parseArxivAtomTitle, parseArxivAtomYear } from "../arxiv-abstract.ts";
 import { bibliographicPasteFromWork, fetchCrossrefWork } from "../crossref.ts";
 import {
@@ -912,9 +916,11 @@ async function readFilesColumnTldr(page: Page, filename: string): Promise<string
 
 export async function captureSciSpaceCardMeta(
   page: Page,
-  opts: { folderUrl: string; filename: string; paperDir: string; state: PaperState },
+  opts: { folderUrl: string; filename: string; paperDir: string; state: PaperState; pdfPath?: string },
 ): Promise<void> {
   const { folderUrl, filename, paperDir, state } = opts;
+  const pdfPath = opts.pdfPath || state.inboxPdfPath;
+  const pdfText = pdfPath ? await extractPdfText(pdfPath) : undefined;
   try {
     if (!(await recoverStuckPage(page))) {
       throw new Error("ブラウザが閉じられています");
@@ -923,7 +929,7 @@ export async function captureSciSpaceCardMeta(
     const searchTitle = filesSearchHint(state);
     await filterFilesList(page, folderUrl, filename, searchTitle);
     await expandFilesRowAuthors(page, filename, searchTitle);
-    if (looksLikeSciSpaceNav(state.tldr)) state.tldr = "";
+    if (looksLikeSciSpaceNav(state.tldr) || looksLikeUnansweredSciSpaceResponse(state.tldr)) state.tldr = "";
     if (!(await isNotebooksFilesView(page, folderUrl))) {
       warn("SciSpace: Files 以外の画面に出たのでフォルダへ戻ります");
       await openNotebooksFilesView(page, folderUrl);
@@ -999,7 +1005,7 @@ export async function captureSciSpaceCardMeta(
     if (!(await filesNameVisible(page, filename, searchTitle))) {
       const filled = await fillDummyCardFromKnownIds(filename, state.doi);
       if (filled) {
-        applyExtractedCard(state, filename, extractSciSpaceCardMeta(filled, filename));
+        applyExtractedCard(state, filename, extractSciSpaceCardMeta(filled, filename), [], pdfText);
         state.filesPaste = filled;
         log("SciSpace: Files に無いので既知の書誌を使います");
       } else {
@@ -1052,10 +1058,16 @@ export async function captureSciSpaceCardMeta(
         warn("SciSpace: 著者の +N More を展開できなかったので、省略表記のまま貼ります");
       }
     }
-    applyExtractedCard(state, filename, extractSciSpaceCardMeta(filesPaste, filename), found.dois);
+    applyExtractedCard(state, filename, extractSciSpaceCardMeta(filesPaste, filename), found.dois, pdfText);
     if (descriptionUsable(filesTldr) || tldrUsable(filesTldr)) {
-      state.tldr = stripTldrSnippetNumbers(filesTldr).slice(0, 2000);
-      log("SciSpace: Files の TL;DR 列を使います");
+      const stripped = stripTldrSnippetNumbers(filesTldr).slice(0, 2000);
+      if (
+        !looksLikeUnansweredSciSpaceResponse(stripped) &&
+        (pdfText === undefined || isDescriptionGroundedInPdfText(stripped, pdfText))
+      ) {
+        state.tldr = stripped;
+        log("SciSpace: Files の TL;DR 列を使います");
+      }
     }
     if (filesPaste && !isDummySciSpacePaste(filesPaste)) {
       state.filesPaste = filesPaste;
@@ -1077,10 +1089,31 @@ export async function captureSciSpaceCardMeta(
     }
 
     if (sciSpaceMetaStillIncomplete(state, filename) || sciSpaceTldrStillIncomplete(state)) {
-      await fillMetaFromRecordPage(page, state, filename);
+      await fillMetaFromRecordPage(page, state, filename, pdfText);
     }
     if (descriptionUsable(filesTldr) || tldrUsable(filesTldr)) {
-      state.tldr = stripTldrSnippetNumbers(filesTldr).slice(0, 2000);
+      const stripped = stripTldrSnippetNumbers(filesTldr).slice(0, 2000);
+      if (
+        !looksLikeUnansweredSciSpaceResponse(stripped) &&
+        (pdfText === undefined || isDescriptionGroundedInPdfText(stripped, pdfText))
+      ) {
+        state.tldr = stripped;
+      }
+    }
+
+    if (pdfText !== undefined) {
+      if (state.title && !isTitleGroundedInPdfText(state.title, pdfText)) {
+        state.title = filename.replace(/\.pdf$/i, "");
+      }
+      if (state.tldr && !isDescriptionGroundedInPdfText(state.tldr, pdfText)) {
+        state.tldr = "";
+      }
+    }
+    if (looksLikeUnansweredSciSpaceResponse(state.title)) {
+      state.title = filename.replace(/\.pdf$/i, "");
+    }
+    if (looksLikeUnansweredSciSpaceResponse(state.tldr)) {
+      state.tldr = "";
     }
 
     log(
@@ -1148,38 +1181,76 @@ function sciSpaceTldrStillIncomplete(state: PaperState): boolean {
   return !descriptionUsable(state.tldr) && !tldrUsable(state.tldr);
 }
 
-function applyExtractedCard(
+export function applyExtractedCard(
   state: PaperState,
   filename: string,
   card: ReturnType<typeof extractSciSpaceCardMeta>,
   dois: string[] = [],
+  pdfText?: string,
 ): void {
+  const titleGrounded = pdfText === undefined || isTitleGroundedInPdfText(card.title, pdfText);
   if (
     card.title &&
     !looksLikeSciSpaceNav(card.title) &&
+    !looksLikeUnansweredSciSpaceResponse(card.title) &&
     !titleLooksLikeFilename(card.title, filename) &&
     !titleLooksLikeBadSciSpaceCapture(card.title) &&
     !looksLikeCitationTitle(card.title) &&
     !looksLikeVenueLine(card.title) &&
     !isDummySciSpacePaste(card.title) &&
-    !isDummySciSpacePaste(card.authors)
+    !isDummySciSpacePaste(card.authors) &&
+    !looksLikeUnansweredSciSpaceResponse(card.authors) &&
+    titleGrounded
   ) {
     state.title = card.title;
-  } else if (!state.title || isDummySciSpacePaste(state.title) || titleLooksLikeBadSciSpaceCapture(state.title)) {
-    state.title = filename.replace(/\.pdf$/i, "");
+    state.sciTitleRejected = false;
+  } else {
+    if (
+      !state.title ||
+      isDummySciSpacePaste(state.title) ||
+      titleLooksLikeBadSciSpaceCapture(state.title) ||
+      looksLikeUnansweredSciSpaceResponse(state.title) ||
+      (pdfText !== undefined && !isTitleGroundedInPdfText(state.title, pdfText))
+    ) {
+      state.title = filename.replace(/\.pdf$/i, "");
+    }
+    if (card.title && !titleLooksLikeFilename(card.title, filename)) {
+      state.sciTitleRejected = true;
+    } else {
+      state.sciTitleRejected = false;
+    }
   }
-  if (card.venue && !looksLikeSciSpaceNav(card.venue) && !venueLooksLikeBadSciSpaceCapture(card.venue)) {
+  if (
+    card.venue &&
+    !looksLikeSciSpaceNav(card.venue) &&
+    !venueLooksLikeBadSciSpaceCapture(card.venue) &&
+    !looksLikeUnansweredSciSpaceResponse(card.venue)
+  ) {
     state.venue = card.venue;
-  } else if (looksLikePublisherOrPaywall(state.venue)) {
+  } else if (looksLikePublisherOrPaywall(state.venue) || looksLikeUnansweredSciSpaceResponse(state.venue)) {
     state.venue = "";
   }
   const doi = card.doi || dois.map((d) => doiFromHrefOrText(d)).find(Boolean) || "";
   if (doi) state.doi = doi;
   const filesTldrOpener =
     /^(The paper|This paper|The study|This study|本研究|本論文)\b/i;
-  if (card.tldr && (tldrUsable(card.tldr) || descriptionUsable(card.tldr)) && filesTldrOpener.test(card.tldr)) {
+  const descGrounded = pdfText === undefined || isDescriptionGroundedInPdfText(card.tldr, pdfText);
+  if (
+    card.tldr &&
+    !looksLikeUnansweredSciSpaceResponse(card.tldr) &&
+    (tldrUsable(card.tldr) || descriptionUsable(card.tldr)) &&
+    filesTldrOpener.test(card.tldr) &&
+    descGrounded
+  ) {
     state.tldr = card.tldr;
-  }}
+  } else if (
+    pdfText !== undefined &&
+    state.tldr &&
+    !isDescriptionGroundedInPdfText(state.tldr, pdfText)
+  ) {
+    state.tldr = "";
+  }
+}
 
 const READ_SCISPACE_ABSTRACT = `(() => {
   const label = /^(abstract|tl;\\s*dr|tldr|要旨|summary)$/i;
@@ -1241,7 +1312,12 @@ async function fillTldrFallbacks(
   }
 }
 
-async function fillMetaFromRecordPage(page: Page, state: PaperState, filename: string): Promise<void> {
+async function fillMetaFromRecordPage(
+  page: Page,
+  state: PaperState,
+  filename: string,
+  pdfText?: string,
+): Promise<void> {
   log("SciSpace: Files カードが薄いので個別ページからメタを取ります");
   try {
     await page.goto(state.scispaceUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
@@ -1282,7 +1358,7 @@ async function fillMetaFromRecordPage(page: Page, state: PaperState, filename: s
     card.venue = filesCard.venue;
     card.paste = metadataPasteFromCard(card, filename);
   }
-  applyExtractedCard(state, filename, card);
+  applyExtractedCard(state, filename, card, [], pdfText);
 }
 
 export async function captureSciSpaceRecordUrl(
@@ -1381,15 +1457,16 @@ export async function runSciSpaceMeta(
     filename: string;
     paperDir: string;
     state: PaperState;
+    pdfPath?: string;
   },
 ): Promise<void> {
-  const { folderUrl, filename, paperDir, state } = opts;
+  const { folderUrl, filename, paperDir, state, pdfPath } = opts;
   const pasteOk = Boolean(rawFilesCardPaste(state.filesPaste, filename));
   if (isCompleted(state, "sci-meta") && isSciSpaceRecordUrl(state.scispaceUrl) && pasteOk) {
     return;
   }
   log("SciSpace メタを集めます");
-  await captureSciSpaceCardMeta(page, { folderUrl, filename, paperDir, state });
+  await captureSciSpaceCardMeta(page, { folderUrl, filename, paperDir, state, pdfPath });
   if (!isSciSpaceRecordUrl(state.scispaceUrl)) {
     await captureSciSpaceRecordUrl(page, { folderUrl, filename, paperDir, state });
   }
@@ -1414,5 +1491,5 @@ export async function runSciSpace(
 ): Promise<void> {
   const { folderUrl, pdfPath, filename, paperDir, state } = opts;
   await runSciSpaceUpload(page, { folderUrl, pdfPath, filename, paperDir, state });
-  await runSciSpaceMeta(page, { folderUrl, filename, paperDir, state });
+  await runSciSpaceMeta(page, { folderUrl, pdfPath, filename, paperDir, state });
 }

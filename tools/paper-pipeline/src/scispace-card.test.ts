@@ -23,6 +23,7 @@ import {
   reconcileMetaFromFilesPaste,
   looksLikeCitationTitle,
   looksLikeSciSpaceNav,
+  looksLikeUnansweredSciSpaceResponse,
   tldrUsable,
   descriptionUsable,
   descriptionLooksIncomplete,
@@ -155,6 +156,44 @@ test("eduShareSciSpaceMetadataPaste: TL;DR とアップロード行だけなら�
     "The paper discusses the concept of multiverses, particularly focusing on the Level IV multiverse, which encompasses all possible mathematical structures.",
   ].join("\n");
   assert.equal(eduShareSciSpaceMetadataPaste(row, "42c1add0da9312ee.pdf"), "");
+});
+
+test("eduShareSciSpaceMetadataPaste: sciTitleRejected 時は題名行を貼り付け文面に含めない", () => {
+  const paste = [
+    "Hallucinated Wrong Title from SciSpace",
+    "2023 · Author Name",
+    "Journal of Example",
+    "This is TL;DR text...",
+  ].join("\n");
+  const out = eduShareSciSpaceMetadataPaste(paste, "scanned_doc.pdf", {
+    currentTitle: "scanned_doc",
+    sciTitleRejected: true,
+  });
+  // 題名行は含まれず、年著者行と掲載誌行のみが出力される
+  assert.doesNotMatch(out, /Hallucinated Wrong Title/);
+  assert.match(out, /2023 · Author Name/);
+  assert.match(out, /Journal of Example/);
+});
+
+test("reconcileMetaFromFilesPaste: sciTitleRejected が true のときは題名を戻さない", () => {
+  const state = {
+    title: "scanned_doc",
+    venue: "",
+    doi: "",
+    filesPaste: [
+      "Hallucinated Wrong Title",
+      "2023 · Author Name",
+      "Journal of Example",
+    ].join("\n"),
+    filename: "scanned_doc.pdf",
+    sciTitleRejected: true,
+  };
+  const changed = reconcileMetaFromFilesPaste(state);
+  // タイトルはファイル名のまま維持される
+  assert.equal(state.title, "scanned_doc");
+  // 掲載誌は補完される
+  assert.equal(state.venue, "Journal of Example");
+  assert.equal(changed, true);
 });
 
 test("extractSciSpaceCardMeta: 雑誌名が arXiv 以外でも掲載に残す", () => {
@@ -767,3 +806,50 @@ test("looksLikeSciSpaceNav: ページ先頭の Skip to Main Content は題名に
   assert.equal(looksLikeSciSpaceNav("Skip to content"), true);
   assert.equal(looksLikeSciSpaceNav("Planck stars"), false);
 });
+
+test("looksLikeUnansweredSciSpaceResponse: 論文から答えが取れなかった返事を判定する", () => {
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not addressed in the paper."), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not addressed in the paper"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not mentioned"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("not specified"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not stated in the paper"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not provided"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Not found in the paper."), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("No information provided"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("The paper does not mention the authors"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("N/A"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("None"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("該当なし"), true);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("論文内には記載がありません"), true);
+
+  // 通常の論文タイトルや要約は false
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Attention Is All You Need"), false);
+  assert.equal(looksLikeUnansweredSciSpaceResponse("Deep Residual Learning for Image Recognition"), false);
+  assert.equal(
+    looksLikeUnansweredSciSpaceResponse(
+      "This paper proposes a novel framework for deep residual networks that achieves state of the art results.",
+    ),
+    false,
+  );
+});
+
+test("titleLooksLikeBadSciSpaceCapture: Not addressed in the paper. を弾く", () => {
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Not addressed in the paper."), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Not mentioned"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("not specified"), true);
+});
+
+test("extractSciSpaceCardMeta: Not addressed などの未回答文言はタイトル・著者・要約に採用しない", () => {
+  const paste = [
+    "test.pdf",
+    "Not addressed in the paper.",
+    "2023 · Not specified",
+    "Uploaded on 18 Sep 2026",
+    "Not mentioned in the paper.",
+  ].join("\n");
+  const meta = extractSciSpaceCardMeta(paste, "test.pdf");
+  assert.equal(meta.title, "");
+  assert.equal(meta.authors, "");
+  assert.equal(meta.tldr, "");
+});
+

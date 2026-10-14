@@ -48,7 +48,10 @@ function shouldSkipSciSpacePaste(paste: string, filename: string): boolean {
 
 function usableEduShareTitle(state: PaperState): string {
   let t = state.title.trim();
-  if (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t)) {
+  if (
+    !state.sciTitleRejected &&
+    (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t))
+  ) {
     t = extractSciSpaceCardMeta(state.filesPaste, state.filename).title.trim();
   }
   if (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t)) {
@@ -374,7 +377,10 @@ export async function runEduShareUpload(
     const metaBox = page.locator("textarea.font-mono").first();
     const paste = shouldSkipSciSpacePaste(state.filesPaste, state.filename)
       ? ""
-      : eduShareSciSpaceMetadataPaste(state.filesPaste, state.filename);
+      : eduShareSciSpaceMetadataPaste(state.filesPaste, state.filename, {
+          currentTitle: state.title,
+          sciTitleRejected: state.sciTitleRejected,
+        });
     if (paste) {
       const filled = await fillIfVisible(metaBox, paste, "SciSpace 貼り付け欄");
       if (filled) {
@@ -664,7 +670,10 @@ export async function applySciSpaceMetaToPaperPage(
   if (reconcileMetaFromFilesPaste(state)) saveState(state);
   const paste = shouldSkipSciSpacePaste(state.filesPaste, state.filename)
     ? ""
-    : eduShareSciSpaceMetadataPaste(state.filesPaste, state.filename);
+    : eduShareSciSpaceMetadataPaste(state.filesPaste, state.filename, {
+        currentTitle: state.title,
+        sciTitleRejected: state.sciTitleRejected,
+      });
   const rawTldr = state.tldr.trim();
   const tldr = sciSpaceDescriptionUsable(rawTldr)
     ? rawTldr
