@@ -92,6 +92,50 @@ test("choosePaperAuthor: 貼り付けと同じ実著者は維持する", () => {
   );
 });
 
+test("choosePaperAuthor: 貼り付けから著者が取れないときは無関係な既存著者を選ばずフォールバックする", () => {
+  const optionValues = ["", "選択してください", "A. Ashtekar", "Karl Popper", "その他"];
+  assert.equal(pickAuthorSelectValue(optionValues), "A. Ashtekar");
+
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "",
+      optionValues,
+      filesPaste: "",
+      title: "Some Paper Without Authors",
+      filename: "paper.pdf",
+    }),
+    { action: "other", value: FALLBACK_AUTHOR_NAME },
+  );
+});
+
+test("choosePaperAuthor: 貼り付けから著者が取れないときでもフォールバック名と一致する選択肢があれば選ぶ", () => {
+  const optionValues = ["", "A. Ashtekar", FALLBACK_AUTHOR_NAME, "その他"];
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "",
+      optionValues,
+      filesPaste: "",
+      title: "Some Paper Without Authors",
+      filename: "paper.pdf",
+    }),
+    { action: "select", value: FALLBACK_AUTHOR_NAME },
+  );
+});
+
+test("choosePaperAuthor: デモ著者で貼り付けが無いときも無関係な既存著者を選ばない", () => {
+  const optionValues = ["", "A. Einstein", "A. Ashtekar", "その他"];
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "A. Einstein",
+      optionValues,
+      filesPaste: "",
+      title: "Report",
+      filename: "report.pdf",
+    }),
+    { action: "other", value: FALLBACK_AUTHOR_NAME },
+  );
+});
+
 test("authorFromFilesPaste: Authors / 著者行の先頭名", () => {
   assert.equal(authorFromFilesPaste("Title: Foo\nAuthors: Jane Doe, John Smith\n"), "Jane Doe");
   assert.equal(authorFromFilesPaste("著者: 山田 太郎、鈴木"), "山田 太郎");

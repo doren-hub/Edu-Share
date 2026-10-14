@@ -62,7 +62,6 @@ export function choosePaperAuthor(input: {
   }
   const wanted =
     fromPaste ||
-    pickAuthorSelectValue(input.optionValues) ||
     fallbackAuthorName({
       filesPaste: input.filesPaste,
       title: input.title,
@@ -79,10 +78,6 @@ export function choosePaperAuthor(input: {
         authorNamesMatch(v, wanted),
     );
   if (match) return { action: "select", value: match };
-  if (!fromPaste) {
-    const existing = pickAuthorSelectValue(input.optionValues);
-    if (existing) return { action: "select", value: existing };
-  }
   return { action: "other", value: wanted };
 }
 
