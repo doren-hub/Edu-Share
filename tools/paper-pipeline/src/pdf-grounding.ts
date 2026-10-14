@@ -52,12 +52,15 @@ export function extractSignificantWords(text: string): string[] {
   words.push(...latinTokens);
 
   // 2. 日本語・CJK文字（漢字・ひらがな・カタカナ）：
-  // 空白で区切られないため、文字の連続から 2文字の bigram を抽出して語彙とする
+  // 空白で区切られないため、文字の連続から 2文字の bigram を抽出して語彙とする。
+  // ただし「した」「ける」等のひらがなのみの組は助詞・語尾ノイズとなるため除外する。
   const cjkChunks = lower.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu) ?? [];
   for (const chunk of cjkChunks) {
     if (chunk.length < 2) continue;
     for (let i = 0; i < chunk.length - 1; i++) {
-      words.push(chunk.slice(i, i + 2));
+      const bg = chunk.slice(i, i + 2);
+      if (/^[\p{Script=Hiragana}]{2}$/u.test(bg)) continue;
+      words.push(bg);
     }
   }
 

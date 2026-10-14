@@ -1216,6 +1216,8 @@ export function applyExtractedCard(
     }
     if (card.title && !titleLooksLikeFilename(card.title, filename)) {
       state.sciTitleRejected = true;
+    } else {
+      state.sciTitleRejected = false;
     }
   }
   if (
