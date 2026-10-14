@@ -71,7 +71,9 @@ export function isTitleGroundedInPdfText(title: string, pdfText: string): boolea
   if (!cleanTitle) return false;
 
   const prefix = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS).toLowerCase();
-  if (prefix.includes(cleanTitle.toLowerCase())) return true;
+  const normalizedPrefix = prefix.replace(/\s+/g, " ");
+  const normalizedTitle = cleanTitle.toLowerCase().replace(/\s+/g, " ");
+  if (normalizedPrefix.includes(normalizedTitle)) return true;
 
   const words = extractSignificantWords(cleanTitle);
   if (words.length === 0) {

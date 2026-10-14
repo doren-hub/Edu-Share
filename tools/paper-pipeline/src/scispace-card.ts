@@ -418,7 +418,8 @@ export function reconcileMetaFromFilesPaste(
   if (
     card.title &&
     !titleLooksLikeFilename(card.title, state.filename) &&
-    (titleLooksLikeBadSciSpaceCapture(state.title) || !state.title.trim())
+    !looksLikeUnansweredSciSpaceResponse(card.title) &&
+    (titleLooksLikeBadSciSpaceCapture(state.title) || looksLikeUnansweredSciSpaceResponse(state.title) || !state.title.trim())
   ) {
     state.title = card.title;
     changed = true;
