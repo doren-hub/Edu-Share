@@ -71,6 +71,7 @@ We evaluate these residual networks on the ImageNet dataset with a depth of up t
   applyExtractedCard(state, "resnet.pdf", card, [], pdfText);
 
   assert.equal(state.title, "Deep Residual Learning for Image Recognition");
+  assert.equal(state.sciTitleRejected, false);
   assert.match(state.tldr, /residual learning framework/);
 });
 
@@ -103,5 +104,7 @@ with reference to the layer inputs.
 
   // 本文と合わない題名はファイル名に、合わない説明は空に
   assert.equal(state.title, "resnet");
+  assert.equal(state.sciTitleRejected, true);
   assert.equal(state.tldr, "");
 });
+

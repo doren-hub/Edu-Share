@@ -411,11 +411,19 @@ export function hasBadPaperMeta(state: {
 
 /** Files 行の方が正しいとき、state のタイトル・掲載・DOI を戻す */
 export function reconcileMetaFromFilesPaste(
-  state: { title: string; venue: string; doi: string; filesPaste: string; filename: string },
+  state: {
+    title: string;
+    venue: string;
+    doi: string;
+    filesPaste: string;
+    filename: string;
+    sciTitleRejected?: boolean;
+  },
 ): boolean {
   const card = extractSciSpaceCardMeta(state.filesPaste, state.filename);
   let changed = false;
   if (
+    !state.sciTitleRejected &&
     card.title &&
     !titleLooksLikeFilename(card.title, state.filename) &&
     !looksLikeUnansweredSciSpaceResponse(card.title) &&
@@ -473,9 +481,19 @@ export function isTldrBodyLine(s: string): boolean {
 export function metadataPasteFromCard(
   card: Pick<SciSpaceCardMeta, "title" | "yearAuthorLine" | "venue">,
   filename: string,
+  options?: { currentTitle?: string; sciTitleRejected?: boolean },
 ): string {
-  const title =
+  let title =
     card.title && !titleLooksLikeFilename(card.title, filename) ? card.title.trim() : "";
+  if (options?.sciTitleRejected) {
+    title = "";
+  } else if (
+    options?.currentTitle &&
+    titleLooksLikeFilename(options.currentTitle, filename) &&
+    card.title.trim() !== options.currentTitle.trim()
+  ) {
+    title = "";
+  }
   return [title, card.yearAuthorLine, card.venue]
     .map((l) => l.trim())
     .filter(Boolean)
@@ -484,10 +502,14 @@ export function metadataPasteFromCard(
 }
 
 /** Edu Share のメタ貼り付け欄。Files 原文や TL;DR 本文は入れない */
-export function eduShareSciSpaceMetadataPaste(paste: string, filename: string): string {
+export function eduShareSciSpaceMetadataPaste(
+  paste: string,
+  filename: string,
+  options?: { currentTitle?: string; sciTitleRejected?: boolean },
+): string {
   if (isDummySciSpacePaste(paste)) return "";
   const card = extractSciSpaceCardMeta(paste, filename);
-  const out = metadataPasteFromCard(card, filename);
+  const out = metadataPasteFromCard(card, filename, options);
   if (!out) return "";
   if (isDummySciSpacePaste(out) || isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors)) return "";
   if (!card.yearAuthorLine && titleLooksLikeFilename(card.title, filename)) return "";

@@ -158,6 +158,44 @@ test("eduShareSciSpaceMetadataPaste: TL;DR とアップロード行だけなら�
   assert.equal(eduShareSciSpaceMetadataPaste(row, "42c1add0da9312ee.pdf"), "");
 });
 
+test("eduShareSciSpaceMetadataPaste: sciTitleRejected 時は題名行を貼り付け文面に含めない", () => {
+  const paste = [
+    "Hallucinated Wrong Title from SciSpace",
+    "2023 · Author Name",
+    "Journal of Example",
+    "This is TL;DR text...",
+  ].join("\n");
+  const out = eduShareSciSpaceMetadataPaste(paste, "scanned_doc.pdf", {
+    currentTitle: "scanned_doc",
+    sciTitleRejected: true,
+  });
+  // 題名行は含まれず、年著者行と掲載誌行のみが出力される
+  assert.doesNotMatch(out, /Hallucinated Wrong Title/);
+  assert.match(out, /2023 · Author Name/);
+  assert.match(out, /Journal of Example/);
+});
+
+test("reconcileMetaFromFilesPaste: sciTitleRejected が true のときは題名を戻さない", () => {
+  const state = {
+    title: "scanned_doc",
+    venue: "",
+    doi: "",
+    filesPaste: [
+      "Hallucinated Wrong Title",
+      "2023 · Author Name",
+      "Journal of Example",
+    ].join("\n"),
+    filename: "scanned_doc.pdf",
+    sciTitleRejected: true,
+  };
+  const changed = reconcileMetaFromFilesPaste(state);
+  // タイトルはファイル名のまま維持される
+  assert.equal(state.title, "scanned_doc");
+  // 掲載誌は補完される
+  assert.equal(state.venue, "Journal of Example");
+  assert.equal(changed, true);
+});
+
 test("extractSciSpaceCardMeta: 雑誌名が arXiv 以外でも掲載に残す", () => {
   const row = [
     "Eternal86.pdf",

@@ -41,18 +41,27 @@ export const STOP_WORDS = new Set([
 
 /** テキストから主要な単語（小文字・重複なし）を取り出す */
 export function extractSignificantWords(text: string): string[] {
-  const tokens = text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+  const words: string[] = [];
+  const lower = text.toLowerCase();
+
+  // 1. ラテン文字・英数字の単語（空白区切り、3文字以上、ストップワード除外）
+  const latinTokens = lower
+    .replace(/[^\p{Script=Latin}\p{N}\s]/gu, " ")
     .split(/\s+/)
-    .filter((w) => {
-      if (!w) return false;
-      if (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(w)) {
-        return w.length >= 2;
-      }
-      return w.length >= 3 && !STOP_WORDS.has(w);
-    });
-  return Array.from(new Set(tokens));
+    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+  words.push(...latinTokens);
+
+  // 2. 日本語・CJK文字（漢字・ひらがな・カタカナ）：
+  // 空白で区切られないため、文字の連続から 2文字の bigram を抽出して語彙とする
+  const cjkChunks = lower.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu) ?? [];
+  for (const chunk of cjkChunks) {
+    if (chunk.length < 2) continue;
+    for (let i = 0; i < chunk.length - 1; i++) {
+      words.push(chunk.slice(i, i + 2));
+    }
+  }
+
+  return Array.from(new Set(words));
 }
 
 /** テキストがほとんど無い（スキャン）PDF かどうか */
@@ -74,6 +83,11 @@ export function isTitleGroundedInPdfText(title: string, pdfText: string): boolea
   const normalizedPrefix = prefix.replace(/\s+/g, " ");
   const normalizedTitle = cleanTitle.toLowerCase().replace(/\s+/g, " ");
   if (normalizedPrefix.includes(normalizedTitle)) return true;
+
+  // 日本語など空白なしで連続する題名：空白・記号を除去しての直接照合
+  const noSpaceTitle = cleanTitle.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  const noSpacePrefix = prefix.replace(/[\s\p{P}\p{S}]/gu, "");
+  if (noSpaceTitle.length >= 4 && noSpacePrefix.includes(noSpaceTitle)) return true;
 
   const words = extractSignificantWords(cleanTitle);
   if (words.length === 0) {
@@ -102,6 +116,14 @@ export function isDescriptionGroundedInPdfText(description: string, pdfText: str
   if (!cleanDesc) return false;
 
   const fullLower = pdfText.toLowerCase();
+
+  // 空白・記号を除去した長い連続一致があれば確実にグラウンディングされている
+  const noSpaceDesc = cleanDesc.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  const noSpaceFull = fullLower.replace(/[\s\p{P}\p{S}]/gu, "");
+  if (noSpaceDesc.length >= 15 && noSpaceFull.includes(noSpaceDesc.slice(0, 30))) {
+    return true;
+  }
+
   const words = extractSignificantWords(cleanDesc);
   if (words.length === 0) return false;
 
@@ -116,3 +138,4 @@ export function isDescriptionGroundedInPdfText(description: string, pdfText: str
   const minMatches = Math.min(MIN_DESCRIPTION_MATCHED_WORDS, words.length);
   return ratio >= MIN_DESCRIPTION_WORD_MATCH_RATIO && matched >= minMatches;
 }
+

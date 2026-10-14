@@ -107,3 +107,55 @@ test("extractSignificantWords: ストップワードと記号を除き、小文�
   const words = extractSignificantWords("The quick, brown Fox jumps over the lazy Dog! And a paper study.");
   assert.deepEqual(words, ["quick", "brown", "fox", "jumps", "lazy", "dog"]);
 });
+
+test("extractSignificantWords: 日本語テキストから bigram を抽出する", () => {
+  const words = extractSignificantWords("教育支援システム");
+  assert.ok(words.includes("教育"));
+  assert.ok(words.includes("育支"));
+  assert.ok(words.includes("支援"));
+  assert.ok(words.includes("援シ"));
+});
+
+test("isTitleGroundedInPdfText: 日本語の論文題名が本文先頭にあれば採用する", () => {
+  const samplePdf = `
+大規模言語モデルを用いた教育支援システムの有効性検証
+山田太郎, 佐藤花子
+東京大学
+
+概要
+本研究では、大規模言語モデルを活用した教育支援システムの構築を行い、
+実際のプログラミング講義における学習効果と課題について分析を行った。
+受講生の質問履歴およびコード修正ログを解析した結果、自律的な学習支援において
+有意な改善傾向が確認された。
+`.trim();
+
+  // 完全一致
+  assert.equal(isTitleGroundedInPdfText("大規模言語モデルを用いた教育支援システムの有効性検証", samplePdf), true);
+  // 部分一致
+  assert.equal(isTitleGroundedInPdfText("大規模言語モデルを用いた教育支援システム", samplePdf), true);
+  // 別の日本語題名（弾かれる）
+  assert.equal(isTitleGroundedInPdfText("古代ローマ建築におけるコンクリート構造の力学的特性", samplePdf), false);
+});
+
+test("isDescriptionGroundedInPdfText: 日本語の説明が本文と合致すれば採用し、異なれば弾く", () => {
+  const samplePdf = `
+大規模言語モデルを用いた教育支援システムの有効性検証
+山田太郎, 佐藤花子
+東京大学
+
+概要
+本研究では、大規模言語モデルを活用した教育支援システムの構築を行い、
+実際のプログラミング講義における学習効果と課題について分析を行った。
+受講生の質問履歴およびコード修正ログを解析した結果、自律的な学習支援において
+有意な改善傾向が確認された。
+`.trim();
+
+  // 本文と合致する説明
+  const matchingDesc = "本研究では、大規模言語モデルを活用した教育支援システムを構築し、プログラミング講義における学習効果を検証した。";
+  assert.equal(isDescriptionGroundedInPdfText(matchingDesc, samplePdf), true);
+
+  // まったく別の日本語論文の要約
+  const foreignDesc = "本研究では、江戸時代中期の幕府勘定所における出納記録を史料批判し、年貢収納の実態を明らかにする。";
+  assert.equal(isDescriptionGroundedInPdfText(foreignDesc, samplePdf), false);
+});
+

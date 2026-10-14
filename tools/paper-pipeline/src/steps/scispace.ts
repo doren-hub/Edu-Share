@@ -1203,14 +1203,20 @@ export function applyExtractedCard(
     titleGrounded
   ) {
     state.title = card.title;
-  } else if (
-    !state.title ||
-    isDummySciSpacePaste(state.title) ||
-    titleLooksLikeBadSciSpaceCapture(state.title) ||
-    looksLikeUnansweredSciSpaceResponse(state.title) ||
-    (pdfText !== undefined && !isTitleGroundedInPdfText(state.title, pdfText))
-  ) {
-    state.title = filename.replace(/\.pdf$/i, "");
+    state.sciTitleRejected = false;
+  } else {
+    if (
+      !state.title ||
+      isDummySciSpacePaste(state.title) ||
+      titleLooksLikeBadSciSpaceCapture(state.title) ||
+      looksLikeUnansweredSciSpaceResponse(state.title) ||
+      (pdfText !== undefined && !isTitleGroundedInPdfText(state.title, pdfText))
+    ) {
+      state.title = filename.replace(/\.pdf$/i, "");
+    }
+    if (card.title && !titleLooksLikeFilename(card.title, filename)) {
+      state.sciTitleRejected = true;
+    }
   }
   if (
     card.venue &&
