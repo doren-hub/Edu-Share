@@ -23,7 +23,7 @@ import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
 import { formatStudioGenerateArg, formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
 
-import { emptyGiveUpTrack, noteDisconnect, noteFailRound, noteWaiting, type GiveUpTrack } from "./give-up.ts";
+import { emptyGiveUpTrack, holdWaiting, noteDisconnect, noteFailRound, noteWaiting, type GiveUpTrack } from "./give-up.ts";
 
 const MAX_FAIL_RETRIES = 3;
 const CHROME_UNLOCK_MS = 2_500;
@@ -257,6 +257,7 @@ async function main(): Promise<void> {
     if (code === EXIT_QUOTA) {
       const state = loadPaperState(track.item);
       applyKickoff(job, state, skip, cfg.studioGenerate);
+      holdWaiting(track.giveUp, Date.now());
       job.status = "waiting";
       job.nextCheckAt = Date.now() + 60_000;
       log(
@@ -271,7 +272,10 @@ async function main(): Promise<void> {
       const state = loadPaperState(track.item);
       applyKickoff(job, state, skip, cfg.studioGenerate);
       const stage = state.waitingFor || "nlm-video";
-      if (noteWaiting(track.giveUp, stage, Date.now())) {
+      const cooldownUntil = retryUntilMs(state);
+      if (generationBlocked || cooldownUntil > Date.now()) {
+        holdWaiting(track.giveUp, Date.now());
+      } else if (noteWaiting(track.giveUp, stage, Date.now())) {
         job.status = "failed";
         failed.push(track.item.filename);
         warn(
@@ -279,7 +283,6 @@ async function main(): Promise<void> {
         );
         continue;
       }
-      const cooldownUntil = retryUntilMs(state);
       if (!job.kickoffSettled && !generationBlocked && cooldownUntil <= Date.now()) {
         job.status = "ready";
         job.nextCheckAt = 0;

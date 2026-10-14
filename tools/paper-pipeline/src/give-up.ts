@@ -33,6 +33,11 @@ export function noteWaiting(track: GiveUpTrack, stage: string, now: number, limi
   return now - track.waitSince > limitMs;
 }
 
+/** 利用量待ちやクールダウンの間は、こちらの都合で止めているだけなので待ち時間に数えない */
+export function holdWaiting(track: GiveUpTrack, now: number): void {
+  if (track.waitSince > 0) track.waitSince = now;
+}
+
 /** 3回失敗の1巡を記録する。上限に達したら true（あきらめる） */
 export function noteFailRound(track: GiveUpTrack): boolean {
   track.failRounds += 1;
