@@ -6,12 +6,16 @@ kurukuru v0.14.0 による開発ループへの切り替え（PR #91）を元に
 
 ## 1. PR の revert
 
-GitHub の PR 画面から「Revert」を押すか、Git でマージコミットを revert します。
+GitHub の PR 画面から「Revert」を押すか、Git でコミットを revert します。
+（本ワークフローでは Squash merge を基本としているため、単一コミットを revert します。通常の Merge commit で取り込んだ場合は `git revert -m 1 <merge_commit_sha>` を使用してください）
 
 ```bash
 git fetch origin main
 git checkout -b revert/adopt-kurukuru origin/main
-git revert -m 1 <merge_commit_sha>
+# Squash merge の場合:
+git revert <squash_commit_sha>
+# 通常のマージコミットの場合:
+# git revert -m 1 <merge_commit_sha>
 git push -u origin revert/adopt-kurukuru
 ```
 
