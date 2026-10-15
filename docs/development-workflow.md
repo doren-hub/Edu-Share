@@ -1,78 +1,161 @@
-# Antigravity への実装の委任
+# Autonomous development workflow
 
-Edu Share の Issue の実装を、Antigravity CLI (`agy`) に 1 件ずつ任せる。KotoLink と同じ方法で、Claude のレビューが `OK` になるまで直してからマージする。決まりは [AGENTS.md](../AGENTS.md) にある。
+The repository is delivered as a sequence of small, independently reviewed issues. The default is continuous implementation without waiting for routine user approval.
 
-## Issue のライフサイクル
-
-```text
-ランナーが専用の作業木を用意し、agy を起動
-  -> ブランチ作成・空コミット・Draft PR (Closes #N)
-  -> 実装と検証 (npm run lint / npm test / 必要なら tools/paper-pipeline の npm test)
-  -> Claude レビュー (scripts/claude-review.sh)
-  -> 修正と同一セッションでの再レビューを OK まで
-  -> 範囲外の改善は新規 Issue に
-  -> PR 本文の更新 → Ready → CI 確認 → マージ
-  -> Issue クローズ確認 → 終了
-```
-
-## 実行方法
-
-Mac のターミナルで、元のフォルダから実行する。
-
-```bash
-scripts/run-issues.sh 82          # Issue #82 を処理
-scripts/run-issues.sh 82 83       # 指定した Issue を順に処理
-```
-
-- `agy` は専用の作業木 `../edu-share-app-agy` で動く。無ければ `origin/main` から作り、`npm ci` する。元のフォルダの開発サーバーには影響しない。
-- 作業木に `.env.local` があると起動しない（本番の DB・R2 に触れさせないため）。
-- Issue ごとに新しい `agy -p` セッションを起動するため、会話コンテキストが溜まらない。
-- セッションは `EDUSHARE_SESSION_TIMEOUT`（既定 `90m`）で打ち切られる。固まった場合は同じ Issue を新しいセッションで再開する（既定 2 回まで）。ブランチと Draft PR が残っているので続きから進む。
-- ログは `.run-issues/issue-<N>-attempt-<k>.log`。
-- `ai-dispatch-log` があれば、ランナーがセッションごとに `start` / `finish` / `antigravity-attach` を記録する。
-
-| 環境変数 | 既定値 | 内容 |
-| --- | --- | --- |
-| `EDUSHARE_AGY_MODEL` | （agy の既定） | 使用モデル |
-| `EDUSHARE_AGY_ARGS` | `--dangerously-skip-permissions` | agy への追加引数。非対話では権限確認に応答できないため既定で省略する |
-| `EDUSHARE_AGY_WORKTREE` | `../edu-share-app-agy` | agy の作業木 |
-| `EDUSHARE_SESSION_TIMEOUT` | `90m` | 1 セッションの上限時間 |
-| `EDUSHARE_STALL_RETRIES` | `2` | タイムアウト時の再開回数 |
-| `EDUSHARE_LIMIT_WAIT` / `EDUSHARE_LIMIT_RETRIES` | `1800` / `6` | 利用制限時の待機秒数と再試行回数 |
-
-| 終了コード | 意味 |
-| --- | --- |
-| 0 | 指定した Issue がすべてクローズ |
-| 1 | agy の失敗、作業木の準備の失敗、またはタイムアウトの上限超過（ログを確認） |
-| 2 | セッションは終了したが Issue が開いたまま |
-| 64 | 引数・環境の誤り |
-| 70 | agy の認証切れ（`agy` を一度対話起動してログイン） |
-| 71 | 利用制限が続いた |
-
-ランナーを変更したら `scripts/test-run-issues.sh` を実行する。
-
-### 対話で依頼する場合
-
-Antigravity エディタで作業木 `../edu-share-app-agy` を開き、チャットに次を送る。
+## Issue lifecycle
 
 ```text
-AGENTS.md と docs/development-workflow.md に従い、Issue #<N> だけを完了させてください。
+select next unblocked issue
+  -> branch and empty kickoff commit
+  -> Draft PR with Closes #N
+  -> implement and verify
+  -> Claude Opus 5.5 review (low effort)
+  -> fix and re-review until OK
+  -> create follow-up issues for out-of-scope improvements
+  -> update PR body and mark ready
+  -> merge PR
+  -> verify issue closed
+  -> select next issue
 ```
 
-## Claude レビュー
+Only one implementation issue may be active in this loop. A newly discovered follow-up issue is recorded but not started until the active issue is merged.
 
-```bash
-scripts/claude-review.sh <issue> <pr>                         # 初回
-scripts/claude-review.sh <issue> <pr> "<修正内容とテスト結果>"   # 再レビュー
+## Selecting the next issue
+
+1. Follow the owner’s explicitly requested issue scope and order. Otherwise, use the order in `docs/roadmap.md` if it exists; if it does not, select from open GitHub issues using repository priorities and dependencies.
+2. Skip an issue only when an unresolved dependency makes it impossible to complete.
+3. Prefer the earliest unblocked prerequisite instead.
+4. Record any ordering change in the relevant issue.
+
+## Sessions and context budget
+
+Run each issue in its own Antigravity session, preferably with `kurukuru run <issue>...`, so conversation context does not accumulate across issues.
+
+- At the start of each session, read only `AGENTS.md`, this workflow, the target issue, and `docs/roadmap.md` if it exists. Read design notes, README, and other files only when the issue needs them.
+- If the runner owns dispatch recording, do not duplicate it. Otherwise, if `ai-dispatch-log` is available, record every session separately: run `ai-dispatch-log start` when the session begins, and `ai-dispatch-log finish` followed by `ai-dispatch-log codex-attach` before it exits, including when it stops on a failure.
+- Read only failures from test and lint output (for example pipe through `tail -n 30` or `grep -E 'FAIL|ERROR'`).
+- Locally run the tests for changed code (using the configured test command and its relevant filters) and leave the full suite to CI unless the change affects shared code.
+- Wait for a Claude review or CI with one blocking command (`gh pr checks <pr> --watch`) instead of repeated status polling.
+
+## Starting work
+
+1. Update local `main` with a fast-forward-only pull.
+2. Create `codex/<short-description>` from `main`.
+3. Create an empty commit named `chore: start issue <N>`.
+4. Push the branch.
+5. Open a Draft PR immediately and include `Closes #N`.
+
+## Implementation and verification
+
+- Implement only the issue acceptance criteria and necessary supporting work.
+- Add tests proportional to risk. Tests must not touch the network or real GitHub or AI CLIs.
+- Run the repository verification commands:
+
+- Test: `npm test`
+- Lint: `npm run lint`
+
+- Keep the PR body current when scope or verification results change.
+- Do not hide failing checks or describe an unverified result as passing.
+
+## Claude review
+
+The review must use Claude Code with:
+
+```text
+model: claude-opus-5-5
+effort: low
+session: persistent per issue/PR
+mode: read-only
 ```
 
-- 終了コード: 0 = `OK`、2 = 指摘あり、1 = 実行エラー（変更なしでの再実行を含む）、64 = 引数の誤り。
-- モデルは `claude-opus-5-5`、推論量は low（`EDUSHARE_CLAUDE_MODEL` / `EDUSHARE_CLAUDE_EFFORT` で変更可）。
-- Issue ごとに `.review/<issue>/session_id` を保持し、再レビューは同じセッションを再開する。前回レビューしたコミット以降の差分だけを送る。
-- レビュー全文と判定は PR にコメントとして投稿される（`EDUSHARE_REVIEW_COMMENT=0` で無効）。
-- Claude は読み取り専用。ファイル参照、`git diff/log/show/status`、`npm run lint`、`npm test` だけを実行できる。
-- レビュー用スクリプトを変更したら `scripts/test-claude-review.sh` を実行する。
+Run `kurukuru review <issue> <pr>` for the first review and `kurukuru review <issue> <pr> "<what changed, test results>"` for each re-review. The script tells Claude to:
 
-## 停止条件
+- review the issue requirements and the complete PR diff;
+- prioritize correctness, regressions, security, data loss, concurrency, permissions, and missing tests;
+- cite files and lines for actionable findings;
+- distinguish blocking findings from optional, out-of-scope improvements;
+- return a final standalone `OK` only when no actionable in-scope findings remain.
 
-通常のレビューやマージの判断では止まらない。止まって質問するのは AGENTS.md の「自律性」に書いた場合だけ。
+Additional repository review notes:
+
+- 本番の DB・R2 を壊しうる変更（削除、広い範囲の書き換え、マイグレーションの安全性）
+
+
+## Reviewer permissions and CI evidence
+
+Same-repository PRs may use configured `review_allowed` Bash rules (including
+explicit rules for the configured `test` and `lint` commands), plus `git diff`,
+`git log`, `git show`, and `git status`. These commands run in Claude Code's
+sandbox: repository writes and network access are denied, unsandboxed fallback
+is disabled, and startup fails if sandboxing is unavailable. Use temporary
+storage for probes; tests requiring repository writes or network access must be
+run by the caller and their results supplied as context. Never edit, commit,
+push, merge, change GitHub state, or read credentials, `.env*`, or `auth.json`.
+Fork and unknown-origin PRs use Read/Glob/Grep only; `review_allowed` is ignored
+and this restriction is stated in the warning, review instructions, and comment.
+Origin is established by matching the head and base repository identities at
+the reviewed SHA, never by branch name or PR author. The caller supplies issue,
+PR, diff, and `gh pr checks` results tied to the reviewed head SHA in both modes.
+The caller also runs tests/lint that the reviewer cannot execute and supplies
+results with the reviewed SHA through the optional context argument. In
+Read/Glob/Grep-only mode the reviewer must not run shell, Git, tests, lint, or
+network tools, or expand permissions to obtain missing evidence. Report missing
+evidence to the caller instead. The reviewer must not call `ai-dispatch-log`;
+the caller or runner owns dispatch recording. Refresh evidence on re-review
+while preserving the same Claude session.
+CI states distinguish not run, pending, failed, skipped, and unavailable from
+passed; a changed head invalidates the check snapshot. CI is evidence, not a
+substitute for independent review.
+
+## Claude conversation storage
+
+If reviewer conversation storage is restricted, use the runner's normal approval/escalation mechanism for `kurukuru review`. Never disable the sandbox or bypass approval. Keep the reviewer's read-only permissions unchanged; do not grant unrestricted access to `~/.claude`.
+
+Claude must save the conversation under `~/.claude/projects/<encoded-repo>/`
+(or the corresponding `CLAUDE_CONFIG_DIR/projects/` directory) so re-reviews can
+resume the same session. `kurukuru review` checks for a nonempty session JSONL
+file after execution, including failed calls. `kurukuru doctor` checks recorded
+review sessions without launching Claude or reading transcript contents. These
+are metadata checks, not proof that a future resume will succeed. Before the
+first review, doctor reports that storage has not yet been checked.
+
+Project-folder naming is a compatibility assumption about Claude Code, not a
+stable public API: the resolved absolute repository path has each character
+outside ASCII letters and digits replaced with one `-` (including separators,
+spaces, punctuation and non-ASCII characters). Symlink paths use their resolved
+target. If Claude changes this convention, a warning may mean the lookup needs
+updating; preserve the session and investigate before attempting recovery.
+
+If a warning appears, preserve the session ID and all evidence, correct the
+execution permissions through normal approval, and retry the same session.
+Do not silently create a replacement session. If the conversation was never
+saved and resume fails, report the lost session and obtain an explicit owner
+recovery decision. Diagnostics never change permissions or create home folders.
+
+## Handling findings
+
+- Fix every actionable in-scope finding and rerun relevant checks.
+- Resume the same Claude session for re-review.
+- Repeat until the final verdict is `OK`.
+- Convert valuable out-of-scope improvements into new issues with context, rationale, and acceptance criteria.
+- Link follow-up issues from the current PR without adding them to the current implementation scope.
+
+## Completion
+
+After Claude returns `OK` and CI passes:
+
+1. Update the PR body with the final summary, tests, limitations, and follow-up issues.
+2. Mark the PR ready for review.
+3. Merge with squash merge and delete the remote branch.
+4. Confirm the `Closes #N` issue is closed; close it manually only if GitHub did not do so.
+5. Synchronize local `main` and, if the owner’s requested scope includes more issues, select the next unblocked issue using the selection rules above.
+
+## Stop conditions
+
+Routine review and merge decisions are not stop conditions. Pause and ask the user only for:
+
+- authority outside the repository or workflow already granted;
+- credentials or interactive account actions that cannot be completed autonomously;
+- a material product decision with multiple incompatible outcomes;
+- an unsafe or destructive ambiguity that cannot be resolved from repository evidence;
+- repeated failure of required external infrastructure after safe retries and available alternatives are exhausted.

@@ -1,0 +1,21 @@
+version = "0.14.0"
+test = "npm test"
+lint = "npm run lint"
+review_allowed = ["Bash(npm test:*)", "Bash(npm run lint:*)"]
+review_notes = [
+  "本番の DB・R2 を壊しうる変更（削除、広い範囲の書き換え、マイグレーションの安全性）",
+]
+constraints = [
+  "終了しないコマンド（npm run dev, npm start, next start, --watch, tail -f など）を実行しない",
+  "curl を使うときは必ず -m <秒> を付ける",
+]
+
+[runner]
+kind = "agy"
+limit_retries = 6
+stall_retries = 2
+deny_files = [".env.local", ".env.*", "db_cluster-*.backup.gz"]
+setup = "test -d node_modules || npm ci"
+worktree = true
+worktree_path = "../edu-share-app-agy"
+args = "--dangerously-skip-permissions"
