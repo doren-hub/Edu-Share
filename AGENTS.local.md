@@ -8,11 +8,6 @@
 - **終了しないコマンドを実行しない。** `npm run dev`、`npm start`、`next start`、`--watch`、`tail -f`、対話的なプロンプトは使わない。
 - **curl を使うときは必ず `-m <秒>` を付ける。**
 
-### ランナー（Antigravity）固有の規則・上書き
-
-- **ブランチ名**: ランナーが Antigravity（agy）の場合、ブランチ名は `antigravity/<短い内容>` を使用する（テンプレートの `codex/<short-description>` を上書き）。
-- **セッション記録**: 対話実行でエージェントが記録を行う場合は、`ai-dispatch-log finish` の後に `ai-dispatch-log antigravity-attach` を使用する（テンプレートの `codex-attach` を上書き）。`kurukuru run` 経由ではランナーが記録を行うためエージェント自身は実行しない。
-
 ### 作業環境・他セッションへの配慮
 
 - 作業は専用の作業木（既定は `../edu-share-app-agy`）の中だけで行う。元のフォルダ `edu-share-app` では開発サーバーが動いているので、ブランチの切り替え、`next build`、ファイルの変更をしない。

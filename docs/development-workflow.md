@@ -32,7 +32,7 @@ Only one implementation issue may be active in this loop. A newly discovered fol
 Run each issue in its own Antigravity session, preferably with `kurukuru run <issue>...`, so conversation context does not accumulate across issues.
 
 - At the start of each session, read only `AGENTS.md`, this workflow, the target issue, and `docs/roadmap.md` if it exists. Read design notes, README, and other files only when the issue needs them.
-- If the runner owns dispatch recording, do not duplicate it. Otherwise, if `ai-dispatch-log` is available, record every session separately: run `ai-dispatch-log start` when the session begins, and `ai-dispatch-log finish` followed by `ai-dispatch-log codex-attach` before it exits, including when it stops on a failure.
+- If the runner owns dispatch recording, do not duplicate it. Otherwise, if `ai-dispatch-log` is available, record every session separately: run `ai-dispatch-log start` when the session begins, and `ai-dispatch-log finish` followed by `ai-dispatch-log antigravity-attach` before it exits, including when it stops on a failure.
 - Read only failures from test and lint output (for example pipe through `tail -n 30` or `grep -E 'FAIL|ERROR'`).
 - Locally run the tests for changed code (using the configured test command and its relevant filters) and leave the full suite to CI unless the change affects shared code.
 - Wait for a Claude review or CI with one blocking command (`gh pr checks <pr> --watch`) instead of repeated status polling.
@@ -40,7 +40,7 @@ Run each issue in its own Antigravity session, preferably with `kurukuru run <is
 ## Starting work
 
 1. Update local `main` with a fast-forward-only pull.
-2. Create `codex/<short-description>` from `main`.
+2. Create `antigravity/<short-description>` from `main`.
 3. Create an empty commit named `chore: start issue <N>`.
 4. Push the branch.
 5. Open a Draft PR immediately and include `Closes #N`.

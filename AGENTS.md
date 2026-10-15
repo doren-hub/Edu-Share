@@ -5,7 +5,7 @@ Follow [docs/development-workflow.md](docs/development-workflow.md) for all impl
 ## Required delivery loop
 
 1. Work on exactly one open implementation issue at a time, following the issue selection rules in `docs/development-workflow.md`.
-2. Create a branch named `codex/<short-description>`.
+2. Create a branch named `antigravity/<short-description>`.
 3. At the beginning of the issue, create an empty kickoff commit, push the branch, and open a Draft PR containing `Closes #<issue>`.
 4. Implement the complete issue, including tests, static checks, documentation, and PR-body updates.
 5. Run an independent Claude Code review with Claude Opus 5.5 at low effort (`kurukuru review <issue> <pr>`). Preserve and reuse the same Claude review session for every re-review of that PR.
@@ -43,11 +43,6 @@ Run each issue in a fresh Antigravity session (`kurukuru run`) and follow the co
 
 - **終了しないコマンドを実行しない。** `npm run dev`、`npm start`、`next start`、`--watch`、`tail -f`、対話的なプロンプトは使わない。
 - **curl を使うときは必ず `-m <秒>` を付ける。**
-
-### ランナー（Antigravity）固有の規則・上書き
-
-- **ブランチ名**: ランナーが Antigravity（agy）の場合、ブランチ名は `antigravity/<短い内容>` を使用する（テンプレートの `codex/<short-description>` を上書き）。
-- **セッション記録**: 対話実行でエージェントが記録を行う場合は、`ai-dispatch-log finish` の後に `ai-dispatch-log antigravity-attach` を使用する（テンプレートの `codex-attach` を上書き）。`kurukuru run` 経由ではランナーが記録を行うためエージェント自身は実行しない。
 
 ### 作業環境・他セッションへの配慮
 
