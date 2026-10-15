@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+
+set -u
+
+usage() {
+  printf 'Usage: %s <instruction-file>\n' "${0##*/}" >&2
+}
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g; s/\n/\\n/g'
+}
+
+classify_failure() {
+  output=$1
+  exit_code=$2
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'success'
+  elif printf '%s' "$output" | grep -Eiq 'quota|rate.?limit|usage.?limit|resource.?exhausted|利用上限'; then
+    printf 'usage_limit'
+  elif printf '%s' "$output" | grep -Eiq 'unauth|forbidden|credential|login|auth(entication|orization)?|認証'; then
+    printf 'authentication'
+  elif [ "$exit_code" -eq 124 ] || printf '%s' "$output" | grep -Eiq 'time.?out|deadline exceeded|時間切れ'; then
+    printf 'timeout'
+  else
+    printf 'other'
+  fi
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
+  exit 2
+fi
+
+instruction_file=$1
+if [ ! -f "$instruction_file" ]; then
+  printf 'Instruction file not found: %s\n' "$instruction_file" >&2
+  exit 2
+fi
+
+if ! command -v git >/dev/null 2>&1 || ! command -v agy >/dev/null 2>&1; then
+  printf 'Both git and agy are required.\n' >&2
+  exit 2
+fi
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  printf 'Run this command inside a Git worktree.\n' >&2
+  exit 2
+}
+current_branch=$(git -C "$repo_root" symbolic-ref --quiet --short HEAD 2>/dev/null) || {
+  printf 'The current worktree must be on a branch.\n' >&2
+  exit 2
+}
+
+task_title=$(sed -n 's/^# タスク:[[:space:]]*//p' "$instruction_file" | head -n 1)
+if [ -z "$task_title" ]; then
+  task_title=$(basename "$instruction_file")
+  task_title=${task_title%.*}
+fi
+task_slug=$(printf '%s' "$task_title" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g; s/-\{2,\}/-/g; s/^[.-]*//; s/[.-]*$//' | cut -c1-48)
+if [ -z "$task_slug" ]; then
+  task_slug=task
+fi
+
+issue_number=${DELEGATE_ISSUE_NUMBER:-}
+if [ -z "$issue_number" ]; then
+  issue_number=$(printf '%s' "$current_branch" | grep -Eo '[0-9]+' | head -n 1)
+fi
+if [ -z "$issue_number" ]; then
+  issue_number=unknown
+fi
+
+agy_bin=$(command -v agy)
+model=${DELEGATE_MODEL:-}
+if [ -z "$model" ]; then
+  models_output=$($agy_bin models 2>&1)
+  models_exit=$?
+  if [ "$models_exit" -ne 0 ]; then
+    printf '%s\n' "$models_output" >&2
+    exit "$models_exit"
+  fi
+  model=$(printf '%s\n' "$models_output" | awk 'tolower($1) ~ /^gemini-[^[:space:]]*flash/ { print $1; exit }')
+  if [ -z "$model" ]; then
+    printf 'No Gemini Flash model was found in `agy models`. Set DELEGATE_MODEL explicitly.\n' >&2
+    exit 2
+  fi
+fi
+
+timeout_value=${DELEGATE_TIMEOUT:-30m}
+sandbox_enabled=${DELEGATE_SANDBOX:-1}
+worktrees_dir="$repo_root/.worktrees"
+task_dir="$worktrees_dir/$issue_number-$task_slug"
+delegate_branch="${current_branch}-delegate-${task_slug}-$(date -u +%Y%m%d%H%M%S)"
+repo_name=$(basename "$repo_root")
+log_dir=${DELEGATE_LOG_DIR:-"$HOME/.local/share/delegate-log"}
+log_file="$log_dir/$repo_name.jsonl"
+
+mkdir -p "$worktrees_dir" "$log_dir"
+if [ -e "$task_dir" ]; then
+  printf 'Task worktree already exists: %s\n' "$task_dir" >&2
+  exit 2
+fi
+
+if git -C "$repo_root" ls-files --error-unmatch .env.local >/dev/null 2>&1; then
+  printf 'Refusing to delegate because .env.local is tracked and would enter the task worktree.\n' >&2
+  exit 2
+fi
+
+git -C "$repo_root" worktree add -b "$delegate_branch" "$task_dir" "$current_branch" >/dev/null || exit $?
+
+if find "$task_dir" -type f \( -name '.env.local' -o -name 'db_cluster-*.backup.gz' \) -print -quit | grep -q .; then
+  printf 'Refusing to delegate because a protected file is present in the task worktree.\n' >&2
+  exit 2
+fi
+
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+started_epoch=$(date +%s)
+instruction_lines=$(wc -l < "$instruction_file" | tr -d ' ')
+output_file="$task_dir/DELEGATE_OUTPUT.json"
+
+set +e
+(
+  cd "$task_dir" || exit 2
+  if [ "$sandbox_enabled" = 1 ]; then
+    "$agy_bin" -p "$(cat "$instruction_file")" --model "$model" --output-format json --sandbox --dangerously-skip-permissions --print-timeout "$timeout_value"
+  else
+    "$agy_bin" -p "$(cat "$instruction_file")" --model "$model" --output-format json --dangerously-skip-permissions --print-timeout "$timeout_value"
+  fi
+) >"$output_file" 2>&1
+exit_code=$?
+set -e
+
+finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+finished_epoch=$(date +%s)
+duration_seconds=$((finished_epoch - started_epoch))
+output=$(cat "$output_file")
+failure_type=$(classify_failure "$output" "$exit_code")
+changed_files=$(git -C "$task_dir" status --porcelain --untracked-files=all | awk '$2 != "DELEGATE_OUTPUT.json" && $2 != "DELEGATE_RESULT.md" { count++ } END { print count + 0 }')
+
+if [ ! -f "$task_dir/DELEGATE_RESULT.md" ]; then
+  {
+    printf '# Delegation result\n\n'
+    printf -- '- Result: %s\n' "$failure_type"
+    printf -- '- Exit code: %s\n' "$exit_code"
+    printf -- '- Raw CLI output: `DELEGATE_OUTPUT.json`\n'
+    printf -- '- Note: the delegated agent did not create `DELEGATE_RESULT.md`; this fallback was generated by `delegate.sh`.\n'
+  } > "$task_dir/DELEGATE_RESULT.md"
+fi
+
+printf '{"started_at":"%s","finished_at":"%s","duration_seconds":%s,"issue_number":"%s","task_name":"%s","model":"%s","instruction_lines":%s,"exit_code":%s,"failure_type":"%s","changed_files":%s}\n' \
+  "$(json_escape "$started_at")" \
+  "$(json_escape "$finished_at")" \
+  "$duration_seconds" \
+  "$(json_escape "$issue_number")" \
+  "$(json_escape "$task_title")" \
+  "$(json_escape "$model")" \
+  "$instruction_lines" \
+  "$exit_code" \
+  "$(json_escape "$failure_type")" \
+  "$changed_files" >> "$log_file"
+
+printf 'Worktree: %s\n' "$task_dir"
+printf 'Result: %s\n' "$task_dir/DELEGATE_RESULT.md"
+printf 'Log: %s\n' "$log_file"
+exit "$exit_code"

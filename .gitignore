@@ -34,3 +34,6 @@ yarn-error.log*
 # paper-pipeline（ローカル実行）
 tools/paper-pipeline/node_modules/
 tools/paper-pipeline/.chrome-profile/
+
+# delegated task worktrees
+/.worktrees/
