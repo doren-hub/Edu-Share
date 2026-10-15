@@ -1,5 +1,9 @@
 -- =============================================================================
 -- Edu Share: 全マイグレーションを一度に適用するファイル
+--
+-- このファイルは supabase/migrations/*.sql から自動生成されます。
+-- 手作業で編集せず、npm run db:build-apply-all で再生成してください。
+--
 -- Supabase ダッシュボード → SQL Editor → New query → 本ファイルを貼り付け → Run
 --
 -- アップロードで「tests テーブルがありません」と出るときは、まだこのスクリプトを
@@ -292,17 +296,29 @@ drop policy if exists "chunks_select_authenticated_ready" on public.document_chu
 
 -- ----- 004_past_exam_subject_period.sql -----
 
+-- 過去問: 科目・テスト時期（アップロード時に選択）
+
 alter table public.tests
   add column if not exists exam_subject text,
   add column if not exists exam_period text;
 
+comment on column public.tests.exam_subject is '過去問の科目（論文では未使用）';
+comment on column public.tests.exam_period is '過去問のテスト時期（論文では未使用）';
+
 -- ----- 005_paper_industry_year.sql -----
+
+-- 論文: 業界・発表年（専門家名は既存 source_name を使用）
 
 alter table public.tests
   add column if not exists industry text,
   add column if not exists publication_year text;
 
+comment on column public.tests.industry is '論文の業界（過去問では未使用）';
+comment on column public.tests.publication_year is '論文の発表年（過去問では未使用）';
+
 -- ----- 006_picklist_options.sql -----
+
+-- プルダウン候補（学校名・科目・業界など）。認証ユーザーが追加・削除可能。
 
 create table if not exists public.picklist_options (
   id uuid primary key default gen_random_uuid(),
@@ -344,6 +360,8 @@ create policy "picklist_options_delete_authenticated"
   on public.picklist_options for delete
   to authenticated
   using (true);
+
+-- ----- 初期データ -----
 
 insert into public.picklist_options (category, value, sort_order) values
   ('school_name', '○○高等学校', 10),
@@ -412,19 +430,28 @@ insert into public.picklist_options (category, value, sort_order) values
   ('expert_name', 'その他', 9999)
 on conflict (category, value) do nothing;
 
--- ----- 007_picklist_options_grants.sql -----
 grant select on table public.picklist_options to anon, authenticated;
 grant insert, delete on table public.picklist_options to authenticated;
 
 notify pgrst, 'reload schema';
 
+-- ----- 007_picklist_options_grants.sql -----
+
+-- picklist_options へ API ロールからの参照・更新が通るよう明示 GRANT
+-- （006 実行後も「permission denied」になるプロジェクト向け）
+
+grant select on table public.picklist_options to anon, authenticated;
+grant insert, delete on table public.picklist_options to authenticated;
+
 -- ----- 008_picklist_scope_school.sql -----
+
+-- 科目・テストの時期を「学校名」でスコープできるようにする
 
 alter table public.picklist_options
   add column if not exists scope_school_name text null;
 
 comment on column public.picklist_options.scope_school_name is
-  'department_name / exam_subject / exam_period のとき、当該学校（tests.source_name と同一の表記）専用。NULL は全校共通。';
+  'exam_subject / exam_period のとき、当該学校（tests.source_name と同一の表記）専用。NULL は全校共通。';
 
 alter table public.picklist_options
   drop constraint if exists picklist_options_category_value_unique;
@@ -453,6 +480,8 @@ notify pgrst, 'reload schema';
 
 -- ----- 009_exam_department_picklist.sql -----
 
+-- 過去問: tests.exam_department（学科名）と picklist category department_name
+
 alter table public.tests add column if not exists exam_department text;
 
 comment on column public.tests.exam_department is
@@ -479,11 +508,64 @@ alter table public.picklist_options add constraint picklist_options_scope_allowe
   or category in ('exam_subject', 'exam_period', 'department_name')
 );
 
--- 学科名シードは 011 の一意インデックス作成後に投入（ON CONFLICT と WHERE を一致させる）
+-- 学科名の初期シードは 011（scope_department_value 列と一意インデックス作成後）で投入する
+
+notify pgrst, 'reload schema';
+
+-- ----- 010_picklist_department_scope_repair.sql -----
+
+-- 008 のみ適用済みで 009 を未実行の環境向け修復:
+--   department_name に scope_school_name を付けた行を許可し、category に department_name を含める。
+-- 009 適用済みでも冪等（制約を同内容で差し替えるだけ）。
+
+alter table public.tests add column if not exists exam_department text;
+
+alter table public.picklist_options drop constraint if exists picklist_options_category_check;
+
+alter table public.picklist_options add constraint picklist_options_category_check check (
+  category in (
+    'school_name',
+    'department_name',
+    'expert_name',
+    'exam_subject',
+    'exam_period',
+    'paper_industry',
+    'publication_year'
+  )
+);
+
+alter table public.picklist_options drop constraint if exists picklist_options_scope_allowed_chk;
+
+alter table public.picklist_options add constraint picklist_options_scope_allowed_chk check (
+  scope_school_name is null
+  or category in ('exam_subject', 'exam_period', 'department_name')
+);
+
+insert into public.picklist_options (category, value, sort_order)
+select v.category, v.value, v.sort_order
+from (
+  values
+    ('department_name', '普通科', 10),
+    ('department_name', '理数科', 20),
+    ('department_name', '総合学科', 30),
+    ('department_name', '体育・芸術科', 40),
+    ('department_name', '国際科', 50),
+    ('department_name', '探求科', 60),
+    ('department_name', 'その他', 9999)
+) as v(category, value, sort_order)
+where not exists (
+  select 1
+  from public.picklist_options p
+  where p.category = v.category
+    and p.value = v.value
+    and p.scope_school_name is null
+);
 
 notify pgrst, 'reload schema';
 
 -- ----- 011_exam_subject_period_department_scope.sql -----
+
+-- 科目・テストの時期を「学校＋学科」でスコープ（学科ごとに追加・削除した候補を分離）
 
 alter table public.picklist_options
   add column if not exists scope_department_value text null;
@@ -525,6 +607,7 @@ create unique index picklist_options_scoped_school_dept_cat_value
     and scope_department_value is not null
     and btrim(scope_department_value) <> '';
 
+-- 部分一意インデックスの WHERE と ON CONFLICT の WHERE を一致させる（42P10 防止）
 insert into public.picklist_options (category, value, sort_order) values
   ('department_name', '普通科', 10),
   ('department_name', '理数科', 20),
@@ -538,7 +621,19 @@ on conflict (category, value) where (
   and (scope_department_value is null or btrim(scope_department_value) = '')
 ) do nothing;
 
+notify pgrst, 'reload schema';
+
+-- ----- 012_quiz_sessions_delete_own.sql -----
+
+drop policy if exists "quiz_delete_own" on public.quiz_sessions;
+create policy "quiz_delete_own"
+  on public.quiz_sessions for delete
+  to authenticated
+  using (auth.uid() = user_id);
+
 -- ----- 013_question_performance.sql -----
+
+-- 設問ごとの正答率（ユーザー×テスト×設問キー）
 
 create table if not exists public.question_performance (
   id uuid primary key default gen_random_uuid(),
@@ -565,6 +660,8 @@ create policy "question_performance_select_own"
   using (auth.uid() = user_id);
 
 grant select on table public.question_performance to authenticated;
+
+-- クライアントからの直接書き込みは想定しない（API の service role が RPC 経由で更新）
 
 create or replace function public.record_question_attempt(
   p_user_id uuid,
@@ -610,45 +707,28 @@ $$;
 revoke all on function public.record_question_attempt (uuid, uuid, text, text, text, boolean) from public;
 grant execute on function public.record_question_attempt (uuid, uuid, text, text, text, boolean) to service_role;
 
-notify pgrst, 'reload schema';
-
 -- ----- 014_question_performance_grants.sql -----
--- 既に 013 適用済みで GRANT だけ欠けている DB 向け（冪等）
+
+-- 前提: 013_question_performance.sql 適用済み（public.question_performance が存在すること）
+-- 013 を未実行のまま本ファイルだけ実行すると ERROR 42P01 になります。
+-- テーブル未作成なら migrations/013 を先に実行するか、sql_editor_question_performance.sql を実行してください。
+--
+-- RLS のみでは読めず、GRANT 不足で 42501 になる環境向けの追補です。
 grant select on table public.question_performance to authenticated;
 
 notify pgrst, 'reload schema';
 
 -- ----- 015_document_chunks_pdf_page.sql -----
+
+-- チャンクが主に該当する PDF ページ（1 始まり）。出題根拠ページの推定に使用。
 alter table public.document_chunks
   add column if not exists pdf_page int;
 
 comment on column public.document_chunks.pdf_page is '1-based PDF page index for this chunk (best effort)';
 
-notify pgrst, 'reload schema';
-
--- ----- 017_notebooklm_material_files.sql -----
-alter table public.tests
-  add column if not exists notebooklm_slide_pdf_storage_path text,
-  add column if not exists notebooklm_video_mp4_storage_path text;
-
-comment on column public.tests.pdf_storage_path is 'R2 に保存した元 PDF のオブジェクトキー';
-comment on column public.tests.notebooklm_slide_pdf_storage_path is 'R2 に保存したスライド PDF のオブジェクトキー';
-comment on column public.tests.notebooklm_video_mp4_storage_path is 'R2 に保存した動画 MP4 のオブジェクトキー';
-
-alter table public.tests drop column if exists notebooklm_slide_url;
-alter table public.tests drop column if exists notebooklm_video_url;
-
-notify pgrst, 'reload schema';
-
--- ----- 018_notebooklm_notebook_url.sql -----
-alter table public.tests
-  add column if not exists notebooklm_notebook_url text;
-
-comment on column public.tests.notebooklm_notebook_url is 'NotebookLM のノートブック URL（ブラウザのアドレスバーからコピー）';
-
-notify pgrst, 'reload schema';
-
 -- ----- 016_notebooklm_slide_video.sql -----
+
+-- NotebookLM 等で作成したスライド・動画の表示用（資料ページの横スクロール用）
 alter table public.tests
   add column if not exists notebooklm_slide_url text,
   add column if not exists notebooklm_video_url text;
@@ -658,8 +738,33 @@ comment on column public.tests.notebooklm_video_url is 'NotebookLM 等の動画 
 
 notify pgrst, 'reload schema';
 
+-- ----- 017_notebooklm_material_files.sql -----
+
+-- NotebookLM 用スライド（PDF）・動画（MP4）を Storage に保存するためのパス
+alter table public.tests
+  add column if not exists notebooklm_slide_pdf_storage_path text,
+  add column if not exists notebooklm_video_mp4_storage_path text;
+
+comment on column public.tests.notebooklm_slide_pdf_storage_path is 'R2 に保存したスライド PDF のオブジェクトキー';
+comment on column public.tests.notebooklm_video_mp4_storage_path is 'R2 に保存した動画 MP4 のオブジェクトキー';
+
+-- 旧 URL 列はファイルアップロードに置き換え
+alter table public.tests drop column if exists notebooklm_slide_url;
+alter table public.tests drop column if exists notebooklm_video_url;
+
+notify pgrst, 'reload schema';
+
+-- ----- 018_notebooklm_notebook_url.sql -----
+
+alter table public.tests
+  add column if not exists notebooklm_notebook_url text;
+
+comment on column public.tests.notebooklm_notebook_url is 'NotebookLM のノートブック URL（ブラウザのアドレスバーからコピー）';
+
+notify pgrst, 'reload schema';
 
 -- ----- 019_notebooklm_csv_questions.sql -----
+
 alter table public.tests
   add column if not exists quiz_source text not null default 'pdf',
   add column if not exists notebooklm_questions_json jsonb;
@@ -669,14 +774,15 @@ comment on column public.tests.notebooklm_questions_json is 'NotebookLM CSV 由�
 
 notify pgrst, 'reload schema';
 
-
 -- ----- 020_notebooklm_vocab_questions.sql -----
+
 alter table public.tests
   add column if not exists notebooklm_vocab_questions_json jsonb;
 
 comment on column public.tests.notebooklm_questions_json is 'NotebookLM クイズ CSV（選択式）設問プール';
 comment on column public.tests.notebooklm_vocab_questions_json is 'NotebookLM 単語帳 CSV（記述式）設問プール';
 
+-- 旧データ: 単語帳のみ（essay のみ）だった行を専用列へ移す
 update public.tests
 set
   notebooklm_vocab_questions_json = notebooklm_questions_json,
@@ -693,6 +799,7 @@ where
 notify pgrst, 'reload schema';
 
 -- ----- 021_quiz_sessions_notebook_lm_csv_pool.sql -----
+
 alter table public.quiz_sessions
   add column if not exists notebook_lm_csv_pool text;
 
@@ -709,6 +816,9 @@ comment on column public.quiz_sessions.notebook_lm_csv_pool is
 notify pgrst, 'reload schema';
 
 -- ----- 022_paper_authors_venue_doi.sql -----
+
+-- 論文: 著者（複数）・掲載・DOI（source_name は一覧用に著者名を連結して同期）
+
 alter table public.tests
   add column if not exists paper_doi text,
   add column if not exists paper_venue text,
@@ -729,6 +839,7 @@ where
 notify pgrst, 'reload schema';
 
 -- ----- 023_scispace_project_url.sql -----
+
 alter table public.tests
   add column if not exists scispace_project_url text;
 
@@ -738,6 +849,8 @@ comment on column public.tests.scispace_project_url is
 notify pgrst, 'reload schema';
 
 -- ----- 024_pdf_filename.sql -----
+
+-- 論文の元 PDF ファイル名（同一名の再アップロード判定用）
 alter table public.tests
   add column if not exists pdf_filename text;
 
@@ -753,6 +866,7 @@ create unique index if not exists tests_paper_pdf_filename_lower_uidx
 notify pgrst, 'reload schema';
 
 -- ----- 025_bookmark_lists.sql -----
+
 -- ログインユーザーごとのブックマークリスト（複数）。教材本体にはフラグを持たない。
 
 create table if not exists public.bookmark_lists (
@@ -939,7 +1053,8 @@ grant select, insert, update, delete on table public.paper_study_statuses to aut
 
 notify pgrst, 'reload schema';
 
--- 027_paper_study_status_five.sql
+-- ----- 027_paper_study_status_five.sql -----
+
 -- 論文学習ステータスを5段階（未確認/確認中/確認済み/学習中/学習済み）にする。
 -- 旧「内容確認」(content_confirmed) は「確認済み」(confirmed) に移す。
 -- 未確認は引き続き行が無い状態。
@@ -959,11 +1074,18 @@ alter table public.paper_study_statuses
 notify pgrst, 'reload schema';
 
 -- ----- 028_pdfs_bucket_size_limit.sql -----
+
+-- pdfs バケットのファイルサイズ上限を 200MB にする（動画 MP4 の直接アップロード用）。
+-- ※ プロジェクト全体の上限（Dashboard > Storage > Settings > Upload file size limit）が
+--   これより小さいと、そちらが優先される。50MB を超えるには Pro プラン以上が必要。
 update storage.buckets
 set file_size_limit = 200 * 1024 * 1024
 where id = 'pdfs';
 
 -- ----- 029_paper_industries.sql -----
+
+-- 論文: 業界を複数選択可能にする（industries は保存値の配列。industry は先頭値の互換用に残す）
+
 alter table public.tests
   add column if not exists industries text[];
 
@@ -980,11 +1102,17 @@ where
 notify pgrst, 'reload schema';
 
 -- ----- 030_r2_object_key_comments.sql -----
+
+-- ファイル本体は R2 へ移し、Supabase には参照用のオブジェクトキーだけを残す。
 comment on column public.tests.pdf_storage_path is 'R2 に保存した元 PDF のオブジェクトキー';
 comment on column public.tests.notebooklm_slide_pdf_storage_path is 'R2 に保存したスライド PDF のオブジェクトキー';
 comment on column public.tests.notebooklm_video_mp4_storage_path is 'R2 に保存した動画 MP4 のオブジェクトキー';
 
 -- ----- 031_expose_failed_tests.sql -----
+
+-- failed の行も anon / authenticated が読めるようにする（一覧表示・PDF閲覧のため）
+-- processing_error 列の非公開化は Next.js サーバー側で行う（一覧ページのマスク処理、テスト詳細での未認証マスク）
+
 drop policy if exists "tests_select_authenticated" on public.tests;
 create policy "tests_select_authenticated"
   on public.tests for select
