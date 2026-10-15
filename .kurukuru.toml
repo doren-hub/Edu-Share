@@ -1,4 +1,4 @@
-version = "0.14.0"
+version = "0.17.0"
 test = "npm test"
 lint = "npm run lint"
 review_allowed = ["Bash(npm test:*)", "Bash(npm run lint:*)"]
@@ -14,7 +14,7 @@ constraints = [
 kind = "agy"
 limit_retries = 6
 stall_retries = 2
-deny_files = [".env.local", ".env.*", "db_cluster-*.backup.gz"]
+deny_files = [".env.local", ".env.*", "!.env.example", "db_cluster-*.backup.gz"]
 setup = "test -d node_modules || npm ci"
 worktree = true
 worktree_path = "../edu-share-app-agy"
