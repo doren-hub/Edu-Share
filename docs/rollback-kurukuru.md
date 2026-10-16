@@ -47,4 +47,3 @@ scripts/test-claude-review.sh
 
 いずれのテストも成功（終了コード 0）することを確認してください。
 その後、`scripts/run-issues.sh` または `scripts/claude-review.sh` による従来通りの開発ループを再開します。
-
