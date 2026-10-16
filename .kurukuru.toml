@@ -1,4 +1,4 @@
-version = "0.17.0"
+version = "0.19.0"
 test = "npm test"
 lint = "npm run lint"
 review_allowed = ["Bash(npm test:*)", "Bash(npm run lint:*)"]
