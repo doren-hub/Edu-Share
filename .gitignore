@@ -35,7 +35,7 @@ yarn-error.log*
 tools/paper-pipeline/node_modules/
 tools/paper-pipeline/.chrome-profile/
 
-# Antigravity への委任（scripts/run-issues.sh / scripts/claude-review.sh のログ）
+# 旧開発ループのログ（移行・互換用）
 /.run-issues/
 /.review/
 .kurukuru/
