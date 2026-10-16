@@ -94,49 +94,18 @@ GitHub Actions（`.github/workflows/ci.yml`）で `npm run db:check-apply-all` �
 ## Storage の pdfs バケットの扱いと運用
 
 - 資料ファイル（PDF・スライド・動画）は Cloudflare R2 に移管済みです（#61, #62）。
-- 過去のマイグレーション（001, 028）は書き換え禁止ルールに従って保持し、新設した `supabase/migrations/032_drop_pdfs_bucket.sql` で `storage.objects` 上のポリシーとバケットをクリーンアップします。
-- これにより、`apply_all_migrations.sql` で空の DB を作成した場合にも不要な `pdfs` バケットが残りません。
-- **新しいプロジェクト（本番）に残っている空の `pdfs` バケットの削除:**
-  AI は本番 Supabase への直接接続・操作が禁止されているため、リポジトリオーナーが Supabase Dashboard（Storage > `pdfs` > Delete bucket）にて手動削除するか、または SQL Editor で `032_drop_pdfs_bucket.sql` を実行して削除します。
+- 過去のマイグレーション（001, 028）は書き換え禁止ルールに従って保持し、新設した `supabase/migrations/032_drop_pdfs_bucket.sql` で `storage.objects` 上の 4 つのポリシー（insert, select, update, delete）を削除します。
+- Supabase Storage の内部保護トリガーや外部キー制約との競合を避けるため、バケット自体の削除は SQL で直接 DELETE せず、空であることを確認したうえで Supabase Dashboard（Storage > `pdfs` > Delete bucket）にて行います。
+- **本番プロジェクトに残っている空の `pdfs` バケットの削除:**
+  AI は AGENTS.md のルールにより本番環境への直接操作が禁止されているため、リポジトリオーナーが Supabase Dashboard から手動で削除を行ってください。
 
-## 本番スキーマとの一致確認
+## 本番スキーマとの整合性と検証状況
 
-生成された `apply_all_migrations.sql` で空の DB に構築されるスキーマは、本番環境のスキーマと完全に一致します。
-
-- **テーブル (7):**
-  - `profiles`: `id`, `email`, `display_name`, `role`, `created_at`, `updated_at`
-  - `tests`: `id`, `title`, `description`, `document_type`, `grade_level`, `school_name`, `source_name`, `source_url`, `pdf_storage_path`, `processing_status`, `processing_error`, `total_pages`, `created_by`, `created_at`, `updated_at`, `exam_subject`, `exam_period`, `industry`, `publication_year`, `exam_department`, `notebooklm_slide_pdf_storage_path`, `notebooklm_video_mp4_storage_path`, `notebooklm_notebook_url`, `notebooklm_questions_json`, `notebooklm_vocab_questions_json`, `paper_doi`, `paper_venue`, `paper_authors`, `scispace_project_url`, `pdf_filename`, `industries`（※ 017 により `notebooklm_slide_url`, `notebooklm_video_url` は削除済み）
-  - `document_chunks`: `id`, `test_id`, `chunk_index`, `content`, `embedding` (vector 1536), `page_range`, `token_count`, `created_at`, `pdf_page`
-  - `quiz_sessions`: `id`, `test_id`, `user_id`, `answers`, `score`, `max_score`, `created_at`, `completed_at`, `is_notebooklm_csv_pool`
-  - `picklist_options`: `id`, `category`, `value`, `sort_order`, `created_at`, `scope_school_name`, `scope_department_value`
-  - `question_performance`: `id`, `user_id`, `test_id`, `question_key`, `prompt_excerpt`, `question_type`, `attempts`, `correct_count`, `updated_at`
-  - `bookmark_lists`: `id`, `user_id`, `title`, `description`, `color`, `sort_order`, `created_at`, `updated_at`
-  - `bookmark_list_items`: `id`, `bookmark_list_id`, `test_id`, `created_at`
-  - `paper_study_statuses`: `id`, `user_id`, `test_id`, `status` (`'checking'`, `'confirmed'`, `'learning'`, `'completed'`), `created_at`, `updated_at`
-- **関数 (4):**
-  - `public.set_updated_at()`
-  - `public.handle_new_user()`
-  - `public.match_document_chunks(...)`
-  - `public.record_question_attempt(...)`
-- **トリガー (4):**
-  - `profiles_set_updated_at` on `public.profiles`
-  - `on_auth_user_created` on `auth.users`
-  - `bookmark_lists_set_updated_at` on `public.bookmark_lists`
-  - `paper_study_statuses_set_updated_at` on `public.paper_study_statuses`
-- **インデックス:**
-  - `document_chunks_embedding_hnsw_idx` (HNSW on `document_chunks (embedding vector_cosine_ops) WHERE embedding IS NOT NULL`)
-  - `picklist_options_global_cat_value`, `picklist_options_scoped_school_only_cat_value`, `picklist_options_scoped_school_dept_cat_value`, `picklist_options_cat_scope_sort_idx`
-  - `question_performance_user_test_idx`
-  - `bookmark_lists_user_idx`, `bookmark_list_items_list_idx`, `bookmark_list_items_unique_item`
-  - `paper_study_statuses_user_test_idx`
-- **RLS ポリシー:**
-  - `profiles`: select (all), insert/update (own)
-  - `tests`: select (ready/failed for authenticated & anon), insert/update/delete (own authenticated)
-  - `document_chunks`: service_role direct access
-  - `quiz_sessions`: select/insert/update/delete (own)
-  - `picklist_options`: select (authenticated, anon), insert/delete (authenticated)
-  - `question_performance`: select (authenticated), service_role updates
-  - `bookmark_lists`, `bookmark_list_items`: select/insert/update/delete (own)
-  - `paper_study_statuses`: select/insert/update/delete (own)
-- **Storage:**
-  - `032_drop_pdfs_bucket.sql` により `pdfs` バケットおよび関連ポリシーは削除され、Cloudflare R2 を正本として参照。
+- **検証上の制約:**
+  `AGENTS.md` のセキュリティルール（本番 Supabase / R2 への非接続・`.env.local` 読み込み禁止）に基づき、AI は本番 Supabase への直接接続や `pg_dump` の自動比較は行っていません。
+- **整合性の根拠:**
+  - 個別のマイグレーション `001` 〜 `031` は本番 DB に順次適用されてきた正本そのものです。
+  - 旧 `apply_all_migrations.sql` では `017` が `016` の前に手作業で貼られたことで、`017` で削除されるべき `notebooklm_slide_url` と `notebooklm_video_url` が `016` で再作成される不整合がありました。本番 DB ではこの 2 列が手動削除で補正済みであったため、個別マイグレーションを番号順（016 → 017）に連結することで、本番の補正後スキーマと一致するスキーマが生成されます。
+  - さらに `029`（`industries text[]`）や `031`（処理失敗テストの閲覧許可ポリシー）も順番どおり確実に適用されます。
+- **今後の推奨確認:**
+  新しい Supabase プロジェクト作成時やステージング環境構築時に、空 DB で `apply_all_migrations.sql` を実行し、本番 DB との `pg_dump --schema-only` 差分比較を実施することを推奨します。
