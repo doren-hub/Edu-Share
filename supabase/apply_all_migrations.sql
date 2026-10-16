@@ -9,7 +9,7 @@
 -- アップロードで「tests テーブルがありません」と出るときは、まだこのスクリプトを
 -- 当てていない可能性が高いです。手順:
 --   1) Database → Extensions で「vector」を有効化（推奨。スクリプト内でも create します）
---   2) 本ファイルをすべて Run（tests / document_chunks / profiles / storage 等が作成される）
+--   2) 本ファイルをすべて Run（tests / document_chunks / profiles 等が作成される）
 --   3) 完了後、ダッシュボードで PostgREST のスキーマ再読み込みを待つか、数十秒後にアプリを再読み込み
 --
 -- 補足: 「exam_period が schema cache に無い」だけ直したい場合は、次の2つを順に Run してもよいです。
@@ -1150,3 +1150,16 @@ where processing_status = 'failed'
   );
 
 notify pgrst, 'reload schema';
+
+-- ----- 032_drop_pdfs_bucket.sql -----
+
+-- R2 移行に伴い、不要になった Supabase Storage の pdfs バケットとそのポリシーを削除する
+-- （ファイル本体は Cloudflare R2 に移管済み。DB にはオブジェクトキーのみ保持）
+
+drop policy if exists "pdfs_insert_own_prefix" on storage.objects;
+drop policy if exists "pdfs_select_own_prefix" on storage.objects;
+drop policy if exists "pdfs_update_own_prefix" on storage.objects;
+drop policy if exists "pdfs_delete_own_prefix" on storage.objects;
+
+delete from storage.objects where bucket_id = 'pdfs';
+delete from storage.buckets where id = 'pdfs';

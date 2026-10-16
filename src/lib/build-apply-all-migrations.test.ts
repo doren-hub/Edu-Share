@@ -25,6 +25,29 @@ test("getMigrationFiles sorts migration files numerically", () => {
   }
 });
 
+test("getMigrationFiles rejects invalid filenames and duplicate numbers", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mig-validate-test-"));
+  try {
+    // Invalid format
+    fs.writeFileSync(path.join(tmpDir, "invalid.sql"), "SELECT 1;");
+    assert.throws(
+      () => getMigrationFiles(tmpDir),
+      /Invalid migration filename 'invalid\.sql'/
+    );
+    fs.rmSync(path.join(tmpDir, "invalid.sql"));
+
+    // Duplicate numbers
+    fs.writeFileSync(path.join(tmpDir, "001_first.sql"), "SELECT 1;");
+    fs.writeFileSync(path.join(tmpDir, "001_duplicate.sql"), "SELECT 1;");
+    assert.throws(
+      () => getMigrationFiles(tmpDir),
+      /Duplicate migration number prefix '001'/
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("buildApplyAllSql produces header and sections in order", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mig-build-test-"));
   try {
@@ -70,16 +93,17 @@ test("checkApplyAllSql correctly detects match and mismatch", () => {
   }
 });
 
-test("actual repository migrations directory contains 001 through 031 with 016 before 017", () => {
+test("actual repository migrations directory contains 001 through 032 with 016 before 017 and 032 dropping pdfs", () => {
   const repoRoot = path.resolve(import.meta.dirname, "../..");
   const migrationsDir = path.join(repoRoot, "supabase", "migrations");
   const files = getMigrationFiles(migrationsDir);
 
-  assert.ok(files.length >= 31, `Expected at least 31 files, got ${files.length}`);
+  assert.ok(files.length >= 32, `Expected at least 32 files, got ${files.length}`);
   assert.equal(files[0], "001_edu_share.sql");
   assert.ok(files.includes("016_notebooklm_slide_video.sql"));
   assert.ok(files.includes("017_notebooklm_material_files.sql"));
   assert.ok(files.includes("031_expose_failed_tests.sql"));
+  assert.ok(files.includes("032_drop_pdfs_bucket.sql"));
 
   const idx016 = files.indexOf("016_notebooklm_slide_video.sql");
   const idx017 = files.indexOf("017_notebooklm_material_files.sql");
@@ -88,6 +112,7 @@ test("actual repository migrations directory contains 001 through 031 with 016 b
   const sql = buildApplyAllSql(migrationsDir);
   assert.ok(sql.includes("-- ----- 016_notebooklm_slide_video.sql -----"));
   assert.ok(sql.includes("-- ----- 017_notebooklm_material_files.sql -----"));
+  assert.ok(sql.includes("-- ----- 032_drop_pdfs_bucket.sql -----"));
   assert.ok(
     sql.indexOf("-- ----- 016_notebooklm_slide_video.sql -----") <
       sql.indexOf("-- ----- 017_notebooklm_material_files.sql -----")
