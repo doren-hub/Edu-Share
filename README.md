@@ -44,7 +44,7 @@ cp .env.example .env.local
 
 1. Supabase でプロジェクトを作り、`NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_ROLE_KEY` を `.env.local` に書く
 2. Database → Extensions で `vector` を有効にする
-3. SQL Editor に [supabase/apply_all_migrations.sql](supabase/apply_all_migrations.sql) を貼り付けて実行する（`supabase/migrations/` の全マイグレーションを 1 本にまとめたもの）
+3. SQL Editor に [supabase/apply_all_migrations.sql](supabase/apply_all_migrations.sql) を貼り付けて実行する（`supabase/migrations/` の全マイグレーションを 1 本にまとめたもの。詳細は [docs/database-migrations.md](docs/database-migrations.md) を参照）
 
 「exam_period が schema cache に無い」のようにスキーマの反映だけが遅れているときは、[supabase/sql_editor_tests_app_columns.sql](supabase/sql_editor_tests_app_columns.sql) と [supabase/sql_editor_reload_postgrest_schema.sql](supabase/sql_editor_reload_postgrest_schema.sql) を順に実行します。
 
@@ -74,6 +74,7 @@ http://localhost:3000 を開き、サインアップしてから「アップロ�
 | `npm run build` / `npm start` | 本番ビルドと起動 |
 | `npm run lint` | ESLint（CI でも実行） |
 | `npm test` | `src/**/*.test.ts` の単体テスト（Node 標準のテストランナー） |
+| `npm run db:build-apply-all` | 個別マイグレーションから `supabase/apply_all_migrations.sql` を再生成する |
 | `npm run storage:migrate:r2` | Supabase Storage のファイルを R2 へ移す。詳細は [docs/r2-storage.md](docs/r2-storage.md) |
 | `npm run backfill:pdf-filename` | 既存の論文に PDF ファイル名を埋め戻す |
 
