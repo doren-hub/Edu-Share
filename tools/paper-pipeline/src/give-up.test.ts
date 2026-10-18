@@ -60,3 +60,40 @@ test("maxStageWaitMs: 環境変数の分指定を使い、不正な値は既定�
   assert.equal(maxStageWaitMs("abc"), 3 * 60 * 60 * 1000);
   assert.equal(maxStageWaitMs(undefined), 3 * 60 * 60 * 1000);
 });
+
+test("打ち切りは再読込でもスキップし、選んだ論文の明示的な再試行だけ解除する", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { emptyState, loadState } = await import("./state.ts");
+  const { persistGiveUp, prepareGivenUp } = await import("./give-up.ts");
+  const root = mkdtempSync(join(tmpdir(), "give-up-restart-"));
+  try {
+    const make = (name: string) => emptyState({ filename: `${name}.pdf`, inboxPdfPath: join(root, `${name}.pdf`), paperDir: join(root, name) });
+    const a = make("a");
+    const b = make("b");
+    a.completed = ["nlm-create"];
+    persistGiveUp(a, "失敗上限", 1234);
+    persistGiveUp(b, "待ち上限", 2345);
+    const reload = (state: typeof a) => loadState(state.paperDir, make(state.filename.slice(0, -4)));
+    let workers = 0;
+    const runSelected = (selected: typeof a[], retry: boolean) => {
+      for (const state of selected.map(reload)) {
+        if (!prepareGivenUp(state, retry)) workers++;
+      }
+    };
+    runSelected([a, b], false);
+    assert.equal(workers, 0);
+    assert.equal(reload(a).giveUp?.reason, "失敗上限");
+    runSelected([a], true);
+    assert.equal(workers, 1);
+    assert.equal(reload(a).giveUp, undefined);
+    assert.deepEqual(reload(a).completed, ["nlm-create"]);
+    assert.ok(reload(b).giveUp);
+    runSelected([a, b], true);
+    assert.equal(workers, 3);
+    assert.equal(reload(b).giveUp, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

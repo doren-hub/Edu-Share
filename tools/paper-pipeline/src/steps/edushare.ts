@@ -20,6 +20,8 @@ import {
   choosePaperAuthor,
   isAuthorRequiredError,
   materialCarouselShowLabel,
+  notebookLmCsvPoolImported,
+  notebookLmCsvStatusLine,
   paperMaterialIsRegistered,
   SLIDE_MATERIAL_HEADING,
   VIDEO_MATERIAL_HEADING,
@@ -851,21 +853,24 @@ export async function applySciSpaceMetaToPaperPage(
   }
 }
 
-async function importedPoolCount(page: Page): Promise<number> {
-  const body = await pageBodyText(page);
-  return [...body.matchAll(/取り込み済み[（(](\d+)問[）)]/g)].filter((m) => Number(m[1]) >= 3).length;
+const QUIZ_CSV_HEADING = "クイズ（選択肢）";
+const VOCAB_CSV_HEADING = "単語帳（Flashcard）";
+
+export async function notebookLmCsvCardText(page: Page, heading: string): Promise<string> {
+  const title = page.getByText(heading, { exact: true }).first();
+  return title.evaluate(notebookLmCsvStatusLine, undefined, { timeout: 1_000 }).catch(() => "");
 }
 
-async function importNotebookLmCsv(
+export async function importNotebookLmCsv(
   page: Page,
   destPath: string,
   inputIndex: number,
   buttonName: string,
   successText: string,
-  minImported: number,
+  heading: string,
 ): Promise<void> {
   await expandSection(page, "NotebookLM");
-  if ((await importedPoolCount(page)) >= minImported) {
+  if (notebookLmCsvPoolImported(await notebookLmCsvCardText(page, heading))) {
     log(`Edu Share: ${successText}（既に取り込み済み）`);
     return;
   }
@@ -881,7 +886,7 @@ async function importNotebookLmCsv(
       log(`Edu Share: ${successText}`);
       return;
     }
-    if ((await importedPoolCount(page)) >= minImported) {
+    if (notebookLmCsvPoolImported(await notebookLmCsvCardText(page, heading))) {
       log(`Edu Share: ${successText}`);
       return;
     }
@@ -1141,7 +1146,7 @@ export async function runEduShareMaterials(
         0,
         "クイズ CSV を取り込む",
         "クイズ CSV を取り込みました。",
-        1,
+        QUIZ_CSV_HEADING,
       );
       markEduUploaded(state, "nlm-quiz");
     }
@@ -1152,7 +1157,7 @@ export async function runEduShareMaterials(
         1,
         "単語帳 CSV を取り込む",
         "単語帳（Flashcard）CSV を取り込みました。",
-        2,
+        VOCAB_CSV_HEADING,
       );
       markEduUploaded(state, "nlm-flashcards");
     }
@@ -1254,6 +1259,9 @@ export async function verifyEduSharePaper(
     if (!hasSlide) warn("スライドは未登録です");
     if (!hasVideo) warn("動画は未登録です");
 
+    // CSV タブではアップロード欄が隠れるため、切り替える前に種類別の状態を読む。
+    const quizImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, QUIZ_CSV_HEADING));
+    const vocabImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, VOCAB_CSV_HEADING));
     const csvTab = page.getByRole("tab", { name: "NotebookLM CSV" });
     if (await csvTab.isVisible({ timeout: 0 }).catch(() => false)) {
       await csvTab.click({ timeout: 5_000 }).catch(() => undefined);
@@ -1266,19 +1274,22 @@ export async function verifyEduSharePaper(
     }
 
     if (!skipQuiz) {
-      if (!(await quizStart.first().isVisible({ timeout: 0 }).catch(() => false))) {
-        if (quizReady) {
-          unmarkEduUploaded(state, "nlm-quiz");
-          throw new Error("Edu Share にクイズ CSV がありません");
-        }
+      if (await quizStart.first().isVisible({ timeout: 0 }).catch(() => false)) {
+        await quizStart.first().click({ timeout: 8_000 });
+        await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
+        await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
+      } else if (quizImported) {
+        log("確認: クイズは取り込み済みです。開始リンクは出ていないので飛ばします");
+      } else if (quizReady) {
+        unmarkEduUploaded(state, "nlm-quiz");
+        throw new Error("Edu Share にクイズ CSV がありません");
+      } else {
         const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=quiz";
         log("確認: クイズ開始ボタンが無いので CSV プール URL を開きます");
         await page.goto(take, { waitUntil: "domcontentloaded" });
-      } else {
-        await quizStart.first().click({ timeout: 8_000 });
+        await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
+        await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
       }
-      await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
-      await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
     }
     if (await csvTab.isVisible({ timeout: 0 }).catch(() => false)) {
       await csvTab.click({ timeout: 5_000 }).catch(() => undefined);
@@ -1287,6 +1298,9 @@ export async function verifyEduSharePaper(
       const vocabAgain = page.locator('a[href*="csvPool=vocab"]');
       if (await vocabAgain.first().isVisible({ timeout: 0 }).catch(() => false)) {
         await vocabAgain.first().click({ timeout: 8_000 });
+        await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
+      } else if (vocabImported) {
+        log("確認: 単語帳は取り込み済みです。開始リンクは出ていないので飛ばします");
       } else if (vocabReady) {
         unmarkEduUploaded(state, "nlm-flashcards");
         throw new Error("Edu Share に単語帳 CSV がありません");
@@ -1294,8 +1308,8 @@ export async function verifyEduSharePaper(
         const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=vocab";
         log("確認: 単語帳開始ボタンが無いので CSV プール URL を開きます");
         await page.goto(take, { waitUntil: "domcontentloaded" });
+        await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
       }
-      await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
     }
 
     log("確認: PDF/スライド/動画と CSV テスト開始まで到達");

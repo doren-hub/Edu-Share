@@ -42,8 +42,9 @@ export type HarvestRetryState = {
   kickoffRetryAt?: string;
 };
 
-export function harvestBackoffMs(_failures: number): number {
-  return HARVEST_RETRY_BASE_MS;
+export function harvestBackoffMs(failures: number): number {
+  // 現在は base と max が同値なので 10 分。説明補修も同じ上限を共有する。
+  return Math.min(HARVEST_RETRY_MAX_MS, HARVEST_RETRY_BASE_MS * 2 ** Math.max(0, failures));
 }
 
 export function retryUntilMs(state: HarvestRetryState, now = Date.now()): number {

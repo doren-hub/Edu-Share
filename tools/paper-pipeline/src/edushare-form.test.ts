@@ -8,12 +8,20 @@ import {
   isAuthorRequiredError,
   isDummyAuthorValue,
   materialCarouselShowLabel,
+  notebookLmCsvPoolImported,
   notebookLmMaterialBlockIsRegistered,
   paperMaterialIsRegistered,
   pickAuthorSelectValue,
   SLIDE_MATERIAL_HEADING,
   VIDEO_MATERIAL_HEADING,
 } from "./edushare-form.ts";
+
+test("notebookLmCsvPoolImported: その欄の取り込み済みだけを見る", () => {
+  assert.equal(notebookLmCsvPoolImported("クイズ（選択肢） 取り込み済み（12問）"), true);
+  assert.equal(notebookLmCsvPoolImported("クイズ（選択肢） 未取り込み"), false);
+  assert.equal(notebookLmCsvPoolImported("単語帳（Flashcard） 取り込み済み（40問）"), true);
+  assert.equal(notebookLmCsvPoolImported(""), false);
+});
 
 test("pickAuthorSelectValue: 空とその他を飛ばして実名を返す", () => {
   assert.equal(pickAuthorSelectValue(["", "選択してください", "その他"]), null);

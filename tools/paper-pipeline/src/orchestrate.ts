@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts";
 import { PACKAGE_ROOT } from "./env.ts";
-import { hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, type InboxPdf } from "./inbox.ts";
+import { addUnregisteredInboxPdfs, hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, type InboxPdf } from "./inbox.ts";
 import { error as logError, log, warn } from "./log.ts";
 import { pickNextJob, type SchedJob, type SchedStatus } from "./schedule.ts";
 import {
@@ -23,7 +23,7 @@ import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
 import { formatStudioGenerateArg, formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
 
-import { emptyGiveUpTrack, holdWaiting, noteDisconnect, noteFailRound, noteWaiting, type GiveUpTrack } from "./give-up.ts";
+import { persistGiveUp, prepareGivenUp, emptyGiveUpTrack, holdWaiting, noteDisconnect, noteFailRound, noteWaiting, type GiveUpTrack } from "./give-up.ts";
 
 const MAX_FAIL_RETRIES = 3;
 const CHROME_UNLOCK_MS = 2_500;
@@ -95,6 +95,7 @@ function initialStatus(
   item: InboxPdf,
   skip: readonly StudioStageId[],
   selected: readonly StudioStageId[],
+  retryGivenUp = false,
 ): {
   status: SchedStatus;
   nextCheckAt: number;
@@ -106,6 +107,10 @@ function initialStatus(
   const kickoffBegun = studioKickoffBegun(state, skip);
   const kickoffSettled = studioKickoffSettled(state, skip);
   const harvestable = hasHarvestableWork(state, selected);
+  if (prepareGivenUp(state, retryGivenUp)) {
+    log(`オーケストレータ: ${item.filename} は打ち切り済みのためスキップ（${state.giveUp!.reason}）`);
+    return { status: "skipped", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable: false };
+  }
   const coolUntil = retryUntilMs(state);
   if (coolUntil > Date.now()) {
     return { status: "waiting", nextCheckAt: coolUntil, kickoffBegun, kickoffSettled, harvestable };
@@ -153,6 +158,7 @@ function orchHelp(): string {
   npm run repair-meta -- --headed
   npm run worker -- --only paper.pdf
 
+  --retry-given-up は打ち切り済みを再開（--only FILE.pdf 併用ならその論文だけ）。
   --headless はウィンドウなし。ログインや追加確認のときだけ画面を出します。
 `;
 }
@@ -168,6 +174,7 @@ async function main(): Promise<void> {
   assertConfigPaths(cfg);
 
   const repairMeta = argv.includes("--repair-meta");
+  const retryGivenUp = argv.includes("--retry-given-up");
   const items = repairMeta
     ? listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename)
     : listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
@@ -188,10 +195,12 @@ async function main(): Promise<void> {
 
   const skip = studioSkip(cfg);
   const tracks = new Map<string, Track>();
-  const jobs: SchedJob[] = items.map((item) => {
+  const registeredPaths = new Set<string>();
+  const jobs: SchedJob[] = [];
+  const addItems = (newItems: InboxPdf[]) => addUnregisteredInboxPdfs(newItems, registeredPaths, (item) => {
     tracks.set(item.filename, { item, retries: 0, fromUsed: false, giveUp: emptyGiveUpTrack() });
-    const init = initialStatus(item, skip, cfg.studioGenerate);
-    return {
+    const init = initialStatus(item, skip, cfg.studioGenerate, retryGivenUp);
+    jobs.push({
       id: item.filename,
       mtime: cfg.newestFirst ? -mtimeMs(item.absPath) : mtimeMs(item.absPath),
       status: init.status,
@@ -201,18 +210,28 @@ async function main(): Promise<void> {
       kickoffBegun: init.kickoffBegun,
       kickoffSettled: init.kickoffSettled,
       harvestable: init.harvestable,
-    };
+    });
+    log(`オーケストレータ: worker 対象を追加 → ${item.filename}`);
   });
+  addItems(items);
+  const refreshInbox = () => {
+    if (repairMeta || cfg.onlyFilename) return 0;
+    return addItems(listInboxPdfs(cfg.inboxDir, cfg.workDir));
+  };
 
   const processed: string[] = [];
   const skipped: string[] = [];
   const failed: string[] = [];
 
   while (true) {
+    refreshInbox();
     const pause = await currentNotebookQuotaPause(cfg);
     const generationBlocked = pause != null;
     const pick = pickNextJob(jobs, Date.now(), { generationBlocked });
-    if (pick.kind === "done") break;
+    if (pick.kind === "done") {
+      if (refreshInbox() > 0) continue;
+      break;
+    }
     if (pick.kind === "idle") {
       if (generationBlocked && !jobs.some((j) => j.harvestable && (j.status === "ready" || j.status === "waiting"))) {
         log("オーケストレータ: 利用量のため生成は止め、他に進められる論文もありません");
@@ -276,6 +295,7 @@ async function main(): Promise<void> {
       if (generationBlocked || cooldownUntil > Date.now()) {
         holdWaiting(track.giveUp, Date.now());
       } else if (noteWaiting(track.giveUp, stage, Date.now())) {
+        persistGiveUp(loadPaperState(track.item), `${stage} 待ちが長時間続きました`);
         job.status = "failed";
         failed.push(track.item.filename);
         warn(
@@ -319,6 +339,7 @@ async function main(): Promise<void> {
     const disconnected = isTargetClosedMessage(loadPaperState(track.item).lastError);
     if (disconnected) {
       if (noteDisconnect(track.giveUp)) {
+        persistGiveUp(loadPaperState(track.item), "ブラウザ切断が上限に達しました");
         job.status = "failed";
         failed.push(track.item.filename);
         warn(`オーケストレータ: ${track.item.filename} はブラウザ切断が続いたのであきらめます。ほかの論文を続けます`);
@@ -344,6 +365,7 @@ async function main(): Promise<void> {
     }
     if (track.retries >= MAX_FAIL_RETRIES) {
       if (noteFailRound(track.giveUp)) {
+        persistGiveUp(loadPaperState(track.item), "失敗回数が上限に達しました");
         job.status = "failed";
         failed.push(track.item.filename);
         warn(`オーケストレータ: ${track.item.filename} は失敗が続いたのであきらめます。ほかの論文を続けます`);

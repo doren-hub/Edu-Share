@@ -30,6 +30,7 @@ export type StudioStageId = (typeof STUDIO_STAGES)[number];
 export const SKIP_SLIDES_VIDEO_STAGES: readonly StudioStageId[] = ["nlm-slides", "nlm-video"];
 
 export type PaperState = {
+  giveUp?: { at: string; reason: string };
   filename: string;
   inboxPdfPath: string;
   paperDir: string;
@@ -60,6 +61,9 @@ export type PaperState = {
   harvestRetryAt: string;
   /** harvestRetryAt の指数バックオフ用。成功したら 0 に戻す */
   harvestFailures: number;
+  descRepairRetryAt: string;
+  descRepairAttempts: number;
+  descRepairGaveUp: string;
   /** Edu Share に載せ済みの Studio 成果物。利用量待ちの途中アップロード用 */
   eduUploaded: StudioStageId[];
   /** SciSpace カード等の題名が本文と合わない等の理由で弾かれたフラグ。Edu Share への反映を防ぐ */
@@ -94,6 +98,9 @@ export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath"
     kickoffRetryStage: "",
     harvestRetryAt: "",
     harvestFailures: 0,
+    descRepairRetryAt: "",
+    descRepairAttempts: 0,
+    descRepairGaveUp: "",
     eduUploaded: [],
     sciTitleRejected: false,
   };
@@ -129,6 +136,9 @@ export function loadState(paperDir: string, fallback: PaperState): PaperState {
         parsed.kickoffRetryStage && isStageId(parsed.kickoffRetryStage) ? parsed.kickoffRetryStage : "",
       harvestRetryAt: typeof parsed.harvestRetryAt === "string" ? parsed.harvestRetryAt : "",
       harvestFailures: Math.max(0, Math.floor(Number(parsed.harvestFailures) || 0)),
+      descRepairRetryAt: typeof parsed.descRepairRetryAt === "string" ? parsed.descRepairRetryAt : "",
+      descRepairAttempts: Math.max(0, Math.floor(Number(parsed.descRepairAttempts) || 0)),
+      descRepairGaveUp: typeof parsed.descRepairGaveUp === "string" ? parsed.descRepairGaveUp : "",
       sciTitleRejected: Boolean(parsed.sciTitleRejected),
       paperDir,
       inboxPdfPath: fallback.inboxPdfPath,

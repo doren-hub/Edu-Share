@@ -1,3 +1,5 @@
+import { filenameWithoutWhitespace } from "./scispace-files-view.ts";
+
 /**
  * SciSpace Files カードからメタ情報と TL;DR を別々に取り出す。
  * メタ = タイトル・著者・年・掲載・DOI。TL;DR = 説明本文。混ぜない。
@@ -167,8 +169,8 @@ function isPdfFilenameLine(s: string): boolean {
 }
 
 function lineNamesThisFile(s: string, filename: string): boolean {
-  const t = s.trim();
-  const name = filename.trim();
+  const t = filenameWithoutWhitespace(s);
+  const name = filenameWithoutWhitespace(filename);
   const stem = name.replace(/\.pdf$/i, "");
   if (!t) return false;
   if (t === name || t === stem) return true;
@@ -178,13 +180,21 @@ function lineNamesThisFile(s: string, filename: string): boolean {
 
 /** 検索欄の stem だけでは切らない。カード先頭は `.pdf` 行にする */
 function lineIsThisPdfFilename(s: string, filename: string): boolean {
-  const t = s.trim();
-  const name = filename.trim();
+  const t = filenameWithoutWhitespace(s);
+  const name = filenameWithoutWhitespace(filename);
   const stem = name.replace(/\.pdf$/i, "");
   if (!t) return false;
   if (t === name) return true;
   if (t.endsWith(name) || t.endsWith(`${stem}.pdf`)) return true;
   return false;
+}
+
+/** 語中で折り返された名前を一行に戻してから、カードの境界を探す。 */
+function joinWrappedPdfFilename(raw: string, filename: string): string {
+  const name = filenameWithoutWhitespace(filename);
+  if (!name) return raw;
+  const escaped = [...name].map((char) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return raw.replace(new RegExp(escaped.join("\\s*"), "g"), filename.replace(/\s+/g, " "));
 }
 
 /** Files 行が1行に潰れていても、タイトル・年著者・TL;DR を分けられるようにする */
@@ -201,7 +211,7 @@ export function normalizeFilesRowText(raw: string): string {
 
 /** Files 一覧のコピーから、指定 PDF のカードだけを残す（次の .pdf 行で切る） */
 export function isolateSciSpaceCardText(raw: string, filename: string): string {
-  const lines = linesOf(normalizeFilesRowText(raw));
+  const lines = linesOf(normalizeFilesRowText(joinWrappedPdfFilename(raw, filename)));
   const start = lines.findIndex((l) => lineIsThisPdfFilename(l, filename));
   if (start < 0) {
     if (lines.some(isPdfFilenameLine)) return "";
@@ -219,12 +229,13 @@ export function isolateSciSpaceCardText(raw: string, filename: string): string {
 
 /** Files 行を改行のまま切り出す（タイトル・著者への整形はしない） */
 export function isolateSciSpaceCardTextKeepLines(raw: string, filename: string): string {
-  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  const lines = joinWrappedPdfFilename(raw, filename).replace(/\r\n/g, "\n").split("\n");
   const start = lines.findIndex((l) => lineIsThisPdfFilename(l.trim(), filename));
   if (start < 0) {
     const t = raw.trim();
     const stem = filename.replace(/\.pdf$/i, "");
-    if (t.includes(filename) || t.includes(stem)) return t.slice(0, 4000);
+    const page = filenameWithoutWhitespace(t);
+    if (page.includes(filenameWithoutWhitespace(filename)) || page.includes(filenameWithoutWhitespace(stem))) return t.slice(0, 4000);
     return "";
   }
   const out = [lines[start]!];

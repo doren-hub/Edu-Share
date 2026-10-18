@@ -61,7 +61,7 @@ import {
   sciSpaceTitleLooksLikeChrome,
   tldrUsable,
 } from "./scispace-card.ts";
-import { applyHarvestFailure, GenerationWaitingError, isRetryCooling } from "./waiting.ts";
+import { harvestBackoffMs, applyHarvestFailure, GenerationWaitingError, isRetryCooling } from "./waiting.ts";
 import { currentNotebookQuotaPause, NotebookQuotaPauseError } from "./notebook-quota.ts";
 import { needsLocalVideoFile, videoFileReady } from "./video-file.ts";
 import { formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
@@ -71,6 +71,9 @@ import {
   missingEduUploads,
   shouldSkipNotebookVisit,
 } from "./harvest.ts";
+
+import { extractPdfText } from "./pdf-text.ts";
+import { isScannedPdfText } from "./pdf-grounding.ts";
 
 export type BatchResult = {
   processed: string[];
@@ -322,7 +325,14 @@ export async function repairSciSpaceCardMeta(
   return { updated, failed };
 }
 
-function needsDescriptionRepair(state: { tldr?: string }): boolean {
+export const MAX_DESC_REPAIR_ATTEMPTS = 5;
+
+export function needsDescriptionRepair(
+  state: Pick<PaperState, "tldr" | "descRepairRetryAt" | "descRepairGaveUp" | "descRepairAttempts">,
+  now = Date.now(),
+): boolean {
+  if (state.descRepairGaveUp || state.descRepairAttempts >= MAX_DESC_REPAIR_ATTEMPTS) return false;
+  if ((Date.parse(state.descRepairRetryAt) || 0) > now) return false;
   const t = (state.tldr ?? "").trim();
   if (!t) return true;
   if (looksLikePdfApiSummary(t)) return true;
@@ -333,6 +343,13 @@ function needsDescriptionRepair(state: { tldr?: string }): boolean {
 export async function repairPaperDescriptions(
   page: Page,
   cfg: AppConfig,
+  deps = {
+    extractPdfText,
+    recoverStuckPage,
+    captureSciSpaceCardMeta,
+    applySciSpaceMetaToPaperPage,
+    now: Date.now,
+  },
 ): Promise<{ updated: string[]; failed: string[] }> {
   const updated: string[] = [];
   const failed: string[] = [];
@@ -355,10 +372,26 @@ export async function repairPaperDescriptions(
     const state = loadState(paperDir, fallback);
     if (cfg.onlyFilename && state.filename !== cfg.onlyFilename) continue;
     if (!state.eduShareTestUrl || !state.eduShareTestId) continue;
-    if (!needsDescriptionRepair(state)) continue;
+    if (state.descRepairGaveUp || state.descRepairAttempts >= MAX_DESC_REPAIR_ATTEMPTS) {
+      state.descRepairGaveUp ||= `説明欄補修が上限 ${MAX_DESC_REPAIR_ATTEMPTS} 回に達しました`;
+      saveState(state);
+      log(`${state.filename}: ${state.descRepairGaveUp}`);
+      continue;
+    }
+    if (!needsDescriptionRepair(state, deps.now())) continue;
+    const pdfText = await deps.extractPdfText(state.inboxPdfPath);
+    if (pdfText !== undefined && isScannedPdfText(pdfText)) {
+      state.descRepairGaveUp = "スキャン PDF のため説明欄補修を行いません";
+      saveState(state);
+      log(`${state.filename}: ${state.descRepairGaveUp}`);
+      continue;
+    }
+    state.descRepairAttempts++;
+    state.descRepairRetryAt = new Date(deps.now() + harvestBackoffMs(state.descRepairAttempts - 1)).toISOString();
+    saveState(state);
     log(`--- 説明欄補修 ${state.filename} ---`);
     try {
-      if (!(await recoverStuckPage(page))) {
+      if (!(await deps.recoverStuckPage(page))) {
         throw new Error("ブラウザが閉じられています");
       }
       const previousTldr = state.tldr;
@@ -366,7 +399,7 @@ export async function repairPaperDescriptions(
         state.tldr = "";
         saveState(state);
       }
-      await captureSciSpaceCardMeta(page, {
+      await deps.captureSciSpaceCardMeta(page, {
         folderUrl: cfg.scispaceFolderUrl,
         filename: state.filename,
         paperDir,
@@ -380,17 +413,21 @@ export async function repairPaperDescriptions(
           state.tldr = previousTldr;
           saveState(state);
           log(`${state.filename}: SciSpace の説明が取れないので、元の説明を残します`);
-          await applySciSpaceMetaToPaperPage(page, { paperDir, state });
+          await deps.applySciSpaceMetaToPaperPage(page, { paperDir, state });
         } else {
           log(`${state.filename}: 説明を埋められないので、この回は説明補修を終えます`);
           saveState(state);
         }
         continue;
       }
+      state.descRepairAttempts = 0;
+      state.descRepairRetryAt = "";
+      state.descRepairGaveUp = "";
+      saveState(state);
       if (!sciSpaceDescriptionUsable(state.tldr)) {
         log(`${state.filename}: SciSpace TL;DR が取れないので PDF 要約にフォールバックします`);
       }
-      await applySciSpaceMetaToPaperPage(page, { paperDir, state });
+      await deps.applySciSpaceMetaToPaperPage(page, { paperDir, state });
       saveState(state);
       updated.push(state.filename);
     } catch (e) {
@@ -400,6 +437,12 @@ export async function repairPaperDescriptions(
       saveState(state);
       logError(`${state.filename}: 説明欄補修に失敗: ${msg}`);
       failed.push(state.filename);
+    } finally {
+      if (state.descRepairAttempts >= MAX_DESC_REPAIR_ATTEMPTS) {
+        state.descRepairGaveUp = `説明欄補修が上限 ${MAX_DESC_REPAIR_ATTEMPTS} 回に達しました`;
+        saveState(state);
+        log(`${state.filename}: ${state.descRepairGaveUp}`);
+      }
     }
   }
   return { updated, failed };

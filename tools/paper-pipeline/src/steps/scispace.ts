@@ -40,6 +40,7 @@ import {
   isFilesListSearchHint,
   looksLikeSciSpaceChatHome,
   looksLikeSciSpaceFilesTable,
+  pageShowsPdfFilename,
 } from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
 import { pauseIfBlocked } from "../human.ts";
@@ -61,8 +62,10 @@ async function pageText(page: Page): Promise<string> {
   return page.locator("body").innerText({ timeout: 8_000 }).catch(() => "");
 }
 
-async function isNotebooksFilesView(page: Page, folderUrl: string): Promise<boolean> {
+export async function isNotebooksFilesView(page: Page, folderUrl: string): Promise<boolean> {
   if (!isOnSpecifiedFolder(page, folderUrl)) return false;
+  const table = page.locator('table:has(tr), [role="grid"]:has([role="row"]), [role="table"]:has([role="row"])');
+  if (!(await table.first().isVisible({ timeout: 0 }).catch(() => false))) return false;
   const upload = await page
     .getByRole("button", { name: /Upload PDFs/i })
     .first()
@@ -429,8 +432,12 @@ async function fillFilesListSearch(page: Page, folderUrl: string, query: string)
   return setFilesSearch(page, folderUrl, query);
 }
 
+function filenameNeedles(filename: string, title = ""): string[] {
+  return [...new Set([filename, filename.replace(/\.pdf$/i, ""), title].filter((s) => s.trim().length >= 4))];
+}
+
 async function filesNameVisible(page: Page, filename: string, title = ""): Promise<boolean> {
-  const needles = [filename, filename.replace(/\.pdf$/i, ""), title].filter((s) => s.trim().length >= 4);
+  const needles = filenameNeedles(filename, title);
   for (const needle of needles) {
     const loc = page.getByText(needle, { exact: false }).first();
     if (!(await loc.isVisible({ timeout: 800 }).catch(() => false))) continue;
@@ -442,7 +449,7 @@ async function filesNameVisible(page: Page, filename: string, title = ""): Promi
 }
 
 async function filesRowAuthorsExpanded(page: Page, filename: string, title = ""): Promise<boolean> {
-  const needles = [filename, filename.replace(/\.pdf$/i, ""), title].filter((s) => s.trim().length >= 4);
+  const needles = filenameNeedles(filename, title);
   return page
     .evaluate((needles: string[]) => {
       const vis = (el: Element) => {
@@ -849,7 +856,7 @@ async function readFilesRowTldr(page: Page, filename: string): Promise<string> {
     const m = t.replace(/\s+/g, " ").match(opener);
     if (
       m?.[1] &&
-      (t.includes(filename) || t.toLowerCase().includes(filename.replace(/\.pdf$/i, "").toLowerCase()))
+      pageShowsPdfFilename(t, filename)
     ) {
       return m[1].replace(/\s+/g, " ").trim().slice(0, 2000);
     }
@@ -858,17 +865,20 @@ async function readFilesRowTldr(page: Page, filename: string): Promise<string> {
   return "";
 }
 
-async function readFilesColumnTldr(page: Page, filename: string): Promise<string> {
+export async function readFilesColumnTldr(page: Page, filename: string): Promise<string> {
   const raw = String(
     await page
       .evaluate(
         `(function () {
       const name = ${JSON.stringify(filename)};
-      const stem = name.replace(/\\.pdf$/i, "");
+      const matchesFilename = ${pageShowsPdfFilename.toString()};
       const opener = /^(The paper|This paper|The study|This study|本研究|本論文)\\b/i;
-      const looksName = (t) => t === name || t === stem || t.endsWith(name);
+      const looksName = (t) => {
+        return matchesFilename(t, name);
+      };
       const nodes = Array.from(document.querySelectorAll("a, span, div, p, td, li, h2, h3, h4"));
-      const hit = nodes.find((el) => looksName((el.textContent || "").replace(/\\s+/g, " ").trim()));
+      const hit = nodes.find((el) => looksName(el.textContent || "") &&
+        !Array.from(el.children).some((child) => looksName(child.textContent || "")));
       const fromKids = (root) => {
         const whole = ((root.innerText || "") + "");
         const pdfs = whole.match(/[\\w.-]+\\.pdf/gi) || [];
@@ -900,7 +910,7 @@ async function readFilesColumnTldr(page: Page, filename: string): Promise<string
       const rows = Array.from(document.querySelectorAll('[role="row"], tr, article, li'));
       for (const row of rows) {
         const text = ((row.innerText || "") + "").trim();
-        if (!text.includes(name) && !text.includes(stem + ".pdf")) continue;
+        if (!matchesFilename(text, name)) continue;
         const got = fromKids(row);
         if (got) return got;
         const m = text.replace(/\\s+/g, " ").match(/((?:The paper|This paper|本研究[はが]|本論文[はが])[\\s\\S]{40,1500})/);
@@ -1425,23 +1435,26 @@ export async function runSciSpaceUpload(
   try {
     log("SciSpace に PDF を先に載せます（メタは NotebookLM のあとで取ります）");
     await openNotebooksFilesView(page, folderUrl);
-    await uploadPdfToSciSpace(page, pdfPath);
-    const stem = filename.replace(/\.pdf$/i, "");
-    const start = Date.now();
-    let found = false;
-    while (Date.now() - start < 180_000) {
-      if (page.isClosed() || !(await pageAlive(page))) {
-        throw new Error("SciSpace アップロード待ち中にブラウザが閉じられました");
+    const listed = async () => pageShowsPdfFilename(await pageText(page), filename);
+    if (await listed()) {
+      log("SciSpace Files に同じ PDF 名があるので、再アップロードはしません");
+    } else {
+      await uploadPdfToSciSpace(page, pdfPath);
+      const start = Date.now();
+      let found = false;
+      while (Date.now() - start < 180_000) {
+        if (page.isClosed() || !(await pageAlive(page))) {
+          throw new Error("SciSpace アップロード待ち中にブラウザが閉じられました");
+        }
+        if (await listed()) {
+          found = true;
+          break;
+        }
+        await sleep(2000);
       }
-      const body = await pageText(page);
-      if (body.includes(filename) || body.includes(stem)) {
-        found = true;
-        break;
+      if (!found) {
+        throw new Error("SciSpace の Files に PDF 名が出ていません（アップロード未完了）");
       }
-      await sleep(2000);
-    }
-    if (!found) {
-      throw new Error("SciSpace の Files に PDF 名が出ていません（アップロード未完了）");
     }
     markCompleted(state, "sci-upload");
   } catch (e) {
