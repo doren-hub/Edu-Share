@@ -12,7 +12,8 @@ export function filesTabClickAllowed(opts: {
 }
 
 /** SciSpace フォルダの Files 表か、ノートのチャット/Home かを本文から分ける。 */
-export function looksLikeSciSpaceFilesTable(text: string): boolean {
+export function looksLikeSciSpaceFilesTable(text: string, hasTableRows = true): boolean {
+  if (!hasTableRows) return false;
   const t = text.replace(/\s+/g, " ");
   if (!/Upload PDFs/i.test(t)) return false;
   if (!/Files\s*\(\d+/i.test(t)) return false;
@@ -39,6 +40,15 @@ export function isFilesListSearchHint(hint: string): boolean {
   return /search|filter|find|検索|file|folder/i.test(h);
 }
 
+/** 画面の改行や連続空白でファイル名が割れても、同じ PDF として扱う */
+export function pageShowsPdfFilename(body: string, filename: string): boolean {
+  const page = body.replace(/\s+/g, "");
+  const name = filename.replace(/\s+/g, "");
+  if (!page || !name) return false;
+  const stem = name.replace(/\.pdf$/i, "");
+  return [name, stem].filter((value) => value.length >= 4).some((value) => page.includes(value));
+}
+
 export function looksLikeSciSpaceChatHome(text: string): boolean {
   const t = text.replace(/\s+/g, " ");
   const hits = [/\bNew Chat\b/i, /\bHome\b/, /\bAgent Gallery\b/i, /\bChat with PDF\b/i].filter((r) =>
@@ -46,4 +56,9 @@ export function looksLikeSciSpaceChatHome(text: string): boolean {
   ).length;
   if (hits < 3) return false;
   return !looksLikeSciSpaceFilesTable(t);
+}
+
+/** PDF 名の比較では語中の改行を含め、すべての空白を無視する。 */
+export function filenameWithoutWhitespace(value: string): string {
+  return value.replace(/\s+/g, "");
 }

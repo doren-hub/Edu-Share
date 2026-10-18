@@ -108,3 +108,32 @@ with reference to the layer inputs.
   assert.equal(state.tldr, "");
 });
 
+
+test("isNotebooksFilesView: サイドバーありでも行を持つ表がなければ false", async () => {
+  const { isNotebooksFilesView } = await import("./scispace.ts");
+  const page = {
+    url: () => "https://example.test/folder",
+    locator: (selector: string) => {
+      assert.match(selector, /table:has\(tr\)/);
+      return { first: () => ({ isVisible: async () => false }) };
+    },
+    getByText: () => { throw new Error("表のない画面でサイドバーを根拠にしない"); },
+  } as unknown as import("playwright").Page;
+  assert.equal(await isNotebooksFilesView(page, "https://example.test/folder"), false);
+});
+
+test("TL;DR 行探索も語中改行の PDF 名を同じ比較関数で認識する", async () => {
+  const { readFilesColumnTldr } = await import("./scispace.ts");
+  const { runInNewContext } = await import("node:vm");
+  const summary = "The paper presents a detailed analysis of quantum error correction and its experimental validation across several computing platforms.";
+  const filename = { textContent: "phase2_3_\n0_1.pdf", innerText: "phase2_3_\n0_1.pdf", children: [] as unknown[], parentElement: null as unknown };
+  const description = { textContent: summary, innerText: summary, children: [] };
+  const row = { innerText: `${filename.innerText}\n${summary}`, children: [filename, description], parentElement: null };
+  filename.parentElement = row;
+  const page = {
+    evaluate: async (code: string) => runInNewContext(code, {
+      document: { body: {}, querySelectorAll: (selector: string) => selector.includes("role=") ? [row] : [filename] },
+    }),
+  } as unknown as import("playwright").Page;
+  assert.equal(await readFilesColumnTldr(page, "phase2_3_0_1.pdf"), summary);
+});

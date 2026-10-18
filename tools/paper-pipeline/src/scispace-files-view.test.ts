@@ -7,6 +7,7 @@ import {
   looksLikeSciSpaceFilesTable,
   filesListNeedsLoadMore,
   isFilesListSearchHint,
+  pageShowsPdfFilename,
 } from "./scispace-files-view.ts";
 
 const homeDump =
@@ -71,6 +72,18 @@ test("先頭 15 件と Load More がある一覧はページ送りが要る", ()
   assert.equal(filesListNeedsLoadMore(filesTable), false);
 });
 
+test("改行と連続空白で割れた PDF 名も同じファイルとみなす", () => {
+  const filename =
+    "Geophysical Research Letters - 2022 - Cressie - From Many to One  Consensus Inference in a MIP.pdf";
+  const shown = [
+    "Geophysical Research Letters - 2022 - Cressie - From",
+    "Many to One Consensus Inference in a MIP.pdf",
+    "PDF UPLOAD Uploaded on 15 Oct 2026",
+  ].join("\n");
+  assert.equal(pageShowsPdfFilename(shown, filename), true);
+  assert.equal(pageShowsPdfFilename("Files (122) Upload PDFs", filename), false);
+});
+
 test("Files タブは選択済みや連打では押さない", () => {
   assert.equal(filesTabClickAllowed({ alreadySelected: true, lastClickAt: 0, now: 30_000 }), false);
   assert.equal(
@@ -81,4 +94,13 @@ test("Files タブは選択済みや連打では押さない", () => {
     filesTabClickAllowed({ alreadySelected: false, lastClickAt: 10_000, now: 10_000 + FILES_TAB_CLICK_GAP_MS }),
     true,
   );
+});
+test("サイドバーの Files 文言だけで表のないチャットを認識しない", () => {
+  assert.equal(looksLikeSciSpaceFilesTable("Upload PDFs Files (4) Sort Notebooks (2) Uploaded on", false), false);
+});
+
+test("語中の改行も空白も除いて PDF 名を比較する", () => {
+  assert.equal(pageShowsPdfFilename("phase2_3_\n0_1.pdf", "phase2_3_0_1.pdf"), true);
+  assert.equal(pageShowsPdfFilename("phase2_3_0_1.pdf", "phase2_3_\n0_1.pdf"), true);
+  assert.equal(pageShowsPdfFilename("another.pdf", "phase2_3_0_1.pdf"), false);
 });

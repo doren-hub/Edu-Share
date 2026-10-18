@@ -210,3 +210,34 @@ test("dedupeInboxPdfs: 同じ filename は後勝ち", () => {
   assert.equal(merged.length, 2);
   assert.equal(merged.find((x) => x.filename === "a.pdf")?.absPath, "/work/a/a.pdf");
 });
+test("inbox 再読込は新パスだけ追加し、既存ジョブと保存済み段階を保持する", async () => {
+  const { addUnregisteredInboxPdfs } = await import("./inbox.ts");
+  const { emptyState, loadState, markCompleted } = await import("./state.ts");
+  const root = mkdtempSync(join(tmpdir(), "inbox-refresh-"));
+  try {
+    const inbox = join(root, "inbox");
+    const work = join(root, "work");
+    mkdirSync(inbox);
+    writeFileSync(join(inbox, "first.pdf"), "test");
+    const paths = new Set<string>();
+    const jobs: { item: import("./inbox.ts").InboxPdf; status: string; attempts: number }[] = [];
+    const refresh = () => addUnregisteredInboxPdfs(listInboxPdfs(inbox, work), paths,
+      (item) => jobs.push({ item, status: "ready", attempts: 0 }));
+    assert.equal(refresh(), 1);
+    const first = jobs[0]!;
+    first.status = "waiting";
+    first.attempts = 2;
+    const state = emptyState({ filename: first.item.filename, inboxPdfPath: first.item.absPath, paperDir: first.item.paperDir });
+    markCompleted(state, "nlm-create");
+    writeFileSync(join(inbox, "second.pdf"), "test");
+    assert.equal(refresh(), 1);
+    assert.equal(refresh(), 0);
+    assert.equal(jobs.length, 2);
+    assert.equal(jobs[0], first);
+    assert.equal(first.status, "waiting");
+    assert.equal(first.attempts, 2);
+    assert.deepEqual(loadState(state.paperDir, state).completed, ["nlm-create"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

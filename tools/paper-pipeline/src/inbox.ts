@@ -63,6 +63,22 @@ export function listInboxPdfs(inboxDir: string, workDir: string, onlyFilename = 
     });
 }
 
+/** 一覧の読み直しで既存のジョブやその状態を作り直さない。 */
+export function addUnregisteredInboxPdfs(
+  items: readonly InboxPdf[],
+  registeredPaths: Set<string>,
+  add: (item: InboxPdf) => void,
+): number {
+  let added = 0;
+  for (const item of items) {
+    if (registeredPaths.has(item.absPath)) continue;
+    add(item);
+    registeredPaths.add(item.absPath);
+    added++;
+  }
+  return added;
+}
+
 export function sanitizeDirName(stem: string): string {
   const s = stem.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
   return s || "paper";

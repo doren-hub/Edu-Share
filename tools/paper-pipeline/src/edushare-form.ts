@@ -13,6 +13,23 @@ export function isDummyAuthorValue(v: string): boolean {
 export const SLIDE_MATERIAL_HEADING = "スライド（PDF）";
 export const VIDEO_MATERIAL_HEADING = "動画（MP4）";
 
+/** 見出しに続く同階層の状態行だけを読む。説明行を飛ばし、入力欄の前で止める。 */
+export function notebookLmCsvStatusLine(title: Element): string {
+  for (let row = title.nextElementSibling; row; row = row.nextElementSibling) {
+    if (row.tagName !== "P") break;
+    const text = (row.textContent ?? "").trim();
+    if (/^(?:未取り込み|取り込み済み[（(])/.test(text)) return text;
+  }
+  return "";
+}
+
+/** クイズ欄か単語帳欄の本文だけを見て、その種類が取り込み済みか */
+export function notebookLmCsvPoolImported(cardText: string): boolean {
+  const t = cardText.replace(/\s+/g, " ").trim();
+  const m = t.match(/取り込み済み[（(](\d+)問[）)]/);
+  return !!m && Number(m[1]) >= 1;
+}
+
 /** NotebookLM スライド／動画ブロックの「登録済み / 未登録」 */
 export function notebookLmMaterialBlockIsRegistered(blockText: string): boolean {
   const t = blockText.replace(/\s+/g, " ").trim();

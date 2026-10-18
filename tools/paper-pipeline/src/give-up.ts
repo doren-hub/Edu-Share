@@ -1,3 +1,5 @@
+import { saveState, type PaperState } from "./state.ts";
+
 /** 同じ論文を際限なくやり直さないための上限。超えたらその論文だけあきらめて、ほかを続ける */
 
 /** 「3回失敗 → 少し待って再試行」を何巡まで許すか */
@@ -48,4 +50,19 @@ export function noteFailRound(track: GiveUpTrack): boolean {
 export function noteDisconnect(track: GiveUpTrack): boolean {
   track.disconnects += 1;
   return track.disconnects >= MAX_DISCONNECTS;
+}
+
+/** worker 終了後の最新 state に打ち切りだけを追記する。 */
+export function persistGiveUp(state: PaperState, reason: string, now = Date.now()): void {
+  state.giveUp = { at: new Date(now).toISOString(), reason };
+  saveState(state);
+}
+
+/** 起動時に対象として選ばれた論文だけ明示的に戻す。 */
+export function prepareGivenUp(state: PaperState, retry: boolean): boolean {
+  if (!state.giveUp) return false;
+  if (!retry) return true;
+  delete state.giveUp;
+  saveState(state);
+  return false;
 }

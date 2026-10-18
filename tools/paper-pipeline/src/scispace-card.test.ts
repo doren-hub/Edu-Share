@@ -592,6 +592,21 @@ test("isolateSciSpaceCardText: 検索欄の stem だけでは隣カードを自�
   assert.equal(isolated, "");
 });
 
+test("rawFilesCardPaste: 画面で空白が潰れた長いファイル名も同じカードにする", () => {
+  const filename =
+    "Geophysical Research Letters - 2022 - Cressie - From Many to One  Consensus Inference in a MIP.pdf";
+  const shown = [
+    "Geophysical Research Letters - 2022 - Cressie - From Many to One Consensus Inference in a MIP.pdf",
+    "From Many to One: Consensus Inference in a MIP",
+    "2022 · DOI · Noel Cressie",
+    "Geophysical Research Letters",
+    "The paper discusses the importance of consensus estimation.",
+  ].join("\n");
+  const paste = rawFilesCardPaste(shown, filename);
+  assert.match(paste, /Noel Cressie/);
+  assert.match(paste, /consensus estimation/);
+});
+
 test("pickBestSciSpaceCardText: ファイル名だけのセルより TL;DR 付きカードを選ぶ", () => {
   const filenameOnly = "LineweaverPatel2023final.pdf";
   const picked = pickBestSciSpaceCardText(
@@ -853,3 +868,14 @@ test("extractSciSpaceCardMeta: Not addressed などの未回答文言はタイ�
   assert.equal(meta.tldr, "");
 });
 
+
+test("rawFilesCardPaste: 語中改行の名前をまとめ、隣の PDF のメタは含めない", () => {
+  const raw = [
+    "phase2_3_", "0_1.pdf", "Quantum Error Correction", "2024 · Alice Smith",
+    "The paper presents a detailed analysis of error correction across several computing platforms.",
+    "other.pdf", "Unrelated Paper", "2025 · Bob Jones",
+  ].join("\n");
+  const paste = rawFilesCardPaste(raw, "phase2_3_0_1.pdf");
+  assert.match(paste, /Alice Smith/);
+  assert.doesNotMatch(paste, /Bob Jones|Unrelated Paper/);
+});
