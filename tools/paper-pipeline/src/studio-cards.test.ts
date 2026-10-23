@@ -205,3 +205,17 @@ test("studioText: 文字列・text・flashcardContentBlock のどの形でも本
   assert.equal(studioText({ c: 1 }), "");
   assert.equal(studioText(null), "");
 });
+
+
+test("explicit quiz/copy icons cannot become slides through a relative timestamp", () => {
+  const cards = [
+    "quiz 題名 練習問題 1 件のソース · 7 日前",
+    "quiz 題名 確認テスト 1 件のソース · 7 日前",
+    "copy 題名 単語カード 1 件のソース · 4 日前",
+    "copy 題名 記憶カード 1 件のソース · 4 日前",
+    "videocam 題名 1 件のソース · 4 日前",
+  ];
+  for (const card of cards) assert.equal(isSlideDeckCardText(card), false, card);
+  assert.equal(shouldKickoffSlides(cards), true);
+  assert.equal(isSlideDeckCardText("tablet クイズの作り方 1 件のソース · 7 日前"), true);
+});
