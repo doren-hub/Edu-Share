@@ -5,6 +5,16 @@ export const STUDIO_RELATIVE_TIME =
 /** 単語帳の出力カード。NotebookLM は「単語帳」「暗記カード」など名前を変える */
 export const FLASHCARD_CARD = /フラッシュ|単語帳|暗記カード|Flashcard/i;
 
+/** Material icon identity takes precedence over an arbitrary generated title. */
+export function studioKindFromIcon(icon: string): "quiz" | "flashcards" | "slides" | "video" | "other" | null {
+  if (icon === "quiz") return "quiz";
+  if (["copy", "cards_star", "flashcards"].includes(icon)) return "flashcards";
+  if (icon === "tablet") return "slides";
+  if (["videocam", "subscriptions"].includes(icon)) return "video";
+  if (["audio_spark", "flowchart", "stacked_bar_chart", "format_list_bulleted", "auto_tab_group", "sticky_note", "add", "add_2", "sync"].includes(icon)) return "other";
+  return null;
+}
+
 const NON_VIDEO =
   /フラッシュカード|単語帳|暗記カード|クイズ|マインドマップ|インフォグラフィ|スライド資料|Slide deck/i;
 
@@ -77,6 +87,12 @@ export function studioVideoGenerationDone(scan: VideoKickoffScan): boolean {
 export function isSlideDeckCardText(text: string): boolean {
   const t = text.replace(/\s+/g, " ").trim();
   if (!t) return false;
+  const kind = studioKindFromIcon(t.split(" ")[0]);
+  if (kind !== null) {
+    if (kind !== "slides") return false;
+    if (/スライド資料を生成|Generating slide/i.test(t)) return false;
+    return /件のソース/.test(t) || STUDIO_RELATIVE_TIME.test(t);
+  }
   if (NON_SLIDE_CARD.test(t)) return false;
   if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/.test(t)) return false;
   if (/chevron_forward/.test(t) && !/件のソース/.test(t)) return false;
