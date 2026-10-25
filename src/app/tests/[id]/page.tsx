@@ -22,6 +22,7 @@ import {
   type MaterialCarouselPane,
 } from "@/components/TestMaterialCarousel";
 import { PaperAskSection } from "@/components/PaperAskSection";
+import { PaperRelatedGraphSection } from "@/components/PaperRelatedGraphSection";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { loadPaperStudyStatusForTest } from "@/lib/paper-study-status";
@@ -738,6 +739,13 @@ export default async function TestDetailPage({
             isLoggedIn={Boolean(user)}
             title={test.title}
             paperDoi={(test as { paper_doi?: string | null }).paper_doi ?? null}
+          />
+        ) : null}
+
+        {isPaper && test.processing_status === "ready" ? (
+          <PaperRelatedGraphSection
+            testId={test.id}
+            title={test.title}
           />
         ) : null}
 

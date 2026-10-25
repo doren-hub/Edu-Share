@@ -20,6 +20,7 @@
     "@google/generative-ai": "^0.21.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.49.1",
+    "d3-force": "^3.0.0",
     "jsonrepair": "^3.13.3",
     "next": "^15.2.4",
     "openai": "^4.77.0",
@@ -30,6 +31,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^22.10.2",
     "@types/pdf-parse": "^1.1.4",
     "@types/react": "^19.0.2",
