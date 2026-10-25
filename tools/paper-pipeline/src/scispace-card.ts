@@ -30,6 +30,9 @@ export function looksLikeCitationTitle(s: string): boolean {
   if (/\d+,\s*\d+\s*[—\-–]\s*\d+\s*\(\d{4}\)/.test(t)) return true;
   if (/^commun\.\s/i.test(t)) return true;
   if (/^[\s,]*\d+[—–-]\d+\s*\(\d{4}\)\s*$/.test(t)) return true;
+  // 「, 9681-9702; doi:10.3390/...」のような書誌の断片
+  if (/^[,;:.]/.test(t)) return true;
+  if (/\bdoi:\s*10\.\d{4,}\//i.test(t)) return true;
   if (
     /^(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}$/i.test(
       t,
