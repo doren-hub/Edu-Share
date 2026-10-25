@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
+import { buildGoogleAiSearchUrl } from "@/lib/google-ai-search";
 
 export type ReferencedChunk = {
   id: string;
@@ -20,10 +21,14 @@ export type ChatMessage = {
 export function PaperAskChat({
   testId,
   isLoggedIn,
+  title,
+  paperDoi,
   onSelectChunkPage,
 }: {
   testId: string;
   isLoggedIn: boolean;
+  title?: string;
+  paperDoi?: string | null;
   onSelectChunkPage?: (page: number, chunk: ReferencedChunk) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -90,6 +95,12 @@ export function PaperAskChat({
       setLoading(false);
     }
   }
+
+  const googleAiSearchUrl = buildGoogleAiSearchUrl({
+    title: title ?? "",
+    doi: paperDoi,
+    question: input,
+  });
 
   return (
     <div className="space-y-4">
@@ -220,9 +231,36 @@ export function PaperAskChat({
               {loading ? "送信中…" : "質問する"}
             </button>
           </div>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1">
+            <a
+              href={googleAiSearchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 hover:text-zinc-950 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:ring-offset-1"
+            >
+              <svg
+                className="h-3.5 w-3.5 text-zinc-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                />
+              </svg>
+              Google AI モードで聞く
+            </a>
+            <span className="text-xs text-zinc-500">
+              外部サイト（Google）で開きます。論文の本文は渡りません
+            </span>
+          </div>
         </form>
       ) : (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-center">
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-center space-y-3">
           <p className="text-sm text-zinc-600">
             論文について Gemini に質問するには{" "}
             <Link className="font-semibold underline text-zinc-900 hover:text-zinc-700" href="/auth/login">
@@ -230,6 +268,32 @@ export function PaperAskChat({
             </Link>{" "}
             してください。
           </p>
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5">
+            <a
+              href={googleAiSearchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 hover:text-zinc-950 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:ring-offset-1"
+            >
+              <svg
+                className="h-3.5 w-3.5 text-zinc-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                />
+              </svg>
+              Google AI モードで聞く
+            </a>
+            <span className="text-xs text-zinc-500">
+              外部サイト（Google）で開きます。論文の本文は渡りません
+            </span>
+          </div>
         </div>
       )}
 
