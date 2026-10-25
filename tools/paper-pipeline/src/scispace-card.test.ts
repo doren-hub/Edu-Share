@@ -728,6 +728,7 @@ test("reconcileMetaFromFilesPaste: Files 行の正しいメタで state を戻�
 test("日付・ページ範囲・PDF全画面はタイトルにしない", () => {
   assert.equal(looksLikeCitationTitle("OCTOBER 01 2023"), true);
   assert.equal(looksLikeCitationTitle(", 1–20 (2025)"), true);
+  assert.equal(looksLikeCitationTitle(", 9681-9702; doi:10.3390/s150509681"), true);
   assert.equal(looksLikeCitationTitle("Read PDF in full screen"), true);
   assert.equal(looksLikeCitationTitle("© by Springer-Verlag 1975"), true);
   assert.equal(looksLikeCitationTitle("All objects and some questions"), false);
