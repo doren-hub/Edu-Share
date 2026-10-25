@@ -22,9 +22,10 @@ const bodySchema = z.object({
     .array(
       z.object({
         role: z.enum(["user", "assistant"]),
-        content: z.string().trim(),
+        content: z.string().trim().max(4000, "やりとりのテキストが長すぎます"),
       }),
     )
+    .max(6, "やりとりの件数が多すぎます")
     .optional(),
 });
 
@@ -91,10 +92,10 @@ export async function POST(req: Request, context: RouteContext) {
     );
   }
 
-  // 4. 論文の document_chunks を全件取得
+  // 4. 論文の document_chunks を全件取得（ベクトルは除外して取得量を最小化）
   const { data: chunkRows, error: chunkErr } = await admin
     .from("document_chunks")
-    .select("id, chunk_index, content, pdf_page, embedding")
+    .select("id, chunk_index, content, pdf_page")
     .eq("test_id", id)
     .order("chunk_index", { ascending: true });
 
@@ -125,46 +126,61 @@ export async function POST(req: Request, context: RouteContext) {
     };
   });
 
-  const hasEmbeddings =
-    openAiEmbeddingsEnabled() &&
-    chunkRows.some((r) => r.embedding != null);
-
   const maxChars = Number(process.env.PAPER_ASK_MAX_CHARS) || 200_000;
   const totalChars = allChunks.reduce((acc, c) => acc + c.content.length, 0);
 
+  let hasEmbeddings = false;
   let matchedChunks: PaperAskChunk[] | null = null;
-  if (totalChars > maxChars && hasEmbeddings) {
-    try {
-      const qv = await embedQuery(question);
-      const { data: rpcRows, error: rpcErr } = await admin.rpc(
-        "match_document_chunks",
-        {
-          p_test_id: id,
-          p_query_embedding: qv,
-          p_match_count: 32,
-        },
-      );
 
-      if (!rpcErr && Array.isArray(rpcRows) && rpcRows.length > 0) {
-        // content で照合して元の chunk を紐付け
-        const chunkByContent = new Map<string, PaperAskChunk>();
-        for (const c of allChunks) {
-          chunkByContent.set(c.content.trim(), c);
+  // 上限を超える場合のみ、埋め込みの有無を確認して類似度検索を試みる
+  if (totalChars > maxChars && openAiEmbeddingsEnabled()) {
+    const { data: sampleWithEmbedding } = await admin
+      .from("document_chunks")
+      .select("id")
+      .eq("test_id", id)
+      .not("embedding", "is", null)
+      .limit(1);
+
+    hasEmbeddings = Boolean(
+      sampleWithEmbedding && sampleWithEmbedding.length > 0,
+    );
+
+    if (hasEmbeddings) {
+      try {
+        const qv = await embedQuery(question);
+        const { data: rpcRows, error: rpcErr } = await admin.rpc(
+          "match_document_chunks",
+          {
+            p_test_id: id,
+            p_query_embedding: qv,
+            p_match_count: 32,
+          },
+        );
+
+        if (!rpcErr && Array.isArray(rpcRows) && rpcRows.length > 0) {
+          // content で照合して元の chunk を紐付け
+          const chunkByContent = new Map<string, PaperAskChunk>();
+          for (const c of allChunks) {
+            chunkByContent.set(c.content.trim(), c);
+          }
+          matchedChunks = (
+            rpcRows as { content?: string; similarity?: number }[]
+          )
+            .map((row) => {
+              const rawContent = String(row.content ?? "").trim();
+              const original = chunkByContent.get(rawContent);
+              if (!original) return null;
+              return {
+                ...original,
+                similarity:
+                  typeof row.similarity === "number" ? row.similarity : 0,
+              };
+            })
+            .filter((c): c is PaperAskChunk => c != null);
         }
-        matchedChunks = (rpcRows as { content?: string; similarity?: number }[])
-          .map((row) => {
-            const rawContent = String(row.content ?? "").trim();
-            const original = chunkByContent.get(rawContent);
-            if (!original) return null;
-            return {
-              ...original,
-              similarity: typeof row.similarity === "number" ? row.similarity : 0,
-            };
-          })
-          .filter((c): c is PaperAskChunk => c != null);
+      } catch (e) {
+        console.warn("[papers/ask] match_document_chunks error:", e);
       }
-    } catch (e) {
-      console.warn("[papers/ask] match_document_chunks error:", e);
     }
   }
 

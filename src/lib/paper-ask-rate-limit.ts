@@ -9,6 +9,17 @@ export function checkUserAskRateLimit(userId: string): {
 } {
   const now = Date.now();
   const windowStart = now - ASK_RATE_LIMIT_WINDOW_MS;
+
+  // 期限切れユーザーの整理（メモリ肥大化防止）
+  for (const [uid, tsList] of userTimestamps.entries()) {
+    const fresh = tsList.filter((t) => t > windowStart);
+    if (fresh.length === 0) {
+      userTimestamps.delete(uid);
+    } else if (fresh.length !== tsList.length) {
+      userTimestamps.set(uid, fresh);
+    }
+  }
+
   const existing = userTimestamps.get(userId) ?? [];
   const valid = existing.filter((t) => t > windowStart);
 

@@ -104,6 +104,21 @@ describe("buildPaperAskPrompt: プロンプトの組み立て", () => {
     assert.ok(prompt.user.includes("【直前のやりとり】"));
     assert.ok(prompt.user.includes("アテンションの計算式は何ですか？"));
   });
+
+  it("履歴が多数ある場合は直近の往復（最大6件）に絞り込まれる", () => {
+    const history = Array.from({ length: 10 }, (_, i) => ({
+      role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      content: `メッセージ_${i}`,
+    }));
+    const prompt = buildPaperAskPrompt({
+      chunks,
+      question: "テスト質問",
+      history,
+    });
+    // 最初の方（メッセージ_0〜3）は切り捨てられ、直近（メッセージ_4〜9）が含まれる
+    assert.ok(!prompt.user.includes("メッセージ_0"));
+    assert.ok(prompt.user.includes("メッセージ_9"));
+  });
 });
 
 describe("parsePaperAskResponse", () => {
