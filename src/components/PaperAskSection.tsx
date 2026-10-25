@@ -8,9 +8,13 @@ import { searchPhrasesFromSourceExcerpt, type PdfMarkItem } from "@/lib/quiz-pdf
 export function PaperAskSection({
   testId,
   isLoggedIn,
+  title,
+  paperDoi,
 }: {
   testId: string;
   isLoggedIn: boolean;
+  title: string;
+  paperDoi?: string | null;
 }) {
   const [activeMarks, setActiveMarks] = useState<PdfMarkItem[]>([]);
   const [activePage, setActivePage] = useState<number | null>(null);
@@ -62,6 +66,8 @@ export function PaperAskSection({
         <PaperAskChat
           testId={testId}
           isLoggedIn={isLoggedIn}
+          title={title}
+          paperDoi={paperDoi}
           onSelectChunkPage={handleSelectChunkPage}
         />
       </div>

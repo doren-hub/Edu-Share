@@ -733,7 +733,12 @@ export default async function TestDetailPage({
         ) : null}
 
         {isPaper && test.processing_status === "ready" ? (
-          <PaperAskSection testId={test.id} isLoggedIn={Boolean(user)} />
+          <PaperAskSection
+            testId={test.id}
+            isLoggedIn={Boolean(user)}
+            title={test.title}
+            paperDoi={(test as { paper_doi?: string | null }).paper_doi ?? null}
+          />
         ) : null}
 
         {test.processing_status === "ready" ? (
