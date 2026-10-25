@@ -21,6 +21,7 @@ import {
   TestMaterialCarousel,
   type MaterialCarouselPane,
 } from "@/components/TestMaterialCarousel";
+import { PaperAskSection } from "@/components/PaperAskSection";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { loadPaperStudyStatusForTest } from "@/lib/paper-study-status";
@@ -729,6 +730,10 @@ export default async function TestDetailPage({
                 )}
               </div>
           </section>
+        ) : null}
+
+        {isPaper && test.processing_status === "ready" ? (
+          <PaperAskSection testId={test.id} isLoggedIn={Boolean(user)} />
         ) : null}
 
         {test.processing_status === "ready" ? (
