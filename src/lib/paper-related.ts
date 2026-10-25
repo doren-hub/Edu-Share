@@ -55,7 +55,8 @@ export type EgoGraphData = {
 
 /**
  * ベクトルの要素ごとの平均（代表ベクトル）を算出する。
- * 有効なベクトルが無い場合は null を返す。
+ * SQL 側の match_related_papers (033_match_related_papers.sql) の代表ベクトル計算と同等の
+ * 参照実装・仕様定義および単体テスト用。有効なベクトルが無い場合は null を返す。
  */
 export function computeRepresentativeVector(
   embeddings: number[][],

@@ -26,6 +26,7 @@ type TooltipState = {
   visible: boolean;
   x: number;
   y: number;
+  containerWidth: number;
   title: string;
   detail: string;
   kind?: "node" | "similarity" | "coauthor";
@@ -45,6 +46,7 @@ export function PaperRelatedGraphSection({ testId, title }: Props) {
     visible: false,
     x: 0,
     y: 0,
+    containerWidth: SVG_WIDTH,
     title: "",
     detail: "",
   });
@@ -155,6 +157,7 @@ export function PaperRelatedGraphSection({ testId, title }: Props) {
       ...prev,
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
+      containerWidth: rect.width,
     }));
   };
 
@@ -282,6 +285,7 @@ export function PaperRelatedGraphSection({ testId, title }: Props) {
                                 visible: true,
                                 x: e.clientX - rect.left,
                                 y: e.clientY - rect.top,
+                                containerWidth: rect.width,
                                 title: isSimilarity ? "内容類似" : "共著者",
                                 detail: detailText,
                                 kind: link.kind,
@@ -348,6 +352,7 @@ export function PaperRelatedGraphSection({ testId, title }: Props) {
                               visible: true,
                               x: e.clientX - rect.left,
                               y: e.clientY - rect.top,
+                              containerWidth: rect.width,
                               title: node.title,
                               detail: isCenter
                                 ? "表示中の中心論文"
@@ -428,7 +433,13 @@ export function PaperRelatedGraphSection({ testId, title }: Props) {
                 <div
                   className="pointer-events-none absolute z-20 max-w-xs -translate-x-1/2 -translate-y-full rounded-lg bg-zinc-900/95 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-sm transition-transform duration-75"
                   style={{
-                    left: `${Math.max(80, Math.min(SVG_WIDTH - 80, tooltip.x))}px`,
+                    left: `${Math.max(
+                      80,
+                      Math.min(
+                        Math.max(80, (tooltip.containerWidth || SVG_WIDTH) - 80),
+                        tooltip.x,
+                      ),
+                    )}px`,
                     top: `${Math.max(40, tooltip.y - 12)}px`,
                   }}
                 >

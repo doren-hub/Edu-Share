@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { paperAuthorNamesForDisplay } from "@/lib/paper-authors";
-import { findCommonAuthors } from "@/lib/paper-related";
+import { findCoauthorPapers } from "@/lib/paper-related";
 
 export const runtime = "nodejs";
 
@@ -47,14 +47,14 @@ export async function GET(_req: Request, context: RouteContext) {
 
   const hasEmbedding = !countError && (chunkCount ?? 0) > 0;
 
-  // 3. 内容が近い論文を k=5 件抽出（service_role RPC を実行後、閲覧権限のある論文に絞る）
+  // 3. 内容が近い論文を k=5 件抽出（service_role RPC を多めに取得し、閲覧権限のある論文から上位5件に絞る）
   const similarPapers: Array<{ id: string; title: string; similarity: number }> = [];
 
   if (hasEmbedding) {
     try {
       const { data: rpcRows, error: rpcError } = await admin.rpc(
         "match_related_papers",
-        { p_test_id: id, p_match_count: 5 },
+        { p_test_id: id, p_match_count: 50 },
       );
 
       if (!rpcError && Array.isArray(rpcRows) && rpcRows.length > 0) {
@@ -63,7 +63,8 @@ export async function GET(_req: Request, context: RouteContext) {
           .from("tests")
           .select("id, title")
           .in("id", candidateIds)
-          .eq("document_type", "paper");
+          .eq("document_type", "paper")
+          .eq("processing_status", "ready");
 
         const readableMap = new Map(
           (readableTests ?? []).map((t) => [t.id, t.title]),
@@ -76,6 +77,9 @@ export async function GET(_req: Request, context: RouteContext) {
               title: readableMap.get(row.id)!,
               similarity: Math.round(Number(row.similarity) * 1000) / 1000,
             });
+            if (similarPapers.length >= 5) {
+              break;
+            }
           }
         }
       }
@@ -84,7 +88,7 @@ export async function GET(_req: Request, context: RouteContext) {
     }
   }
 
-  // 4. 共著者による関連論文を抽出
+  // 4. 共著者による関連論文を抽出（ready な論文のみ対象）
   const targetAuthors = paperAuthorNamesForDisplay(
     test.paper_authors,
     test.source_name ?? "",
@@ -101,22 +105,26 @@ export async function GET(_req: Request, context: RouteContext) {
       .from("tests")
       .select("id, title, paper_authors, source_name")
       .eq("document_type", "paper")
+      .eq("processing_status", "ready")
       .neq("id", id);
 
     if (Array.isArray(candidateRows)) {
-      for (const cand of candidateRows) {
-        const candAuthors = paperAuthorNamesForDisplay(
+      const candidates = candidateRows.map((cand) => ({
+        id: cand.id,
+        title: cand.title,
+        authors: paperAuthorNamesForDisplay(
           cand.paper_authors,
           cand.source_name ?? "",
-        );
-        const common = findCommonAuthors(targetAuthors, candAuthors);
-        if (common.length > 0) {
-          coauthorPapers.push({
-            id: cand.id,
-            title: cand.title,
-            commonAuthors: common,
-          });
-        }
+        ),
+      }));
+
+      const matched = findCoauthorPapers(targetAuthors, candidates);
+      for (const m of matched) {
+        coauthorPapers.push({
+          id: m.paper.id,
+          title: m.paper.title,
+          commonAuthors: m.commonAuthors,
+        });
       }
 
       coauthorPapers.sort((a, b) => {
