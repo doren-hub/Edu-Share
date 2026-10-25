@@ -43,9 +43,17 @@ type PageView = {
 export function QuizSessionPdfAnnotator({
   testId,
   markItems,
+  targetPage,
+  emptyMessage,
+  legendLabelCorrect = "正解",
+  legendLabelIncorrect = "不正解・記述未満",
 }: {
   testId: string;
   markItems: PdfMarkItem[];
+  targetPage?: number | null;
+  emptyMessage?: string;
+  legendLabelCorrect?: string;
+  legendLabelIncorrect?: string;
 }) {
   const [status, setStatus] = useState<
     "idle" | "loading" | "ready" | "error" | "nomatch"
@@ -54,6 +62,20 @@ export function QuizSessionPdfAnnotator({
   const [pages, setPages] = useState<PageView[]>([]);
   const [viewMode, setViewMode] = useState<"annotated" | "original">("annotated");
   const blobUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (
+      targetPage &&
+      targetPage >= 1 &&
+      (status === "ready" || status === "nomatch")
+    ) {
+      setViewMode("annotated");
+      const el = document.getElementById(`pdf-page-${targetPage}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+  }, [targetPage, status]);
 
   useEffect(() => {
     if (markItems.length === 0) {
@@ -260,7 +282,7 @@ export function QuizSessionPdfAnnotator({
   if (markItems.length === 0) {
     return (
       <p className="text-sm text-zinc-500">
-        設問データがないため、PDF へのマーカー表示はできません。
+        {emptyMessage ?? "設問データがないため、PDF へのマーカー表示はできません。"}
       </p>
     );
   }
@@ -309,12 +331,14 @@ export function QuizSessionPdfAnnotator({
             <div className="flex flex-wrap items-center gap-4 text-xs text-zinc-600">
               <span className="inline-flex items-center gap-1.5">
                 <span className="inline-block h-3 w-6 rounded-sm bg-blue-500/55 ring-1 ring-blue-600/30" />
-                正解
+                {legendLabelCorrect}
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="inline-block h-3 w-6 rounded-sm bg-red-500/55 ring-1 ring-red-600/30" />
-                不正解・記述未満
-              </span>
+              {legendLabelIncorrect ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block h-3 w-6 rounded-sm bg-red-500/55 ring-1 ring-red-600/30" />
+                  {legendLabelIncorrect}
+                </span>
+              ) : null}
             </div>
           ) : (
             <p className="text-xs text-zinc-500">
@@ -355,7 +379,12 @@ export function QuizSessionPdfAnnotator({
       {showPdfChrome && viewMode === "annotated" ? (
         <div className="max-h-[min(78vh,900px)] space-y-6 overflow-y-auto rounded-xl border border-zinc-200 bg-zinc-100/80 p-4">
           {pages.map((pg, idx) => (
-            <div key={idx} className="relative mx-auto w-full max-w-full shadow-sm">
+            <div
+              key={idx}
+              id={`pdf-page-${idx + 1}`}
+              data-page-number={idx + 1}
+              className="relative mx-auto w-full max-w-full shadow-sm"
+            >
               {/*
                 画像は max-w-full で縮む。quad は viewport ピクセルで保持し、
                 オーバーレイは inset-0 ＋ % で縮小後の画像に一致させる。

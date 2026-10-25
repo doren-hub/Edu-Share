@@ -9,7 +9,7 @@ import { excerptAppearsInJoined } from "@/lib/source-excerpt";
 const anthropicModel =
   process.env.ANTHROPIC_MODEL?.trim() || "claude-3-5-sonnet-20241022";
 /** カンマ区切りで複数指定可（先頭から試し、503 等はリトライ後に次へ）。未設定時は 2.5 のみ。 */
-function geminiModelCandidates(): string[] {
+export function geminiModelCandidates(): string[] {
   const raw = process.env.GEMINI_MODEL?.trim();
   if (!raw) return ["gemini-2.5-flash"];
   const parts = raw
@@ -19,12 +19,12 @@ function geminiModelCandidates(): string[] {
   return parts.length ? parts : ["gemini-2.5-flash"];
 }
 
-const geminiRetryMax = Math.min(
+export const geminiRetryMax = Math.min(
   6,
   Math.max(1, Number.parseInt(process.env.GEMINI_RETRY_MAX || "4", 10) || 4),
 );
 
-function isTransientGeminiError(e: unknown): boolean {
+export function isTransientGeminiError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
   return (
     /\b503\b/.test(msg) ||
@@ -55,7 +55,7 @@ function anthropicConfigured(): boolean {
   return true;
 }
 
-function geminiKey(): string | undefined {
+export function geminiKey(): string | undefined {
   const k =
     process.env.GEMINI_API_KEY?.trim() ||
     process.env.GOOGLE_API_KEY?.trim();
@@ -137,7 +137,27 @@ async function generateText(params: {
       .trim();
   }
 
-  const genAI = new GoogleGenerativeAI(geminiKey()!);
+  return callGeminiText({
+    system: params.system,
+    user: params.user,
+    maxTokens: params.maxTokens,
+    temperature: params.temperature,
+  });
+}
+
+export async function callGeminiText(params: {
+  system?: string;
+  user: string;
+  maxTokens?: number;
+  temperature?: number;
+}): Promise<string> {
+  const k = geminiKey();
+  if (!k) {
+    throw new Error(
+      "GEMINI_API_KEY（または GOOGLE_API_KEY）が未設定かサンプルのままです。Google AI Studio でキーを発行し .env.local に設定し、開発サーバーを再起動してください。",
+    );
+  }
+  const genAI = new GoogleGenerativeAI(k);
   const models = geminiModelCandidates();
   let lastMsg = "";
 
@@ -165,6 +185,17 @@ async function generateText(params: {
         break;
       }
     }
+  }
+
+  const is429 =
+    isTransientGeminiError(lastMsg) &&
+    (/\b429\b/.test(lastMsg) ||
+      /RESOURCE_EXHAUSTED/i.test(lastMsg) ||
+      /Too Many Requests/i.test(lastMsg));
+  if (is429) {
+    throw new Error(
+      "Gemini API の無料枠上限（429）に達しました。少し待ってからもう一度お試しください。",
+    );
   }
 
   throw new Error(
