@@ -9,7 +9,11 @@ import {
   findCommonAuthors,
   findCoauthorPapers,
   buildEgoGraphData,
+  computeLinkCurvePath,
+  matchesGraphFilter,
+  buildGlobalGraphData,
   type RelatedPapersResponse,
+  type GlobalGraphPaperCandidate,
 } from "./paper-related.ts";
 
 test("computeRepresentativeVector: returns correct element-wise mean", () => {
@@ -156,4 +160,138 @@ test("buildEgoGraphData: handles no relations and no embeddings", () => {
   assert.equal(graph.hasRelated, false);
   assert.equal(graph.nodes.length, 1);
   assert.equal(graph.links.length, 0);
+});
+
+test("computeLinkCurvePath: generates straight line when offset is 0, and quadratic curve when offset is non-zero", () => {
+  const p1 = { x: 10, y: 20 };
+  const p2 = { x: 100, y: 20 };
+
+  const straight = computeLinkCurvePath(p1, p2, 0);
+  assert.equal(straight, "M 10 20 L 100 20");
+
+  const curved = computeLinkCurvePath(p1, p2, 16);
+  assert.match(curved, /^M 10 20 Q .+ 100 20$/);
+  assert.notEqual(curved, straight);
+});
+
+test("matchesGraphFilter: filters by industry and publication_year correctly", () => {
+  const paper1 = {
+    industries: ["IT", "Education"],
+    publicationYear: "2024",
+  };
+  const paper2 = {
+    industries: [],
+    publicationYear: null,
+  };
+
+  // No filter
+  assert.equal(matchesGraphFilter(paper1), true);
+  assert.equal(matchesGraphFilter(paper2), true);
+
+  // Industry match
+  assert.equal(matchesGraphFilter(paper1, "IT"), true);
+  assert.equal(matchesGraphFilter(paper1, "Medical"), false);
+
+  // Industry empty sentinel
+  assert.equal(matchesGraphFilter(paper1, "__empty__"), false);
+  assert.equal(matchesGraphFilter(paper2, "__empty__"), true);
+
+  // Year match
+  assert.equal(matchesGraphFilter(paper1, undefined, "2024"), true);
+  assert.equal(matchesGraphFilter(paper1, undefined, "2023"), false);
+
+  // Year empty sentinel
+  assert.equal(matchesGraphFilter(paper1, undefined, "__empty__"), false);
+  assert.equal(matchesGraphFilter(paper2, undefined, "__empty__"), true);
+
+  // Both
+  assert.equal(matchesGraphFilter(paper1, "IT", "2024"), true);
+  assert.equal(matchesGraphFilter(paper1, "IT", "2023"), false);
+});
+
+test("buildGlobalGraphData: builds undirected similarity links cut to k and coauthor links with offsets", () => {
+  const papers: GlobalGraphPaperCandidate[] = [
+    {
+      id: "p1",
+      title: "Paper 1",
+      authors: ["山田 太郎"],
+      similarCandidates: [
+        { id: "p2", similarity: 0.9 },
+        { id: "p3", similarity: 0.8 },
+        { id: "p4", similarity: 0.7 },
+      ],
+    },
+    {
+      id: "p2",
+      title: "Paper 2",
+      authors: ["山田 太郎", "佐藤 花子"],
+      similarCandidates: [
+        { id: "p1", similarity: 0.9 },
+        { id: "p3", similarity: 0.6 },
+      ],
+    },
+    {
+      id: "p3",
+      title: "Paper 3",
+      authors: ["鈴木 一郎"],
+      similarCandidates: [],
+    },
+  ];
+
+  // k=1: p1 has only top 1 similar paper (p2), p2 has p1
+  const graphK1 = buildGlobalGraphData(papers, 1);
+  assert.equal(graphK1.nodes.length, 3);
+
+  // p1 and p2 have both similarity (0.9) and coauthor (山田 太郎)
+  const p1p2Links = graphK1.links.filter(
+    (l) =>
+      (l.source === "p1" && l.target === "p2") ||
+      (l.source === "p2" && l.target === "p1"),
+  );
+  assert.equal(p1p2Links.length, 2);
+  const simLink = p1p2Links.find((l) => l.kind === "similarity");
+  const coLink = p1p2Links.find((l) => l.kind === "coauthor");
+  assert.equal(simLink?.similarity, 0.9);
+  assert.equal(simLink?.curveOffset, 16);
+  assert.equal(coLink?.curveOffset, -16);
+  assert.deepEqual(coLink?.commonAuthors, ["山田 太郎"]);
+
+  // With k=1, p1-p3 similarity should be excluded (cut to top 1)
+  const p1p3Sim = graphK1.links.find(
+    (l) =>
+      l.kind === "similarity" &&
+      ((l.source === "p1" && l.target === "p3") ||
+        (l.source === "p3" && l.target === "p1")),
+  );
+  assert.equal(p1p3Sim, undefined);
+
+  // Now with k=5: p1-p3 similarity (0.8) and p2-p3 similarity (0.6) should be included
+  const graphK5 = buildGlobalGraphData(papers, 5);
+  const p1p3SimK5 = graphK5.links.find(
+    (l) =>
+      l.kind === "similarity" &&
+      ((l.source === "p1" && l.target === "p3") ||
+        (l.source === "p3" && l.target === "p1")),
+  );
+  assert.ok(p1p3SimK5);
+  assert.equal(p1p3SimK5.similarity, 0.8);
+  // Single relation -> offset 0
+  assert.equal(p1p3SimK5.curveOffset, 0);
+});
+
+test("buildGlobalGraphData: handles empty candidates and self-references safely", () => {
+  const emptyGraph = buildGlobalGraphData([]);
+  assert.deepEqual(emptyGraph, { nodes: [], links: [] });
+
+  const singlePaper: GlobalGraphPaperCandidate[] = [
+    {
+      id: "solo",
+      title: "Solo Paper",
+      authors: ["孤独な著者"],
+      similarCandidates: [{ id: "solo", similarity: 1.0 }],
+    },
+  ];
+  const singleGraph = buildGlobalGraphData(singlePaper);
+  assert.equal(singleGraph.nodes.length, 1);
+  assert.equal(singleGraph.links.length, 0);
 });

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 import { loadBookmarkMarks } from "@/lib/bookmarks";
 import { loadPaperStudyStatuses } from "@/lib/paper-study-status";
@@ -54,10 +55,35 @@ export default async function PaperTestsPage() {
   return (
     <div className="space-y-6">
       <header className="space-y-2">
-        <p className="text-xs font-medium tracking-wide text-violet-800">論文</p>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-950">
-          論文一覧
-        </h1>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-medium tracking-wide text-violet-800">論文</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-950">
+              論文一覧
+            </h1>
+          </div>
+          <div>
+            <Link
+              href="/tests/paper/graph"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100 hover:text-indigo-900"
+            >
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M13 10V3L4 14h7v7l9-11h-7z"
+                />
+              </svg>
+              <span>全体グラフを見る</span>
+            </Link>
+          </div>
+        </div>
         <p className="max-w-2xl text-sm text-zinc-600">
           論文PDFから取り込んだテストだけを表示しています。クイズCSV・単語帳CSV・スライド・動画が揃ったときだけ「受験可能」になります。足りない資料は「未」バッジで示します。業界・著者・発表年{studyStatuses.signedIn ? "・学習ステータス" : ""}とテキスト検索で絞り込み、並び順も選べます。
           {!globalEmpty ? (
