@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
-import { hasStudioArtifact, openStudioArtifact, studioArtifactCards } from "./studio-artifact-cards.ts";
+import { hasReadyStudioArtifact, hasStudioArtifact, openStudioArtifact, studioArtifactCards } from "./studio-artifact-cards.ts";
 
 test("Studio artifact fixture: kinds, ready state and covered title buttons", async t => {
   const browser = await chromium.launch().catch(async e => {
@@ -31,21 +31,35 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
         ${row("unknown", "future_icon", "クイズ")}`);
       for (const kind of ["quiz", "flashcards", "slides"] as const) {
         assert.equal(await hasStudioArtifact(page, kind), true);
+        assert.equal(await hasReadyStudioArtifact(page, kind), true);
         assert.equal(await openStudioArtifact(page, kind), true);
         assert.equal(await page.locator("body").getAttribute("data-opened"), kind === "slides" ? "slide" : kind);
       }
       assert.equal((await studioArtifactCards(page)).length, 4);
     });
-    await t.test("creation tiles, sources, generating and unknown-kind cards cannot be opened", async () => {
+    await t.test("generating and in-progress cards are detected by hasStudioArtifact to prevent re-generation, but cannot be opened until ready", async () => {
+      await page.setContent(`
+        ${row("generating-quiz", "quiz", "任意題名 練習問題", "7 日前", true)}
+        ${row("undated-flashcards", "copy", "任意題名 単語カード", "")}
+      `);
+      assert.equal(await hasStudioArtifact(page, "quiz"), true);
+      assert.equal(await hasStudioArtifact(page, "flashcards"), true);
+      assert.equal(await hasStudioArtifact(page, "slides"), false);
+
+      assert.equal(await hasReadyStudioArtifact(page, "quiz"), false);
+      assert.equal(await hasReadyStudioArtifact(page, "flashcards"), false);
+      assert.equal(await openStudioArtifact(page, "quiz"), false);
+      assert.equal(await openStudioArtifact(page, "flashcards"), false);
+    });
+    await t.test("creation tiles and sources outside artifact items are ignored completely", async () => {
       await page.setContent(`<button>quiz 確認テスト 1 件のソース · 7 日前</button>
         <aside><button>copy 単語カード 1 件のソース · 7 日前</button></aside>
-        ${row("generating", "quiz", "練習問題", "7 日前", true)}
-        ${row("undated", "copy", "記憶カード", "")}
         ${row("other", "future_icon", "クイズ")}
         ${row("missing-icon", "", "クイズ")}`);
       await page.locator("body").evaluate(el => el.removeAttribute("data-opened"));
       for (const kind of ["quiz", "flashcards", "slides"] as const) {
-        assert.equal(await hasStudioArtifact(page, kind), false, JSON.stringify({kind,cards:(await studioArtifactCards(page)).map(({text,kind,ready})=>({text,kind,ready}))}));
+        assert.equal(await hasStudioArtifact(page, kind), false);
+        assert.equal(await hasReadyStudioArtifact(page, kind), false);
         assert.equal(await openStudioArtifact(page, kind), false);
       }
       assert.equal(await page.locator("body").getAttribute("data-opened"), null);
@@ -57,6 +71,9 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
       assert.equal(await hasStudioArtifact(page, "flashcards"), true);
       assert.equal(await hasStudioArtifact(page, "quiz"), false);
       assert.equal(await hasStudioArtifact(page, "slides"), false);
+      assert.equal(await hasReadyStudioArtifact(page, "flashcards"), true);
+      assert.equal(await hasReadyStudioArtifact(page, "quiz"), false);
+      assert.equal(await hasReadyStudioArtifact(page, "slides"), false);
       assert.equal(await openStudioArtifact(page, "flashcards"), true);
       assert.equal(await page.locator("body").getAttribute("data-opened"), "legacy");
     });
