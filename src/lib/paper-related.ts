@@ -100,6 +100,7 @@ export type GlobalGraphResponse = {
   availableYears: string[];
   nodes: GlobalGraphNode[];
   links: GlobalGraphLink[];
+  partial?: boolean;
 };
 
 /**
@@ -400,6 +401,7 @@ export function buildGlobalGraphData(
   }));
 
   // 1. 内容類似辺の抽出（各ノード上位 k 件、無向ペアの重複排除）
+  // 各ノードから上位 k 件の類似候補を無向辺としてマージしているため、他ノードからの被選出により1ノードあたりの類似辺数は k 本以上になる場合があります（無向グラフとしての仕様）。
   type SimCandidateEdge = {
     source: string;
     target: string;

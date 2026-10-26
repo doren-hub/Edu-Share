@@ -119,8 +119,12 @@ export async function GET(req: Request) {
   }
 
   // 6. 200件以下の場合は内容類似度を計算（admin RPC）
+  // 絞り込みがある場合でも集合内で k 件そろうよう、絞り込み対象 ID 配列（p_candidate_ids）を渡し、
+  // 未適用の環境では p_match_count を拡大した呼び出しへフォールバックする
   const filteredIdSet = new Set(filtered.map((p) => p.id));
+  const candidateIds = Array.from(filteredIdSet);
   const admin = createAdminClient();
+  let hasRpcError = false;
 
   const candidatesWithSim: GlobalGraphPaperCandidate[] = await mapConcurrent(
     filtered,
@@ -128,11 +132,23 @@ export async function GET(req: Request) {
     async (p) => {
       let similarCandidates: Array<{ id: string; similarity: number }> = [];
       try {
-        const { data: rpcRows, error: rpcError } = await admin.rpc(
-          "match_related_papers",
-          { p_test_id: p.id, p_match_count: 50 },
-        );
-        if (!rpcError && Array.isArray(rpcRows)) {
+        // (a) まず p_candidate_ids を渡して絞り込み集合内から上位候補を取得
+        let rpcRes = await admin.rpc("match_related_papers", {
+          p_test_id: p.id,
+          p_match_count: Math.max(k, Math.min(200, filteredCount)),
+          p_candidate_ids: candidateIds,
+        });
+
+        // 過去の DB 関数（p_candidate_ids 引数なし）でエラーになった場合のフォールバック
+        if (rpcRes.error) {
+          rpcRes = await admin.rpc("match_related_papers", {
+            p_test_id: p.id,
+            p_match_count: Math.max(50, Math.min(200, totalCount)),
+          });
+        }
+
+        const rpcRows = rpcRes.data;
+        if (!rpcRes.error && Array.isArray(rpcRows)) {
           similarCandidates = rpcRows
             .filter(
               (r: { id: string }) =>
@@ -142,8 +158,11 @@ export async function GET(req: Request) {
               id: r.id,
               similarity: Math.round(Number(r.similarity) * 1000) / 1000,
             }));
+        } else if (rpcRes.error) {
+          hasRpcError = true;
         }
       } catch (err) {
+        hasRpcError = true;
         console.warn(`[papers/graph] match_related_papers failed for ${p.id}:`, err);
       }
 
@@ -170,6 +189,7 @@ export async function GET(req: Request) {
     availableYears,
     nodes: graph.nodes,
     links: graph.links,
+    partial: hasRpcError ? true : undefined,
   };
 
   return NextResponse.json(response);

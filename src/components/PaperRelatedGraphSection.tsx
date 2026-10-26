@@ -11,13 +11,13 @@ import { PaperGraphSvg } from "@/components/PaperGraphSvg";
 
 type Props = {
   testId: string;
-  title: string;
+  title?: string;
 };
 
 const SVG_WIDTH = 640;
 const SVG_HEIGHT = 400;
 
-export function PaperRelatedGraphSection({ testId, title: _title }: Props) {
+export function PaperRelatedGraphSection({ testId }: Props) {
   const router = useRouter();
   const [data, setData] = useState<RelatedPapersResponse | null>(null);
   const [loading, setLoading] = useState(true);

@@ -295,3 +295,57 @@ test("buildGlobalGraphData: handles empty candidates and self-references safely"
   assert.equal(singleGraph.nodes.length, 1);
   assert.equal(singleGraph.links.length, 0);
 });
+
+test("buildGlobalGraphData: 上位候補が絞り込みで外れても、絞り込み後の集合の中で k 本がそろう", () => {
+  // 全体としてはより類似度が高い論文（global-1, global-2, global-3）が存在するが、
+  // 絞り込み条件によってそれらが外れ、絞り込み後の集合（filtered-1 〜 filtered-5）が渡された場合
+  const targetPaper: GlobalGraphPaperCandidate = {
+    id: "target",
+    title: "Target Paper",
+    authors: ["研究者A"],
+    similarCandidates: [
+      { id: "global-out-1", similarity: 0.99 },
+      { id: "global-out-2", similarity: 0.98 },
+      { id: "global-out-3", similarity: 0.97 },
+      { id: "filtered-1", similarity: 0.85 },
+      { id: "filtered-2", similarity: 0.84 },
+      { id: "filtered-3", similarity: 0.83 },
+      { id: "filtered-4", similarity: 0.82 },
+      { id: "filtered-5", similarity: 0.81 },
+      { id: "filtered-6", similarity: 0.70 },
+    ],
+  };
+
+  const filteredPapers: GlobalGraphPaperCandidate[] = [
+    targetPaper,
+    { id: "filtered-1", title: "F1", authors: ["著者1"], similarCandidates: [] },
+    { id: "filtered-2", title: "F2", authors: ["著者2"], similarCandidates: [] },
+    { id: "filtered-3", title: "F3", authors: ["著者3"], similarCandidates: [] },
+    { id: "filtered-4", title: "F4", authors: ["著者4"], similarCandidates: [] },
+    { id: "filtered-5", title: "F5", authors: ["著者5"], similarCandidates: [] },
+    { id: "filtered-6", title: "F6", authors: ["著者6"], similarCandidates: [] },
+  ];
+
+  // k=5 でグラフを構築
+  const graph = buildGlobalGraphData(filteredPapers, 5);
+
+  // target につながる類似度リンクを抽出
+  const targetSimLinks = graph.links.filter(
+    (l) =>
+      l.kind === "similarity" &&
+      (l.source === "target" || l.target === "target"),
+  );
+
+  // 絞り込み外の global-out-* は含まれず、絞り込み後の集合から上位5件（filtered-1 〜 5）が欠落なく揃う
+  assert.equal(targetSimLinks.length, 5);
+  const connectedIds = targetSimLinks.map((l) =>
+    l.source === "target" ? l.target : l.source,
+  );
+  assert.ok(connectedIds.includes("filtered-1"));
+  assert.ok(connectedIds.includes("filtered-2"));
+  assert.ok(connectedIds.includes("filtered-3"));
+  assert.ok(connectedIds.includes("filtered-4"));
+  assert.ok(connectedIds.includes("filtered-5"));
+  assert.ok(!connectedIds.includes("filtered-6")); // 6番目は k=5 で切られる
+  assert.ok(!connectedIds.includes("global-out-1")); // 外れた論文は入らない
+});
