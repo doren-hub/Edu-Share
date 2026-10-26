@@ -53,6 +53,56 @@ export type EgoGraphData = {
   hasRelated: boolean;
 };
 
+export type GlobalGraphPaperCandidate = {
+  id: string;
+  title: string;
+  industries?: string[];
+  publicationYear?: string | null;
+  authors: string[];
+  similarCandidates?: Array<{ id: string; similarity: number }>;
+};
+
+export type GlobalGraphNode = {
+  id: string;
+  title: string;
+  isCenter?: boolean;
+  industries?: string[];
+  publicationYear?: string | null;
+  x?: number;
+  y?: number;
+  vx?: number;
+  vy?: number;
+  fx?: number | null;
+  fy?: number | null;
+};
+
+export type GlobalGraphLink = {
+  id: string;
+  source: string;
+  target: string;
+  kind: "similarity" | "coauthor";
+  similarity?: number;
+  commonAuthors?: string[];
+  curveOffset: number;
+};
+
+export type GlobalGraphData = {
+  nodes: GlobalGraphNode[];
+  links: GlobalGraphLink[];
+};
+
+export type GlobalGraphResponse = {
+  totalCount: number;
+  filteredCount: number;
+  exceeded: boolean;
+  threshold: number;
+  availableIndustries: string[];
+  availableYears: string[];
+  nodes: GlobalGraphNode[];
+  links: GlobalGraphLink[];
+  partial?: boolean;
+};
+
 /**
  * ベクトルの要素ごとの平均（代表ベクトル）を算出する。
  * SQL 側の match_related_papers (033_match_related_papers.sql) の代表ベクトル計算と同等の
@@ -274,4 +324,261 @@ export function buildEgoGraphData(data: RelatedPapersResponse): EgoGraphData {
     hasEmbedding: target.hasEmbedding,
     hasRelated: nodes.length > 1,
   };
+}
+
+/**
+ * 2つのノード座標と curveOffset から SVG path の d 属性文字列を算出する。
+ * offset が 0 のときは直線（L）、それ以外のときは二次ベジェ曲線（Q）を返す。
+ */
+export function computeLinkCurvePath(
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  curveOffset: number,
+): string {
+  if (curveOffset === 0) {
+    return `M ${source.x} ${source.y} L ${target.x} ${target.y}`;
+  }
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const nx = -dy / dist;
+  const ny = dx / dist;
+  const midX = (source.x + target.x) / 2 + nx * curveOffset;
+  const midY = (source.y + target.y) / 2 + ny * curveOffset;
+  return `M ${source.x} ${source.y} Q ${midX} ${midY} ${target.x} ${target.y}`;
+}
+
+/**
+ * 業界（industries）および発表年（publication_year）で論文が絞り込み条件に一致するか判定する。
+ */
+export function matchesGraphFilter(
+  paper: { industries?: string[]; publicationYear?: string | null },
+  industry?: string,
+  year?: string,
+): boolean {
+  if (industry) {
+    const list = Array.isArray(paper.industries) ? paper.industries : [];
+    if (industry === "__empty__") {
+      if (list.length > 0) return false;
+    } else {
+      if (!list.includes(industry)) return false;
+    }
+  }
+
+  if (year) {
+    const y = (paper.publicationYear ?? "").trim();
+    if (year === "__empty__") {
+      if (y !== "") return false;
+    } else {
+      if (y !== year.trim()) return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * 論文候補リストから全体グラフ（ノード + 辺）データを構築する。
+ * - 内容類似辺: 各ノードについて候補論文群の中から類似度上位 k 件（デフォルト5件）を取り出し、無向辺として登録。
+ * - 共著者辺: 共通著者を持つ論文対の間に登録。
+ * - 同一ペア間に両方の辺が存在する場合は反対方向に curveOffset を付与して2本並行描画する。
+ */
+export function buildGlobalGraphData(
+  papers: GlobalGraphPaperCandidate[],
+  k = 5,
+): GlobalGraphData {
+  const paperMap = new Map<string, GlobalGraphPaperCandidate>();
+  for (const p of papers) {
+    paperMap.set(p.id, p);
+  }
+
+  const nodes: GlobalGraphNode[] = papers.map((p) => ({
+    id: p.id,
+    title: p.title || "論文",
+    isCenter: false,
+    industries: p.industries,
+    publicationYear: p.publicationYear,
+  }));
+
+  // 1. 内容類似辺の抽出（各ノード上位 k 件、無向ペアの重複排除）
+  // 各ノードから上位 k 件の類似候補を無向辺としてマージしているため、他ノードからの被選出により1ノードあたりの類似辺数は k 本以上になる場合があります（無向グラフとしての仕様）。
+  type SimCandidateEdge = {
+    source: string;
+    target: string;
+    similarity: number;
+  };
+  const simEdgeMap = new Map<string, SimCandidateEdge>();
+
+  for (const paper of papers) {
+    const candidates = (paper.similarCandidates ?? [])
+      .filter((c) => c.id !== paper.id && paperMap.has(c.id))
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, Math.max(1, k));
+
+    for (const cand of candidates) {
+      const u = paper.id < cand.id ? paper.id : cand.id;
+      const v = paper.id < cand.id ? cand.id : paper.id;
+      const pairKey = `${u}_${v}`;
+      const existing = simEdgeMap.get(pairKey);
+      if (!existing || cand.similarity > existing.similarity) {
+        simEdgeMap.set(pairKey, {
+          source: u,
+          target: v,
+          similarity: cand.similarity,
+        });
+      }
+    }
+  }
+
+  // 2. 共著者辺の抽出（共通著者を持つペア）
+  type CoauthorCandidateEdge = {
+    source: string;
+    target: string;
+    commonAuthors: string[];
+  };
+  const coEdgeMap = new Map<string, CoauthorCandidateEdge>();
+
+  for (let i = 0; i < papers.length; i++) {
+    for (let j = i + 1; j < papers.length; j++) {
+      const p1 = papers[i];
+      const p2 = papers[j];
+      const common = findCommonAuthors(p1.authors, p2.authors);
+      if (common.length > 0) {
+        const u = p1.id < p2.id ? p1.id : p2.id;
+        const v = p1.id < p2.id ? p2.id : p1.id;
+        coEdgeMap.set(`${u}_${v}`, {
+          source: u,
+          target: v,
+          commonAuthors: common,
+        });
+      }
+    }
+  }
+
+  // 3. リンクの構築とカーブオフセット付与
+  const links: GlobalGraphLink[] = [];
+  const allPairKeys = new Set([...simEdgeMap.keys(), ...coEdgeMap.keys()]);
+
+  for (const pairKey of allPairKeys) {
+    const sim = simEdgeMap.get(pairKey);
+    const co = coEdgeMap.get(pairKey);
+    const hasBoth = Boolean(sim && co);
+
+    if (sim) {
+      links.push({
+        id: `link-sim-${sim.source}-${sim.target}`,
+        source: sim.source,
+        target: sim.target,
+        kind: "similarity",
+        similarity: sim.similarity,
+        curveOffset: hasBoth ? 16 : 0,
+      });
+    }
+
+    if (co) {
+      links.push({
+        id: `link-co-${co.source}-${co.target}`,
+        source: co.source,
+        target: co.target,
+        kind: "coauthor",
+        commonAuthors: co.commonAuthors,
+        curveOffset: hasBoth ? -16 : 0,
+      });
+    }
+  }
+
+  return { nodes, links };
+}
+
+export type RpcCaller = {
+  rpc: (
+    fnName: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ data: unknown; error: unknown }>;
+};
+
+/**
+ * PostgREST / PostgreSQL のシグネチャ不一致エラーか判定する。
+ */
+export function isSignatureMismatchError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; message?: string; details?: string };
+  const code = String(e.code ?? "");
+  const msg = String(e.message ?? "").toLowerCase();
+  const details = String(e.details ?? "").toLowerCase();
+
+  return (
+    code === "PGRST202" ||
+    code === "PGRST203" ||
+    code === "42883" ||
+    msg.includes("could not choose") ||
+    msg.includes("does not exist") ||
+    details.includes("could not choose")
+  );
+}
+
+/**
+ * 論文1件に対する類似論文候補を取得する。
+ * p_candidate_ids を指定した RPC 呼び出しを行い、古い DB 関数によるシグネチャ不一致時のみ
+ * フォールバック（p_candidate_ids なし）を実行する。
+ */
+export async function fetchSimilarCandidatesForPaper(
+  caller: RpcCaller,
+  testId: string,
+  matchCount: number,
+  candidateIds: string[],
+  filteredIdSet: Set<string>,
+): Promise<{
+  candidates: Array<{ id: string; similarity: number }>;
+  hasError: boolean;
+}> {
+  let similarCandidates: Array<{ id: string; similarity: number }> = [];
+  let hasError = false;
+
+  try {
+    let rpcRes = await caller.rpc("match_related_papers", {
+      p_test_id: testId,
+      p_match_count: matchCount,
+      p_candidate_ids: candidateIds,
+    });
+
+    if (rpcRes.error) {
+      if (isSignatureMismatchError(rpcRes.error)) {
+        console.warn(
+          `[papers/graph] match_related_papers signature mismatch, falling back without p_candidate_ids for ${testId}:`,
+          rpcRes.error,
+        );
+        rpcRes = await caller.rpc("match_related_papers", {
+          p_test_id: testId,
+          p_match_count: 50,
+        });
+      } else {
+        console.warn(
+          `[papers/graph] match_related_papers error for ${testId}:`,
+          rpcRes.error,
+        );
+      }
+    }
+
+    if (!rpcRes.error && Array.isArray(rpcRes.data)) {
+      similarCandidates = (
+        rpcRes.data as Array<{ id: string; similarity: number }>
+      )
+        .filter((r) => r.id !== testId && filteredIdSet.has(r.id))
+        .map((r) => ({
+          id: r.id,
+          similarity: Math.round(Number(r.similarity) * 1000) / 1000,
+        }));
+    } else if (rpcRes.error) {
+      hasError = true;
+    }
+  } catch (err) {
+    hasError = true;
+    console.warn(
+      `[papers/graph] match_related_papers exception for ${testId}:`,
+      err,
+    );
+  }
+
+  return { candidates: similarCandidates, hasError };
 }
