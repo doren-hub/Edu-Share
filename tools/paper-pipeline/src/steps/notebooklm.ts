@@ -4,6 +4,7 @@ import type { Locator, Page, Route } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isTargetClosedError } from "../browser.ts";
+import { hasReadyStudioArtifact, hasStudioArtifact, openStudioArtifact, studioArtifactCards, type StudioArtifactKind } from "../studio-artifact-cards.ts";
 import {
   firstPendingStudioStage,
   hasStudioStarted,
@@ -31,7 +32,6 @@ import {
   isChatCustomizeLabel,
   isStudioGenerateLabel,
   scanStudioVideoOutputs,
-  FLASHCARD_CARD,
   studioText,
   shouldKickoffSlides,
   shouldKickoffVideo,
@@ -721,6 +721,7 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
     log("本文に既存スライド（Illuminated Horizons）があります");
     return true;
   }
+  if (await hasReadyStudioArtifact(page, "slides")) return true;
   const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = await stamps.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
@@ -731,25 +732,12 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
   return false;
 }
 
-async function openStudioCardMatching(page: Page, re: RegExp): Promise<boolean> {
+async function openStudioCardMatching(page: Page, kind: StudioArtifactKind): Promise<boolean> {
   await expandNotebookPanels(page);
   await dismissPointerBlockers(page);
-  const stamps = page.getByText(STUDIO_RELATIVE_TIME);
-  const n = await stamps.count().catch(() => 0);
-  for (let i = 0; i < n; i++) {
-    const stamp = stamps.nth(i);
-    const card = stamp.locator("xpath=ancestor::*[.//button][1]");
-    const text = await card.innerText().catch(() => "");
-    if (!re.test(text)) continue;
-    const clicked = await stamp
-      .click({ timeout: 3_000, force: true })
-      .then(() => true)
-      .catch(async () => card.click({ timeout: 3_000, force: true }).then(() => true).catch(() => false));
-    if (!clicked) continue;
-    await page.waitForTimeout(1500);
-    return true;
-  }
-  return false;
+  const opened = await openStudioArtifact(page, kind);
+  if (opened) await page.waitForTimeout(1500);
+  return opened;
 }
 
 async function waitForStudioOutputs(page: Page, timeoutMs = 10_000): Promise<number> {
@@ -817,16 +805,14 @@ function generationStartIsRecent(state: PaperState): boolean {
   return age >= 0 && age < GENERATION_START_GRACE_MS;
 }
 
-async function studioHasCardMatching(page: Page, re: RegExp): Promise<boolean> {
+async function studioHasCardMatching(page: Page, kind: StudioArtifactKind): Promise<boolean> {
   await expandNotebookPanels(page);
-  const stamps = page.getByText(STUDIO_RELATIVE_TIME);
-  const n = await stamps.count().catch(() => 0);
-  for (let i = 0; i < n; i++) {
-    const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
-    const text = await card.innerText({ timeout: 2_000 }).catch(() => "");
-    if (re.test(text)) return true;
-  }
-  return false;
+  return hasStudioArtifact(page, kind);
+}
+
+async function studioHasReadyCardMatching(page: Page, kind: StudioArtifactKind): Promise<boolean> {
+  await expandNotebookPanels(page);
+  return hasReadyStudioArtifact(page, kind);
 }
 
 async function clickStudioGenerate(page: Page): Promise<boolean> {
@@ -1266,6 +1252,10 @@ async function studioCardTexts(page: Page): Promise<string[]> {
     const t = text.replace(/\s+/g, " ").trim();
     if (t && !rows.includes(t)) rows.push(t);
   };
+  const cards = await studioArtifactCards(page);
+  for (const card of cards) {
+    if (card.kind !== "other") add(card.text);
+  }
   const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = Math.min(await stamps.count().catch(() => 0), 16);
   for (let i = 0; i < n; i++) {
@@ -1498,24 +1488,22 @@ async function openSlideDeck(page: Page): Promise<void> {
   await expandNotebookPanels(page);
   await dismissStudioCustomize(page);
   await logStudioCardSummaries(page);
-  if (
-    await openStudioCardMatching(
-      page,
-      /Luminous Black Holes|Radiant Black Holes|Illuminated Horizons|The Luminous Void/,
-    )
-  ) {
-    return;
-  }
+  if (await openStudioCardMatching(page, "slides")) return;
   const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = await stamps.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
     const stamp = stamps.nth(i);
     const card = stamp.locator("xpath=ancestor::*[.//button][1]");
     const text = await card.innerText({ timeout: 2_000 }).catch(() => "");
-    if (!isSlideDeckCardText(text)) continue;
-    await stamp.click({ timeout: 5_000 }).catch(() => card.click({ timeout: 5_000 }).catch(() => undefined));
-    await page.waitForTimeout(1500);
-    return;
+    if (!isSlideDeckCardText(text) && !/Illuminated Horizons|Luminous Black Holes|Radiant Black Holes|The Luminous Void/.test(text)) continue;
+    const clicked = await stamp
+      .click({ timeout: 5_000 })
+      .then(() => true)
+      .catch(async () => card.click({ timeout: 5_000 }).then(() => true).catch(() => false));
+    if (clicked) {
+      await page.waitForTimeout(1500);
+      return;
+    }
   }
   throw new Error("生成済みのスライドカードが Studio にありません");
 }
@@ -2383,9 +2371,9 @@ async function collectReadyStudio(
       if (existsSync(dest) && statSync(dest).size > 80) {
         state.quizCsvPath = dest;
         markCompleted(state, "nlm-quiz");
-      } else if (await studioHasCardMatching(page, /クイズ/)) {
+      } else if (await studioHasReadyCardMatching(page, "quiz")) {
         log("既存のクイズを開きます（再生成しません）");
-        if (!(await openStudioCardMatching(page, /クイズ/))) {
+        if (!(await openStudioCardMatching(page, "quiz"))) {
           await clickFirstByName(page, [/^クイズ$/, /^Quiz$/i, /開く/, /Open/i]);
         }
         await page.waitForTimeout(1500);
@@ -2406,9 +2394,9 @@ async function collectReadyStudio(
       if (existsSync(dest) && statSync(dest).size > 80) {
         state.vocabCsvPath = dest;
         markCompleted(state, "nlm-flashcards");
-      } else if (await studioHasCardMatching(page, FLASHCARD_CARD)) {
+      } else if (await studioHasReadyCardMatching(page, "flashcards")) {
         log("既存の単語帳を開きます（再生成しません）");
-        if (!(await openStudioCardMatching(page, FLASHCARD_CARD))) {
+        if (!(await openStudioCardMatching(page, "flashcards"))) {
           await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
         }
         await page.waitForTimeout(1500);
@@ -2528,11 +2516,11 @@ async function runStudioParallel(
     }
   }
   if (want("nlm-quiz") && !isCompleted(state, "nlm-quiz")) {
-    if (await studioHasCardMatching(page, /クイズ/)) markStudioStarted(state, "nlm-quiz");
+    if (await studioHasCardMatching(page, "quiz")) markStudioStarted(state, "nlm-quiz");
     else await kick("nlm-quiz", [/^クイズ$/, /^Quiz$/i], QUIZ_MS);
   }
   if (want("nlm-flashcards") && !isCompleted(state, "nlm-flashcards")) {
-    if (await studioHasCardMatching(page, FLASHCARD_CARD)) {
+    if (await studioHasCardMatching(page, "flashcards")) {
       markStudioStarted(state, "nlm-flashcards");
     } else {
       await kick(

@@ -87,3 +87,9 @@ npm run repair-meta -- --headed
 - Notebook の短期枠（Gemini Notebook）の使用量が上限を超えているあいだは生成を止めます。既定は 85% で、`--notebook-short-stop-percent 70` のように変えられます（環境変数 `NOTEBOOK_SHORT_STOP_PERCENT` より引数が優先）。ちょうどその％では止めず、超えたら止めます。週枠が 100% のときはリセット日時まで待ちます。値は taskdesk と同じ利用量 JSON をリアルタイムに読みます。止めないときは `--ignore-notebook-quota`
 - 利用量が回復するまでは、SciSpace への PDF 掲載・メタ反映と、1 種でもできている生成物の Edu Share 登録を先に進めます。残りの生成は枠が空いてから再開します
 - 公式 API ではないため、ボタン文言が変わると失敗します。失敗時は論文フォルダの `failures/` にスクリーンショットが残ります
+
+### 生成済みカードの取得
+
+クイズや単語帳の題名が「練習問題」「確認テスト」「記憶カード」などでも、Studio の出力カードの種別を使って既存の教材を取得します。生成開始タイルやソース一覧は出力として扱いません。教材の再生成はせず、保存した CSV は従来どおり Edu Share へ取り込みます。
+
+テストには外部サービスへ接続しない画面フィクスチャが含まれます。`npx playwright install chromium` 済みの Chromium、またはローカルの Chrome を使います。CI はテスト用 Chromium を準備します。運用の Chrome プロファイルは使いません。
