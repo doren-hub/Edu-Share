@@ -489,3 +489,96 @@ export function buildGlobalGraphData(
 
   return { nodes, links };
 }
+
+export type RpcCaller = {
+  rpc: (
+    fnName: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ data: unknown; error: unknown }>;
+};
+
+/**
+ * PostgREST / PostgreSQL のシグネチャ不一致エラーか判定する。
+ */
+export function isSignatureMismatchError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; message?: string; details?: string };
+  const code = String(e.code ?? "");
+  const msg = String(e.message ?? "").toLowerCase();
+  const details = String(e.details ?? "").toLowerCase();
+
+  return (
+    code === "PGRST202" ||
+    code === "PGRST203" ||
+    code === "42883" ||
+    msg.includes("could not choose") ||
+    msg.includes("does not exist") ||
+    details.includes("could not choose")
+  );
+}
+
+/**
+ * 論文1件に対する類似論文候補を取得する。
+ * p_candidate_ids を指定した RPC 呼び出しを行い、古い DB 関数によるシグネチャ不一致時のみ
+ * フォールバック（p_candidate_ids なし）を実行する。
+ */
+export async function fetchSimilarCandidatesForPaper(
+  caller: RpcCaller,
+  testId: string,
+  matchCount: number,
+  candidateIds: string[],
+  filteredIdSet: Set<string>,
+): Promise<{
+  candidates: Array<{ id: string; similarity: number }>;
+  hasError: boolean;
+}> {
+  let similarCandidates: Array<{ id: string; similarity: number }> = [];
+  let hasError = false;
+
+  try {
+    let rpcRes = await caller.rpc("match_related_papers", {
+      p_test_id: testId,
+      p_match_count: matchCount,
+      p_candidate_ids: candidateIds,
+    });
+
+    if (rpcRes.error) {
+      if (isSignatureMismatchError(rpcRes.error)) {
+        console.warn(
+          `[papers/graph] match_related_papers signature mismatch, falling back without p_candidate_ids for ${testId}:`,
+          rpcRes.error,
+        );
+        rpcRes = await caller.rpc("match_related_papers", {
+          p_test_id: testId,
+          p_match_count: 50,
+        });
+      } else {
+        console.warn(
+          `[papers/graph] match_related_papers error for ${testId}:`,
+          rpcRes.error,
+        );
+      }
+    }
+
+    if (!rpcRes.error && Array.isArray(rpcRes.data)) {
+      similarCandidates = (
+        rpcRes.data as Array<{ id: string; similarity: number }>
+      )
+        .filter((r) => r.id !== testId && filteredIdSet.has(r.id))
+        .map((r) => ({
+          id: r.id,
+          similarity: Math.round(Number(r.similarity) * 1000) / 1000,
+        }));
+    } else if (rpcRes.error) {
+      hasError = true;
+    }
+  } catch (err) {
+    hasError = true;
+    console.warn(
+      `[papers/graph] match_related_papers exception for ${testId}:`,
+      err,
+    );
+  }
+
+  return { candidates: similarCandidates, hasError };
+}

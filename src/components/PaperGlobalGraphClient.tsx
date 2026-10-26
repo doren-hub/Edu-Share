@@ -249,6 +249,13 @@ export function PaperGlobalGraphClient() {
             </span>
           </div>
         ) : null}
+
+        {/* 一部取得エラー時の案内 */}
+        {data?.partial ? (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800">
+            ※ 一部の論文の類似度データを取得できなかったため、一部の「内容が近い」辺が表示されていない可能性があります。
+          </div>
+        ) : null}
       </section>
 
       {/* グラフ表示領域 */}

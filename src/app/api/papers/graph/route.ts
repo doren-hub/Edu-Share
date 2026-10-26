@@ -5,6 +5,7 @@ import { normalizePaperIndustriesFromDb } from "@/lib/paper-industries";
 import { paperAuthorNamesForDisplay } from "@/lib/paper-authors";
 import {
   buildGlobalGraphData,
+  fetchSimilarCandidatesForPaper,
   matchesGraphFilter,
   type GlobalGraphPaperCandidate,
   type GlobalGraphResponse,
@@ -130,40 +131,18 @@ export async function GET(req: Request) {
     filtered,
     8,
     async (p) => {
-      let similarCandidates: Array<{ id: string; similarity: number }> = [];
-      try {
-        // (a) まず p_candidate_ids を渡して絞り込み集合内から上位候補を取得
-        let rpcRes = await admin.rpc("match_related_papers", {
-          p_test_id: p.id,
-          p_match_count: Math.max(k, Math.min(200, filteredCount)),
-          p_candidate_ids: candidateIds,
-        });
+      const matchCount = Math.max(k, Math.min(200, filteredCount));
+      const { candidates: similarCandidates, hasError } =
+        await fetchSimilarCandidatesForPaper(
+          admin,
+          p.id,
+          matchCount,
+          candidateIds,
+          filteredIdSet,
+        );
 
-        // 過去の DB 関数（p_candidate_ids 引数なし）でエラーになった場合のフォールバック
-        if (rpcRes.error) {
-          rpcRes = await admin.rpc("match_related_papers", {
-            p_test_id: p.id,
-            p_match_count: Math.max(50, Math.min(200, totalCount)),
-          });
-        }
-
-        const rpcRows = rpcRes.data;
-        if (!rpcRes.error && Array.isArray(rpcRows)) {
-          similarCandidates = rpcRows
-            .filter(
-              (r: { id: string }) =>
-                r.id !== p.id && filteredIdSet.has(r.id),
-            )
-            .map((r: { id: string; similarity: number }) => ({
-              id: r.id,
-              similarity: Math.round(Number(r.similarity) * 1000) / 1000,
-            }));
-        } else if (rpcRes.error) {
-          hasRpcError = true;
-        }
-      } catch (err) {
+      if (hasError) {
         hasRpcError = true;
-        console.warn(`[papers/graph] match_related_papers failed for ${p.id}:`, err);
       }
 
       return {

@@ -12,8 +12,11 @@ import {
   computeLinkCurvePath,
   matchesGraphFilter,
   buildGlobalGraphData,
+  isSignatureMismatchError,
+  fetchSimilarCandidatesForPaper,
   type RelatedPapersResponse,
   type GlobalGraphPaperCandidate,
+  type RpcCaller,
 } from "./paper-related.ts";
 
 test("computeRepresentativeVector: returns correct element-wise mean", () => {
@@ -348,4 +351,103 @@ test("buildGlobalGraphData: 上位候補が絞り込みで外れても、絞り�
   assert.ok(connectedIds.includes("filtered-5"));
   assert.ok(!connectedIds.includes("filtered-6")); // 6番目は k=5 で切られる
   assert.ok(!connectedIds.includes("global-out-1")); // 外れた論文は入らない
+});
+
+test("isSignatureMismatchError: correctly identifies signature mismatch errors", () => {
+  assert.equal(isSignatureMismatchError({ code: "PGRST202" }), true);
+  assert.equal(isSignatureMismatchError({ code: "PGRST203" }), true);
+  assert.equal(isSignatureMismatchError({ code: "42883" }), true);
+  assert.equal(
+    isSignatureMismatchError({ message: "Could not choose the best candidate function" }),
+    true,
+  );
+  assert.equal(
+    isSignatureMismatchError({ message: "function match_related_papers does not exist" }),
+    true,
+  );
+  assert.equal(isSignatureMismatchError({ code: "42P01" }), false);
+  assert.equal(isSignatureMismatchError(null), false);
+});
+
+test("fetchSimilarCandidatesForPaper: calls RPC with candidateIds, and falls back on signature mismatch", async () => {
+  const calls: Array<{ fnName: string; args: Record<string, unknown> }> = [];
+
+  // 1. 正常系: candidateIds が渡され、正しくフィルタリングされる
+  const mockCallerNormal: RpcCaller = {
+    async rpc(fnName, args) {
+      calls.push({ fnName, args });
+      return {
+        data: [
+          { id: "p2", similarity: 0.88 },
+          { id: "p3", similarity: 0.75 },
+          { id: "p-other", similarity: 0.95 }, // filteredIdSet にない
+        ],
+        error: null,
+      };
+    },
+  };
+
+  const res1 = await fetchSimilarCandidatesForPaper(
+    mockCallerNormal,
+    "p1",
+    5,
+    ["p2", "p3"],
+    new Set(["p1", "p2", "p3"]),
+  );
+
+  assert.equal(res1.hasError, false);
+  assert.equal(res1.candidates.length, 2);
+  assert.equal(res1.candidates[0].id, "p2");
+  assert.equal(res1.candidates[1].id, "p3");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args.p_candidate_ids, ["p2", "p3"]);
+
+  // 2. シグネチャ不一致エラー時: フォールバック（p_candidate_ids なし）が走る
+  const fallbackCalls: Array<{ fnName: string; args: Record<string, unknown> }> = [];
+  const mockCallerMismatch: RpcCaller = {
+    async rpc(fnName, args) {
+      fallbackCalls.push({ fnName, args });
+      if (args.p_candidate_ids) {
+        return {
+          data: null,
+          error: { code: "PGRST202", message: "function match_related_papers does not exist" },
+        };
+      }
+      return {
+        data: [{ id: "p2", similarity: 0.88 }],
+        error: null,
+      };
+    },
+  };
+
+  const res2 = await fetchSimilarCandidatesForPaper(
+    mockCallerMismatch,
+    "p1",
+    5,
+    ["p2"],
+    new Set(["p1", "p2"]),
+  );
+
+  assert.equal(res2.hasError, false);
+  assert.equal(res2.candidates.length, 1);
+  assert.equal(res2.candidates[0].id, "p2");
+  assert.equal(fallbackCalls.length, 2);
+  assert.equal(fallbackCalls[1].args.p_candidate_ids, undefined);
+
+  // 3. 一般エラー時: フォールバックせず hasError: true を返す
+  const mockCallerError: RpcCaller = {
+    async rpc() {
+      return { data: null, error: { code: "50000", message: "Database timeout" } };
+    },
+  };
+
+  const res3 = await fetchSimilarCandidatesForPaper(
+    mockCallerError,
+    "p1",
+    5,
+    ["p2"],
+    new Set(["p1", "p2"]),
+  );
+  assert.equal(res3.hasError, true);
+  assert.equal(res3.candidates.length, 0);
 });

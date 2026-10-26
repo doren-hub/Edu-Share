@@ -1217,6 +1217,9 @@ grant execute on function public.match_related_papers (uuid, int) to service_rol
 -- その集合内に限定してコサイン類似度が高い論文を探索できるようにする。
 -- match_document_chunks と同様、service_role のみ実行可とする。
 
+-- 033 の (uuid, int) シグネチャを削除し、引数オーバーロードによる PostgREST PGRST203（曖昧さ解決エラー）を防止する
+drop function if exists public.match_related_papers (uuid, int);
+
 create or replace function public.match_related_papers (
   p_test_id uuid,
   p_match_count int default 5,
