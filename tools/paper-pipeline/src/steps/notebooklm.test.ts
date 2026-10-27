@@ -61,7 +61,7 @@ function makeFlashcardsAppData(): string {
 }
 
 function makeFakeSlidePdfDataUrl(): string {
-  const body = `%PDF-1.4\n1 0 obj<<>>endobj\n${"A".repeat(32_000)}\n%%EOF\n`;
+  const body = `%PDF-1.4\n1 0 obj<<>>endobj\n${"A".repeat(90_000)}\n%%EOF\n`;
   return `data:application/pdf;base64,${Buffer.from(body, "utf8").toString("base64")}`;
 }
 
@@ -308,13 +308,15 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
     if (!String(e).includes("Executable doesn't exist")) throw e;
     return chromium.launch({ channel: "chrome" });
   });
-  await browser.newPage(); // keeper tab so ensureKeeperTab is a no-op
+  const context = await browser.newContext();
+  await context.route(/^https?:\/\//, route => route.abort());
+  await context.newPage(); // keeper tab so ensureKeeperTab is a no-op
 
   try {
     await t.test(
       "クイズ取得後に Studio 一覧へ戻り、続けて単語帳を取得して生成中のスライドを開始失敗にしない",
       async () => {
-        const page = await browser.newPage();
+        const page = await context.newPage();
         const startedAt = new Date(Date.now() - 120_000).toISOString();
         const { paperDir, state } = makeTempState({
           studioStarted: ["nlm-slides", "nlm-video", "nlm-quiz", "nlm-flashcards"],
@@ -363,7 +365,7 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
     await t.test(
       "クイズ・単語帳取得後に Studio 一覧へ戻り、未開始のスライド・動画をキックオフして GenerationWaitingError で待機する",
       async () => {
-        const page = await browser.newPage();
+        const page = await context.newPage();
         const { paperDir, state } = makeTempState({
           studioStarted: ["nlm-quiz", "nlm-flashcards"],
         });
@@ -409,7 +411,7 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
     await t.test(
       "クイズ取得中にスライド完了通知が出ている場合、ビューアを閉じて既存スライドを回収し重複生成しない",
       async () => {
-        const page = await browser.newPage();
+        const page = await context.newPage();
         const { paperDir, state } = makeTempState({
           studioStarted: ["nlm-slides", "nlm-quiz"],
         });
@@ -453,7 +455,7 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
     await t.test(
       "通常の生成待ち（GenerationWaitingError）と実エラー（ソース 0 件で開始不可）を区別する",
       async () => {
-        const page = await browser.newPage();
+        const page = await context.newPage();
         const { paperDir, state } = makeTempState();
         try {
           await page.setContent(`
@@ -488,8 +490,31 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
       },
     );
 
+    await t.test("生成の明示的な失敗を通常の生成待ちに変換しない", async () => {
+      const page = await context.newPage();
+      const { paperDir, state } = makeTempState();
+      try {
+        await mountStudioFixture(page, {});
+        await page.evaluate(() => {
+          (window as unknown as { confirmGenerate: () => void }).confirmGenerate = () => {
+            document.getElementById("customize-dialog")!.style.display = "none";
+            document.getElementById("artifact-list")!.textContent = "生成に失敗しました 再試行 削除";
+          };
+        });
+        await assert.rejects(
+          () => runStudioParallel(page, paperDir, state, ["nlm-slides", "nlm-quiz", "nlm-flashcards"], false,
+            { outputReadyTimeoutMs: 100, kickoffConfirmMs: 100 }),
+          /Studio 生成が失敗したままです/,
+        );
+        assert.equal(hasStudioStarted(state, "nlm-video"), false);
+      } finally {
+        await page.close();
+        rmSync(paperDir, { recursive: true, force: true });
+      }
+    });
+
     await t.test("returnToStudioList: ビューアを閉じて Studio 一覧へ戻る", async () => {
-      const page = await browser.newPage();
+      const page = await context.newPage();
       try {
         await mountStudioFixture(page, {
           hasQuizReady: true,

@@ -661,7 +661,6 @@ export async function dismissStudioViewer(page: Page): Promise<void> {
         /close_fullscreen/,
         /arrow_back/,
         /戻る/,
-        /^(?:アプリ|App)(?:\s*chevron_right)?$/i,
       ],
       { timeoutMs: 1_500 },
     );
@@ -673,7 +672,8 @@ export async function dismissStudioViewer(page: Page): Promise<void> {
             const r = el.getBoundingClientRect();
             if (r.width < 8 || r.height < 8 || r.bottom < 0 || r.top > window.innerHeight) continue;
             const t = ((el.innerText || "") + " " + (el.getAttribute("aria-label") || "")).replace(/\\s+/g, " ").trim();
-            if (/^(?:Studio|スタジオ)(?:\\s*chevron_right)?$/i.test(t)) {
+            if (/^(?:Studio|スタジオ)(?:\\s*chevron_right)?$/i.test(t) ||
+                (/^(?:アプリ|App)$/i.test(t) && /chevron_right/.test(el.nextElementSibling?.textContent || ""))) {
               el.click();
               return true;
             }
@@ -1495,6 +1495,7 @@ async function fetchSlidePdfViaRpc(page: Page, destPath: string): Promise<boolea
 }
 
 async function fetchUrlToPdf(page: Page, src: string, destPath: string): Promise<boolean> {
+  // Embedded PDF viewers can expose inline data URLs; also permits offline fixture verification.
   if (/^data:application\/pdf;base64,/i.test(src)) {
     const b64 = src.replace(/^data:application\/pdf;base64,/i, "").trim();
     const buf = Buffer.from(b64, "base64");
@@ -2348,7 +2349,7 @@ async function unmarkStaleStudioStarts(
       (await studioHasCardMatching(page, "slides")) ||
       !shouldKickoffSlides(slideCards) ||
       isSlideReadyNotificationText(body) ||
-      textLooksLikeGenerating(body);
+      isSlideGenerationInProgress(body);
     if (!hasSlideCard) {
       log("nlm-slides は開始記録があるが出力も生成中もないので、やり直しします");
       unmarkStudioStarted(state, "nlm-slides");

@@ -171,7 +171,7 @@ export function isStudioArtifactViewerText(text: string): boolean {
   if (/個のソースを表示/.test(t) && /チャットパネル|collapse_content|expand_content/.test(t)) {
     return true;
   }
-  if (/\b(?:collapse_content|expand_content|close_fullscreen)\b/.test(t)) {
+  if (/\bclose_fullscreen\b/.test(t)) {
     return true;
   }
   if (

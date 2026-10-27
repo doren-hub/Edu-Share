@@ -235,6 +235,9 @@ test("isStudioArtifactViewerText / isSlideReadyNotificationText: 成果物ビュ
   assert.equal(studioOutputScanIncomplete(viewerWithToast), true);
   assert.equal(shouldKickoffSlides([viewerWithToast]), false);
 
+  assert.equal(isStudioArtifactViewerText("ソース collapse_content チャット expand_content Studio"), false);
+  assert.equal(isStudioArtifactViewerText("アプリ chevron_right"), true);
+
   const viewerWithoutToast =
     "1 件のソース Studio dock_to_left アプリ chevron_right 適切なコンテンツ 不適切なコンテンツ 1 / 10";
   assert.equal(isStudioArtifactViewerText(viewerWithoutToast), true);
