@@ -497,7 +497,7 @@ export function isTldrBodyLine(s: string): boolean {
   return words.length >= 18 && /[.!?。]$/.test(t);
 }
 
-/** Edu Share メタ欄用。タイトル・年著者行・掲載を原文のまま。DOI と TL;DR は入れない */
+/** Edu Share メタ欄用。検証済みの題名・年著者・掲載だけを反映する。DOI と TL;DR は入れない */
 export function metadataPasteFromCard(
   card: Pick<SciSpaceCardMeta, "title" | "yearAuthorLine" | "venue">,
   filename: string,

@@ -32,3 +32,5 @@ SQL、DB / R2 の直接操作、一括変更、原本・添付の削除、マイ
 - 省略記号、原本内の長い題名の先頭部分、明らかな次行への継続を検出した場合、照合できるまで題名の反映を止める。スキャン、文字抽出失敗、複雑な組版やハイフン分割で確認できない場合は人が原本で照合する。既存の正しい項目を推測で置換しない。
 
 回帰テストはネットワーク不要の原本テキストと公式応答の fixture を使います。実 NotebookLM / SciSpace / Edu Share や本番 DB / R2 には接続しません。`tools/paper-pipeline` 内で `node --import tsx --test src/scispace-card.test.ts src/steps/scispace.test.ts src/crossref.test.ts` と `npm run typecheck` を実行できます。
+
+見出しなしの Abstract が `In this paper ...` 等で題名直後に始まる場合の継続誤判定は、独立レビューでの非ブロッキング改善として Issue #140 に分離しました。保留時に既存の題名を別項目で上書きしないことは、実アプリのパーサーを使って回帰検証しています。
