@@ -910,3 +910,9 @@ test("bibliography regression: preserve full saved title and venue in the actual
   assert.equal(titleLooksLikeBadSciSpaceCapture(`${short}…`), true);
   assert.doesNotMatch(eduShareSciSpaceMetadataPaste(raw.replace(short, `${short}…`), "agronomy-09-00403.pdf"), /Emulation/);
 });
+
+test("venue fallback without an author line requires an explicit venue hint", () => {
+  const title = "AgROS: A Robot Operating System Based Emulation";
+  assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${title}\nNaoum Tsolakis`, "paper.pdf").venue, "");
+  assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${title}\nJournal of Agricultural Robotics`, "paper.pdf").venue, "Journal of Agricultural Robotics");
+});

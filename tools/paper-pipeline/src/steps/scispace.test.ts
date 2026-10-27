@@ -219,3 +219,18 @@ test("PDF extraction unavailable: preserve existing metadata without a network l
   assert.equal(state.title, agrosTitle);
   assert.equal(state.venue, "Agronomy");
 });
+
+test("complete title followed by affiliations or authors remains usable without Crossref", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  for (const next of ["Department of Computer Science, University of Tokyo", "Institute for Agricultural Robotics", "John Smith, Jane Doe", "Consortium for Agricultural Robotics"]) {
+    const state = agrosState();
+    state.title = agrosTitle;
+    const pdf = `${agrosTitle}\n${next}\nAbstract\n${"Robotics emulation study. ".repeat(20)}`;
+    await verifySciSpaceBibliography(state, state.filename, pdf, async () => { throw new Error("must not be called without DOI"); });
+    assert.equal(state.sciTitleRejected, false, next);
+    assert.equal(usableEduShareTitle(state), agrosTitle, next);
+    await verifySciSpaceBibliography(state, state.filename, `${pdf}\ndoi:${agrosWork.doi}`, async () => null);
+    assert.equal(usableEduShareTitle(state), agrosTitle, next);
+  }
+});

@@ -32,12 +32,13 @@ export function titleHasPdfContinuation(candidate: string, pdfText: string): boo
   const key = titleKey(candidate);
   if (key.length < 12) return false;
   const lines = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const continuation = (text: string) =>
+    /^(?:(?:for|of|with|based|using|and|in|on)\b|(?:a\s+)?(?:tool|framework|approach|method|model|system)\s+(?:for|of|with|to)\b)/i.test(text) &&
+    !/abstract|keywords|doi|@|\d|\b(?:department|university|institute|school|faculty|laboratory|centre|center|hospital|consortium|association)\b/i.test(text);
   return lines.some((line, index) => {
     const text = titleKey(line);
-    if (text.startsWith(`${key} `)) return true;
-    const next = lines[index + 1] ?? "";
-    return text === key && /\b(?:for|of|with|based|using)\b/i.test(next) &&
-      !/abstract|keywords|doi|@|\d/i.test(next);
+    if (text.startsWith(`${key} `)) return continuation(text.slice(key.length + 1));
+    return text === key && continuation(lines[index + 1] ?? "");
   });
 }
 
