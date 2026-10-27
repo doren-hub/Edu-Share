@@ -444,8 +444,8 @@ export function looksLikeAuthorOrPaperId(s: string): boolean {
 export function looksLikePageRange(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
-  if (/^,?\s*(?:pages?|pp?\.?)\s*[\d–—-]+/i.test(t)) return true;
-  if (/^,?\s*\d+\s*[-–—]\s*\d+$/.test(t)) return true;
+  if (/^,?\s*(?:pages?|pp\.|p\.)\s*\d+(?:\s*[-–—]\s*\d+)?\s*[.,]?\s*$/i.test(t)) return true;
+  if (/^,?\s*\d+\s*[-–—]\s*\d+\s*[.,]?\s*$/.test(t)) return true;
   return false;
 }
 
@@ -453,9 +453,9 @@ export function looksLikePageRange(s: string): boolean {
 export function looksLikeEditorField(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
-  if (/^(?:academic\s+|guest\s+|section\s+)?editors?[:\s]/i.test(t)) return true;
-  if (/^edited\s+by\b/i.test(t)) return true;
-  if (/^(?:編集者|編集担当|編集委員)[：:]/i.test(t)) return true;
+  if (/^(?:academic\s+|guest\s+|section\s+)?editors?\s*[:：]/i.test(t)) return true;
+  if (/^edited\s+by\s*[:：]?/i.test(t)) return true;
+  if (/^(?:編集者|編集担当|編集委員)\s*[：:]/i.test(t)) return true;
   return false;
 }
 

@@ -1122,6 +1122,8 @@ test("issue #131: looksLikePageRange ページ範囲の判定", () => {
   // 通常のタイトル
   assert.equal(looksLikePageRange("Pages from the History of Science"), false);
   assert.equal(looksLikePageRange("A Comprehensive Survey of Neural Networks"), false);
+  assert.equal(looksLikePageRange("p53 mutations in human cancers"), false);
+  assert.equal(looksLikePageRange("p21 expression in cell cycle arrest"), false);
 });
 
 test("issue #131: looksLikeEditorField 編集者欄の判定", () => {
@@ -1135,6 +1137,8 @@ test("issue #131: looksLikeEditorField 編集者欄の判定", () => {
   // 通常のタイトル
   assert.equal(looksLikeEditorField("Editorial Board Decisions in Modern Science"), false);
   assert.equal(looksLikeEditorField("The Editor's Guide to Machine Learning"), false);
+  assert.equal(looksLikeEditorField("Editor bias in peer review"), false);
+  assert.equal(looksLikeEditorField("Editors as gatekeepers in scholarly publishing"), false);
 });
 
 test("issue #131: isTitlePrefixOf 途中切れプレフィックスの判定", () => {
@@ -1167,6 +1171,9 @@ test("issue #131: titleLooksLikeBadSciSpaceCapture でページ範囲・編集�
   assert.equal(titleLooksLikeBadSciSpaceCapture("sec18-zhang_0"), true);
   assert.equal(titleLooksLikeBadSciSpaceCapture("075310_1_5.0100358.pdf"), true);
   assert.equal(titleLooksLikeBadSciSpaceCapture("Not addressed in the paper."), true);
+  // 正しいタイトルが誤判定されないこと
+  assert.equal(titleLooksLikeBadSciSpaceCapture("p53 mutations in human cancers"), false);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Editor bias in peer review"), false);
 });
 
 test("issue #131: reconcileMetaFromFilesPaste で途中切れや不正タイトルを完全な題名に戻す", () => {

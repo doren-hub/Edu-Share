@@ -179,9 +179,15 @@ test("issue #131: usableEduShareTitle: PDF名・ページ範囲・掲載誌/会�
   stateInvalidNoPaste.filesPaste = "";
   assert.equal(usableEduShareTitle(stateInvalidNoPaste), "");
 
-  // 8. 正常な完全タイトルは維持される
+  // 8. 正常な完全タイトルは維持される（p53 や Editor 等を含むタイトルも誤除外されない）
   const stateValid = emptyState({ filename: "resnet.pdf", inboxPdfPath: "", paperDir: "" });
   stateValid.title = "Deep Residual Learning for Image Recognition";
   stateValid.filesPaste = "";
   assert.equal(usableEduShareTitle(stateValid), "Deep Residual Learning for Image Recognition");
+
+  stateValid.title = "p53 mutations in human cancers";
+  assert.equal(usableEduShareTitle(stateValid), "p53 mutations in human cancers");
+
+  stateValid.title = "Editor bias in peer review";
+  assert.equal(usableEduShareTitle(stateValid), "Editor bias in peer review");
 });

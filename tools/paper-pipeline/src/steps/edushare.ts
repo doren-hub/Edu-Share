@@ -64,21 +64,16 @@ export function usableEduShareTitle(state: PaperState): string {
     !titleLooksLikeBadSciSpaceCapture(filesTitle);
 
   let t = state.title.trim();
-  if (
-    filesTitleUsable &&
-    (!t ||
-      isDummySciSpacePaste(t) ||
-      titleLooksLikeFilename(t, state.filename) ||
-      titleLooksLikeBadSciSpaceCapture(t) ||
-      titleLooksLikeVenueOrConference(t, card.venue, state.venue) ||
-      isTitlePrefixOf(t, filesTitle))
-  ) {
-    t = filesTitle;
-  } else if (
-    !state.sciTitleRejected &&
-    (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t))
-  ) {
-    t = filesTitle;
+  const candidateNeedsFallback =
+    !t ||
+    isDummySciSpacePaste(t) ||
+    titleLooksLikeFilename(t, state.filename) ||
+    titleLooksLikeBadSciSpaceCapture(t) ||
+    titleLooksLikeVenueOrConference(t, card.venue, state.venue) ||
+    (filesTitleUsable && isTitlePrefixOf(t, filesTitle));
+
+  if (candidateNeedsFallback) {
+    t = filesTitleUsable ? filesTitle : "";
   }
   if (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t)) {
     return "";
