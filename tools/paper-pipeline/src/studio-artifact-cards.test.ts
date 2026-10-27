@@ -77,6 +77,45 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
       assert.equal(await openStudioArtifact(page, "flashcards"), true);
       assert.equal(await page.locator("body").getAttribute("data-opened"), "legacy");
     });
+    await t.test("Issue #129: cards with unread badges, mat-icon or innerText icons, and arbitrary titles", async () => {
+      const unreadRow = (id: string, icon: string, title: string) => `
+        <artifact-library-item style="display:block;position:relative;width:400px;height:80px">
+          <div class="artifact-button-content">
+            <button class="artifact-stretched-button" aria-labelledby="artifact-labels-${id}"
+              onclick="document.body.dataset.opened='${id}'"
+              style="position:absolute;inset:0;width:100%;height:100%;z-index:2"></button>
+            <div class="artifact-primary-content" id="artifact-labels-${id}">
+              <mat-icon>${icon}</mat-icon><span>未読</span><span class="artifact-title">${title}</span>
+              <span>1 件のソース · 18 時間前</span>
+            </div>
+            <button class="artifact-more-button">more_vert</button>
+          </div>
+        </artifact-library-item>`;
+
+      await page.setContent(`
+        ${unreadRow("fc-browser", "copy", "ブラウザ アプリケーション")}
+        ${unreadRow("quiz-jpn", "quiz", "2_JPN-134")}
+        ${unreadRow("slide-prog", "tablet", "Syntactic and semantic interactions")}
+        ${unreadRow("fc-transfer", "copy", "学習の転移 単語カード")}
+      `);
+
+      assert.equal(await hasStudioArtifact(page, "flashcards"), true);
+      assert.equal(await hasStudioArtifact(page, "quiz"), true);
+      assert.equal(await hasStudioArtifact(page, "slides"), true);
+
+      assert.equal(await hasReadyStudioArtifact(page, "flashcards"), true);
+      assert.equal(await hasReadyStudioArtifact(page, "quiz"), true);
+      assert.equal(await hasReadyStudioArtifact(page, "slides"), true);
+
+      assert.equal(await openStudioArtifact(page, "slides"), true);
+      assert.equal(await page.locator("body").getAttribute("data-opened"), "slide-prog");
+
+      assert.equal(await openStudioArtifact(page, "quiz"), true);
+      assert.equal(await page.locator("body").getAttribute("data-opened"), "quiz-jpn");
+
+      assert.equal(await openStudioArtifact(page, "flashcards"), true);
+      assert.equal(await page.locator("body").getAttribute("data-opened"), "fc-browser");
+    });
   } finally {
     await browser.close();
   }

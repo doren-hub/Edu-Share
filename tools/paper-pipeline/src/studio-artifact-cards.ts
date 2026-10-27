@@ -1,7 +1,15 @@
 import type { Locator, Page } from "playwright";
-import { FLASHCARD_CARD, STUDIO_RELATIVE_TIME, isSlideDeckCardText, studioKindFromIcon } from "./studio-cards.ts";
+import {
+  FLASHCARD_CARD,
+  STUDIO_RELATIVE_TIME,
+  detectStudioCardKind,
+  extractStudioIcon,
+  isSlideDeckCardText,
+  studioKindFromIcon,
+  type StudioCardKind,
+} from "./studio-cards.ts";
 
-export type StudioCardKind = "quiz" | "flashcards" | "slides" | "video" | "other" | null;
+export type { StudioCardKind };
 export type StudioArtifactKind = "quiz" | "flashcards" | "slides";
 export type StudioArtifactCard = {
   text: string;
@@ -25,14 +33,43 @@ export async function studioArtifactCards(page: Page): Promise<StudioArtifactCar
     if (!visible) continue;
     const raw = (await row.innerText({ timeout: 2_000 }).catch(() => "")).replace(/\s+/g, " ").trim();
     if (!raw) continue;
+
+    // 1. Check specific .artifact-icon (used by fixtures and some modern layouts)
     const iconNode = row.locator(".artifact-icon");
     const iconCount = await iconNode.count().catch(() => 0);
-    const icon = iconCount > 0 ? ((await iconNode.first().textContent({ timeout: 1_000 }).catch(() => ""))?.trim() ?? "") : "";
-    const kind: StudioCardKind = icon
-      ? (studioKindFromIcon(icon) ?? "other")
-      : isModern
-        ? "other"
-        : studioKindFromIcon(raw.split(" ")[0]);
+    const specificIcon = iconCount > 0 ? ((await iconNode.first().textContent({ timeout: 1_000 }).catch(() => ""))?.trim() ?? "") : "";
+
+    let icon = specificIcon;
+    let kind: StudioCardKind = specificIcon ? (studioKindFromIcon(specificIcon) ?? "other") : null;
+
+    // 2. If not determined from .artifact-icon, check general icon elements (mat-icon, google-symbols)
+    if (kind === null) {
+      const generalIcons = await row.locator("mat-icon, .google-symbols, .material-symbols-outlined").allTextContents().catch(() => []);
+      for (const gi of generalIcons) {
+        const clean = gi.trim().toLowerCase();
+        const k = studioKindFromIcon(clean);
+        if (k === "quiz" || k === "flashcards" || k === "slides" || k === "video") {
+          icon = clean;
+          kind = k;
+          break;
+        }
+      }
+    }
+
+    // 3. If still not determined, extract leading icon from card text (e.g. "copy 未読 ...", "未読 copy ...")
+    if (kind === null) {
+      const textIcon = extractStudioIcon(raw);
+      if (textIcon) {
+        icon = textIcon;
+        kind = studioKindFromIcon(textIcon);
+      }
+    }
+
+    // 4. In modern artifact items without recognizable icon, mark as other so arbitrary titles aren't misidentified
+    if (kind === null && isModern) {
+      kind = "other";
+    }
+
     const text = icon && !raw.startsWith(`${icon} `) ? `${icon} ${raw}` : raw;
     const buttons = row.locator("button.artifact-stretched-button, button[aria-labelledby^='artifact-labels-']");
     const syncIcons = await row.locator("mat-icon, .google-symbols, .material-symbols-outlined").allTextContents().catch(() => []);

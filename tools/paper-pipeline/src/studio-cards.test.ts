@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   FLASHCARD_CARD,
   STUDIO_RELATIVE_TIME,
+  detectStudioCardKind,
+  extractStudioIcon,
   studioText,
   formatVideoScan,
   isChatCustomizeLabel,
@@ -185,9 +187,11 @@ test("動画ダウンロードは download / ダウンロード / メニュー�
   assert.equal(looksLikeOverflowMenuLabel("more_horiz"), true);
 });
 
-test("FLASHCARD_CARD: 単語帳は「暗記カード」という名前でも見つける", () => {
+test("FLASHCARD_CARD: 単語帳は「暗記カード」「単語カード」という名前でも見つける", () => {
   assert.equal(FLASHCARD_CARD.test("copy 量子力学 暗記カード 1 件のソース · 11 日前"), true);
   assert.equal(FLASHCARD_CARD.test("copy メタンハイドレート 単語帳 1 件のソース"), true);
+  assert.equal(FLASHCARD_CARD.test("copy 学習の転移 単語カード 1 件のソース · 18 時間前"), true);
+  assert.equal(FLASHCARD_CARD.test("学習の転移 単語カード 1 件のソース · 18 時間前"), true);
   assert.equal(FLASHCARD_CARD.test("quiz メタンハイドレート クイズ 1 件のソース"), false);
 });
 
@@ -218,4 +222,41 @@ test("explicit quiz/copy icons cannot become slides through a relative timestamp
   for (const card of cards) assert.equal(isSlideDeckCardText(card), false, card);
   assert.equal(shouldKickoffSlides(cards), true);
   assert.equal(isSlideDeckCardText("tablet クイズの作り方 1 件のソース · 7 日前"), true);
+});
+
+test("Issue #129: Material アイコン名による種類判定と未読付きカードの認識", () => {
+  // アイコン名の抽出
+  assert.equal(extractStudioIcon("copy 未読 ブラウザ アプリケーション 1 件のソース · 18 時間前 more_vert"), "copy");
+  assert.equal(extractStudioIcon("未読 copy ブラウザ アプリケーション 1 件のソース · 18 時間前 more_vert"), "copy");
+  assert.equal(extractStudioIcon("quiz 未読 2_JPN-134 1 件のソース · 18 時間前 more_vert"), "quiz");
+  assert.equal(extractStudioIcon("未読 quiz phase2_3_0_1 1 件のソース · 18 時間前 more_vert"), "quiz");
+  assert.equal(extractStudioIcon("tablet 未読 Syntactic and semantic interactions 1 件のソース · 18 時間前 more_vert"), "tablet");
+  assert.equal(extractStudioIcon("未読 tablet 論文スライド 1 件のソース · 18 時間前 more_vert"), "tablet");
+  assert.equal(extractStudioIcon("copy 学習の転移 単語カード 1 件のソース · 18 時間前 more_vert"), "copy");
+  assert.equal(extractStudioIcon("学習の転移 単語カード 1 件のソース · 18 時間前"), null);
+
+  // カード種別の判定（タイトル語が無くてもアイコン名で判定できる）
+  assert.equal(detectStudioCardKind("copy 未読 ブラウザ アプリケーション 1 件のソース · 18 時間前 more_vert"), "flashcards");
+  assert.equal(detectStudioCardKind("未読 copy ブラウザ アプリケーション 1 件のソース · 18 時間前 more_vert"), "flashcards");
+  assert.equal(detectStudioCardKind("quiz 未読 2_JPN-134 1 件のソース · 18 時間前 more_vert"), "quiz");
+  assert.equal(detectStudioCardKind("未読 quiz phase2_3_0_1 1 件のソース · 18 時間前 more_vert"), "quiz");
+  assert.equal(detectStudioCardKind("tablet 未読 Syntactic and semantic interactions 1 件のソース · 18 時間前 more_vert"), "slides");
+  assert.equal(detectStudioCardKind("未読 tablet 論文スライド 1 件のソース · 18 時間前 more_vert"), "slides");
+  assert.equal(detectStudioCardKind("copy 学習の転移 単語カード 1 件のソース · 18 時間前 more_vert"), "flashcards");
+  assert.equal(detectStudioCardKind("学習の転移 単語カード 1 件のソース · 18 時間前"), "flashcards");
+
+  // スライド誤認の防止（クイズ・フラッシュカードはスライドにならない）
+  assert.equal(isSlideDeckCardText("copy 未読 ブラウザ アプリケーション 1 件のソース · 18 時間前 more_vert"), false);
+  assert.equal(isSlideDeckCardText("未読 copy ブラウザ アプリケーション 1 件のソース · 18 時間前 more_vert"), false);
+  assert.equal(isSlideDeckCardText("quiz 未読 2_JPN-134 1 件のソース · 18 時間前 more_vert"), false);
+  assert.equal(isSlideDeckCardText("未読 quiz phase2_3_0_1 1 件のソース · 18 時間前 more_vert"), false);
+  assert.equal(isSlideDeckCardText("tablet 未読 Syntactic and semantic interactions 1 件のソース · 18 時間前 more_vert"), true);
+  assert.equal(isSlideDeckCardText("未読 tablet 論文スライド 1 件のソース · 18 時間前 more_vert"), true);
+
+  // 生成中やボタン列（メニュー）を完成済みカードと誤認しない
+  assert.equal(isSlideDeckCardText("copy フラッシュ カード"), false);
+  assert.equal(isSlideDeckCardText("tablet スライド資料"), false);
+  assert.equal(isSlideDeckCardText("tablet スライド資料 chevron_forward"), false);
+  assert.equal(isSlideDeckCardText("quiz クイズ"), false);
+  assert.equal(isSlideDeckCardText("subscriptions 動画解説 chevron_forward"), false);
 });
