@@ -38,7 +38,7 @@ test("NotebookLM source upload deadlines and resume (offline)", async t => {
         const page = await context.newPage();
         try {
           await page.setContent(`<button onclick="throw new Error('background selected')">パソコンから</button>
-            <div role="dialog" id="modal">ソースを追加<p>デバイスからコンピュータのファイルを選択できます</p></div>`);
+            <div role="dialog" id="modal">ソースを追加<div tabindex="-1"><p>デバイスからコンピュータのファイルを選択できます</p></div></div>`);
           // No input exists until clicking. The correct fifth-or-later label appears after the chooser budget.
           await page.evaluate(label => {
             setTimeout(() => {

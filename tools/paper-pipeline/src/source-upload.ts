@@ -40,7 +40,7 @@ export async function setSourcePdf(
       UPLOAD_NAMES.map(name => root.getByRole(role, { name })),
     );
     candidates.push(...UPLOAD_NAMES.map(name =>
-      root.locator("label, [onclick], [tabindex]").filter({ hasText: name }),
+      root.locator('label, [onclick], [tabindex]:not([tabindex="-1"])').filter({ hasText: name }),
     ));
     for (const candidatesOfKind of candidates) {
       const count = await candidatesOfKind.count();
