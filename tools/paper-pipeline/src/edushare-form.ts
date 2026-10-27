@@ -7,7 +7,27 @@ const SKIP_AUTHOR_VALUES = new Set(["", "選択してください", "その他"]
 const DUMMY_AUTHOR_VALUES = new Set(["A. Einstein", "Albert Einstein", "A. K. Dewdney"]);
 
 export function isDummyAuthorValue(v: string): boolean {
-  return DUMMY_AUTHOR_VALUES.has(v.trim());
+  const t = v.trim();
+  return (
+    DUMMY_AUTHOR_VALUES.has(t) ||
+    /^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/iu.test(t) ||
+    /^(?:[\s\-–—·•]+)?Show\s*Less$/iu.test(t)
+  );
+}
+
+export function cleanAuthorName(name: string): string {
+  let t = name
+    .replace(/(?:[\s\-–—·•]+)?Show\s*Less\s*$/iu, "")
+    .replace(/(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More\s*$/iu, "")
+    .replace(/[\s,;]+$/g, "")
+    .trim();
+  if (
+    /^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/iu.test(t) ||
+    /^(?:[\s\-–—·•]+)?Show\s*Less$/iu.test(t)
+  ) {
+    return "";
+  }
+  return t;
 }
 
 export const SLIDE_MATERIAL_HEADING = "スライド（PDF）";
@@ -113,14 +133,14 @@ export function authorFromFilesPaste(paste: string): string {
   for (const line of paste.split(/\r?\n/)) {
     const m = line.match(/^\s*(?:authors?|著者(?:名)?)\s*[:：]\s*(.+)$/i);
     if (!m) continue;
-    const first = m[1].split(/[,，、;／/]/)[0]?.trim() ?? "";
-    if (first.length >= 2) return first.slice(0, 80);
+    const first = cleanAuthorName(m[1].split(/[,，、;／/]/)[0]?.trim() ?? "");
+    if (first.length >= 2 && !isDummyAuthorValue(first)) return first.slice(0, 80);
   }
   for (const line of paste.split(/\r?\n/)) {
     const ya = parseYearAuthor(line);
     if (!ya) continue;
-    const first = ya.authors.split(/[,，、;／/]/)[0]?.trim() ?? "";
-    if (first.length >= 2) return first.slice(0, 80);
+    const first = cleanAuthorName(ya.authors.split(/[,，、;／/]/)[0]?.trim() ?? "");
+    if (first.length >= 2 && !isDummyAuthorValue(first)) return first.slice(0, 80);
   }
   return "";
 }

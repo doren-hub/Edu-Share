@@ -297,11 +297,28 @@ export function needsSciSpaceCardRecapture(state: {
   return false;
 }
 
+/** 著者行から "Show Less"（および前置ハイフン・中点・空白）を取り除く */
+export function stripShowLess(text: string): string {
+  return text
+    .replace(/(?:[\s\-–—·•]+)?Show\s*Less\b/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/** 著者行から "...+N More" 等の省略表記を取り除く */
+export function stripTruncatedMore(text: string): string {
+  return text
+    .replace(/(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More\b/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[\s,;]+$/g, "")
+    .trim();
+}
+
 /** SciSpace カードの "...+N More" は著者が省略されている */
 export function filesRowHasTruncatedAuthors(paste: string): boolean {
   const t = paste.replace(/\s+/g, " ");
   if (/Show\s*Less/i.test(t)) return false;
-  return /(?:\.{2,3}|\u2026)\s*\+\s*\d+\s*More\b/i.test(t);
+  return /(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i.test(t);
 }
 
 /** Files の "+N More" チップそのもの。年著者セル全体ではない */
@@ -309,14 +326,23 @@ export function isFilesAuthorMoreLabel(text: string): boolean {
   return /^(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\s*$/i.test(text.replace(/\s+/g, " ").trim());
 }
 
-/** 展開後の DOM に残った "...+N More" を捨て、Show Less 側を残す */
+/** 展開後の DOM に残った "...+N More" と "Show Less" を取り除く */
 export function preferExpandedAuthorPaste(paste: string): string {
   const lines = paste.replace(/\r\n/g, "\n").split("\n");
   const hasShowLess = lines.some((l) => /Show\s*Less/i.test(l));
   if (!hasShowLess) return paste;
   return lines
-    .map((l) => l.replace(/(?:\.{2,3}|\u2026)\s*\+\s*\d+\s*More\b/gi, "").replace(/[ \t]{2,}/g, " "))
-    .filter((l) => !/^\s*\+\s*\d+\s*More\s*$/i.test(l.trim()))
+    .map((l) =>
+      stripShowLess(
+        l
+          .replace(/(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/gi, "")
+          .replace(/[ \t]{2,}/g, " "),
+      ).trimEnd(),
+    )
+    .filter(
+      (l) =>
+        !/^\s*(?:(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More|[-–—·•]?\s*Show\s*Less)\s*$/i.test(l.trim()),
+    )
     .join("\n");
 }
 
@@ -346,7 +372,8 @@ export function replaceYearAuthorLine(paste: string, yearAuthorLine: string): st
 export function parseYearAuthor(line: string): { year: string; authors: string } | null {
   const m = line.trim().match(YEAR_AUTHOR);
   if (!m) return null;
-  const authors = m[2]!.replace(/^DOI\s*[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]\s*/iu, "").trim();
+  let authors = m[2]!.replace(/^DOI\s*[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]\s*/iu, "").trim();
+  authors = stripShowLess(authors);
   if (authorsLookInvalid(authors)) return null;
   return { year: m[1]!, authors };
 }
@@ -677,7 +704,7 @@ export function metadataPasteFromCard(
   }
   const ya = parseYearAuthor(card.yearAuthorLine);
   const prefix = card.yearAuthorLine.match(/^((?:19|20)\d{2}\s*[·•‧∙⋅・･]\s*)/u)?.[1];
-  const authorLine = ya ? `${prefix ?? `${ya.year}⋅`}${ya.authors}` : "";
+  const authorLine = ya ? `${prefix ?? `${ya.year}⋅`}${stripShowLess(ya.authors)}` : "";
   const currentVenue = options?.currentVenue ?? "";
   const venue = !venueLooksLikeBadSciSpaceCapture(currentVenue, ya?.authors) ? currentVenue :
     venueLooksLikeBadSciSpaceCapture(card.venue, ya?.authors) ? "" : card.venue;
@@ -859,10 +886,12 @@ export function extractSciSpaceCardMeta(raw: string, filename: string): SciSpace
   const lines = linesOf(isolated);
   const rawTitle = pickTitle(lines, filename);
   const title = looksLikeUnansweredSciSpaceResponse(rawTitle) ? "" : rawTitle;
-  const yaLine = lines.find((l) => parseYearAuthor(l)) ?? "";
-  const ya = yaLine ? parseYearAuthor(yaLine) : null;
+  const yaLineRaw = lines.find((l) => parseYearAuthor(l)) ?? "";
+  const ya = yaLineRaw ? parseYearAuthor(yaLineRaw) : null;
   const rawAuthors = ya?.authors ?? "";
-  const authors = looksLikeUnansweredSciSpaceResponse(rawAuthors) ? "" : rawAuthors;
+  const cleanedAuthors = stripTruncatedMore(stripShowLess(rawAuthors));
+  const authors = looksLikeUnansweredSciSpaceResponse(cleanedAuthors) ? "" : cleanedAuthors;
+  const yaLine = ya ? stripShowLess(yaLineRaw) : "";
   const venue = pickVenue(lines, filename, title, authors, yaLine);
   const rawTldr = pickAbstractSection(isolated) || pickTldr(isolated, lines, title);
   const tldr = looksLikeUnansweredSciSpaceResponse(rawTldr) ? "" : rawTldr;

@@ -14,6 +14,8 @@ import {
   isFilesAuthorMoreLabel,
   preferExpandedAuthorPaste,
   replaceYearAuthorLine,
+  stripShowLess,
+  stripTruncatedMore,
   eduShareSciSpaceMetadataPaste,
   pickBestSciSpaceCardText,
   sciSpaceExtractionLooksLikeChrome,
@@ -118,21 +120,23 @@ test("eduShareSciSpaceMetadataPaste: Dewdney のデモカードは空にする",
   assert.equal(eduShareSciSpaceMetadataPaste(dummy, "nihms690699.pdf"), "");
 });
 
-test("eduShareSciSpaceMetadataPaste: タイトル・年⋅著者・掲載の3行はそのまま（Show Less も残す）", () => {
-  const meta = [
+test("eduShareSciSpaceMetadataPaste: タイトル・年⋅著者・掲載の3行から Show Less は取り除く", () => {
+  const row = [
+    "2510.07777v1.pdf",
     "Drift No More? Context Equilibria in Multi-Turn LLM Interactions",
     "2025\u22c5Vardhan Dongre, Ryan A. Rossi, Viet Dac Lai, David Seunghyun Yoon, Dilek Hakkani-T\u00fcr, Trung BuiShow Less",
     "arXiv",
-  ].join("\n");
-  const row = [
-    "2510.07777v1.pdf",
-    meta,
     "PDF UPLOAD",
     "Uploaded on 20 Sep 2026",
     "The paper investigates context drift in multi-turn interactions of Large Language Models (LLMs), proposing a framework to understand and mitigate this phenomenon.",
   ].join("\n");
-  assert.equal(eduShareSciSpaceMetadataPaste(row, "2510.07777v1.pdf"), meta);
-  assert.equal(eduShareSciSpaceMetadataPaste(meta, "2510.07777v1.pdf"), meta);
+  const cleaned = [
+    "Drift No More? Context Equilibria in Multi-Turn LLM Interactions",
+    "2025\u22c5Vardhan Dongre, Ryan A. Rossi, Viet Dac Lai, David Seunghyun Yoon, Dilek Hakkani-T\u00fcr, Trung Bui",
+    "arXiv",
+  ].join("\n");
+  assert.equal(eduShareSciSpaceMetadataPaste(row, "2510.07777v1.pdf"), cleaned);
+  assert.doesNotMatch(eduShareSciSpaceMetadataPaste(row, "2510.07777v1.pdf"), /Show\s*Less/i);
   assert.doesNotMatch(eduShareSciSpaceMetadataPaste(row, "2510.07777v1.pdf"), /The paper investigates/);
 });
 
@@ -364,7 +368,8 @@ test("filesRowHasTruncatedAuthors: +N More と展開後", () => {
     "arXiv",
   ].join("\n");
   const preferred = preferExpandedAuthorPaste(mixed);
-  assert.match(preferred, /Third Author Show Less/);
+  assert.match(preferred, /Third Author/);
+  assert.doesNotMatch(preferred, /Show\s*Less/i);
   assert.doesNotMatch(preferred, /\+1 More/);
   const filled = replaceYearAuthorLine(
     "2603.22608v2.pdf\nUnderstanding LLM Performance Degradation\n2026⋅Jingxuan Chen, Mohammad Taher Pilehvar...+1 More\narXiv",
@@ -1210,4 +1215,64 @@ test("issue #131: reconcileMetaFromFilesPaste で途中切れや不正タイト�
   };
   assert.equal(reconcileMetaFromFilesPaste(stateConfCode), true);
   assert.equal(stateConfCode.title, "Towards Automated Security Analysis of Smart Contracts");
+});
+
+test("Issue #132: stripShowLess は末尾の Show Less 表記を除去する", () => {
+  assert.equal(stripShowLess("Trung BuiShow Less"), "Trung Bui");
+  assert.equal(stripShowLess("Trung Bui Show Less"), "Trung Bui");
+  assert.equal(stripShowLess("Trung Bui - Show Less"), "Trung Bui");
+  assert.equal(stripShowLess("Trung Bui · Show Less"), "Trung Bui");
+  assert.equal(stripShowLess("Show Less"), "");
+  assert.equal(
+    stripShowLess("2025 · Vardhan Dongre, Ryan A. Rossi, Dilek Hakkani-Tür, Trung BuiShow Less"),
+    "2025 · Vardhan Dongre, Ryan A. Rossi, Dilek Hakkani-Tür, Trung Bui",
+  );
+});
+
+test("Issue #132: stripTruncatedMore は +N More 表記を除去する", () => {
+  assert.equal(stripTruncatedMore("Raad Khraishi, Iman Zafar ...+2 More"), "Raad Khraishi, Iman Zafar");
+  assert.equal(stripTruncatedMore("Raad Khraishi, Iman Zafar +2 More"), "Raad Khraishi, Iman Zafar");
+  assert.equal(stripTruncatedMore("Raad Khraishi, Iman Zafar, ...+2 More"), "Raad Khraishi, Iman Zafar");
+  assert.equal(stripTruncatedMore("+2 More"), "");
+  assert.equal(stripTruncatedMore("...+4 More"), "");
+});
+
+test("Issue #132: filesRowHasTruncatedAuthors はドット無し +N More も検出する", () => {
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Vardhan Dongre +4 More"), true);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Vardhan Dongre ...+4 More"), true);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Vardhan Dongre"), false);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Vardhan Dongre Show Less"), false);
+});
+
+test("Issue #132: extractSciSpaceCardMeta は card.authors に Show Less も +N More も残さない", () => {
+  const rowWithShowLess = [
+    "model-collapse-2024.pdf",
+    "Model Collapse in Multi-Turn LLMs",
+    "2024 · Ilia Shumailov, Zakhar Shumaylov, Yarin GalShow Less",
+    "Nature",
+  ].join("\n");
+  const metaLess = extractSciSpaceCardMeta(rowWithShowLess, "model-collapse-2024.pdf");
+  assert.equal(metaLess.authors, "Ilia Shumailov, Zakhar Shumaylov, Yarin Gal");
+  assert.doesNotMatch(metaLess.authors, /Show\s*Less/i);
+  assert.doesNotMatch(metaLess.yearAuthorLine, /Show\s*Less/i);
+  assert.doesNotMatch(metaLess.paste, /Show\s*Less/i);
+
+  const rowWithMore = [
+    "sigcomm20.pdf",
+    "Lognic: High-speed Network Systems",
+    "2020 · Alice Smith, Bob Jones ...+3 More",
+    "ACM SIGCOMM",
+  ].join("\n");
+  const metaMore = extractSciSpaceCardMeta(rowWithMore, "sigcomm20.pdf");
+  assert.equal(metaMore.authors, "Alice Smith, Bob Jones");
+  assert.doesNotMatch(metaMore.authors, /\+3\s*More/i);
+
+  const rowOnlyMore = [
+    "2505.06120v1.pdf",
+    "A Machine Learning Paper",
+    "2025 · ...+5 More",
+    "arXiv",
+  ].join("\n");
+  const metaOnlyMore = extractSciSpaceCardMeta(rowOnlyMore, "2505.06120v1.pdf");
+  assert.equal(metaOnlyMore.authors, "");
 });

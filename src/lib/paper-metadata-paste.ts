@@ -29,8 +29,8 @@ const UNICODE_DASH = String.raw`[\u002D\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]`;
  */
 const MIDDLE_DOT = String.raw`[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]`;
 
-/** 著者一覧の省略表記（例: "...+3 More" "…+3 more"） */
-const TRUNCATED_MORE = /(?:\.{2,3}|\u2026)\s*\+\s*(\d+)\s*More\s*$/iu;
+/** 著者一覧の省略表記（例: "...+3 More" "…+3 more" "+3 More"） */
+const TRUNCATED_MORE = /(?:(?:\.{2,3}|\u2026)\s*)?\+\s*(\d+)\s*More\s*$/iu;
 
 /** 行末の「年＋ダッシュ＋掲載」 */
 const YEAR_VENUE_AT_EOL = new RegExp(
@@ -51,8 +51,7 @@ function stripUiNoise(line: string): string {
     new RegExp(`\\s*${UNICODE_DASH}\\s*Show less\\s*$`, "iu"),
     "",
   );
-  t = t.replace(/\s*Show less\s*$/iu, "");
-  t = t.replace(/Show less\s*$/iu, "");
+  t = t.replace(/(?:[\s\-–—·•]+)?Show\s*Less\s*$/iu, "");
   t = t.replace(/\s*Show more\s*$/iu, "");
   return t.trim();
 }
@@ -139,6 +138,33 @@ function looksLikeAuthorLine(s: string): boolean {
   if (isYearVenueLine(t)) return false;
   if (isYearAuthorLine(t)) return false;
   return t.includes(",") || /\s+and\s+/i.test(t);
+}
+
+export const MAX_METADATA_AUTHORS = 24;
+
+/** カンマ等で区切られた著者名を分割（貼り付け用。Show Less や +N More 等の UI 省略表記は取り除く） */
+export function splitAuthorNamesForPicklist(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[,，、]/)) {
+    let t = part
+      .replace(/(?:[\s\-–—·•]+)?Show\s*less\s*$/iu, "")
+      .replace(/(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More\s*$/iu, "")
+      .replace(/[\s,;]+$/g, "")
+      .trim();
+    if (!t || t.length > 200) continue;
+    if (
+      /^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/iu.test(t) ||
+      /^(?:[\s\-–—·•]+)?Show\s*less$/iu.test(t)
+    ) {
+      continue;
+    }
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= MAX_METADATA_AUTHORS) break;
+  }
+  return out;
 }
 
 /**
@@ -328,6 +354,12 @@ export function parsePaperMetadataPaste(raw: string): ParsedPaperMetadataPaste {
       const line = lines[i];
       if (looksLikeAuthorLine(line)) {
         authors = stripUiNoise(line);
+        const tm = authors.match(TRUNCATED_MORE);
+        if (tm) {
+          authorsTruncated = true;
+          truncatedAuthorsCount = Number(tm[1]);
+          authors = stripUiNoise(authors.slice(0, tm.index).trim().replace(/[\s,;]+$/g, ""));
+        }
         used.add(i);
         break;
       }

@@ -132,7 +132,7 @@ flowchart TD
 | `title` | タイトル |
 | `doi` | DOI 欄 |
 | `tldr` | 説明 |
-| `filesPaste` | SciSpace Files から取った原文（判定・再取得用）。Edu Share のメタ欄にはタイトル・年著者行・掲載を原文のまま入れる（`Show Less` も残す）。TL;DR 本文は説明欄へ |
+| `filesPaste` | SciSpace Files から取った原文（判定・再取得用）。Edu Share のメタ欄にはタイトル・年著者行・掲載を入れる（展開後の `Show Less` は取り除く。展開できず `+N More` が残る場合は省略警告用として残すが著者名としては登録しない）。TL;DR 本文は説明欄へ |
 | `venue` | 業界推定の材料 |
 | `scispaceUrl` | 論文ページの SciSpace URL |
 

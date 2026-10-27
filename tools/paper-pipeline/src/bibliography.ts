@@ -9,8 +9,13 @@ export function isBibliographyLabel(value: string): boolean {
 
 export function authorsLookInvalid(value: string): boolean {
   const text = value.trim();
-  return !text || /^DOI\s*[:：]?\s*10\./i.test(text) ||
-    text.split(/[,;·⋅•\n]/).some(part => isBibliographyLabel(part));
+  return (
+    !text ||
+    /^DOI\s*[:：]?\s*10\./i.test(text) ||
+    /^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/i.test(text) ||
+    /^(?:[\s\-–—·•]+)?Show\s*Less$/i.test(text) ||
+    text.split(/[,;·⋅•\n]/).some((part) => isBibliographyLabel(part))
+  );
 }
 
 function titleKey(value: string): string {
