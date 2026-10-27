@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Page } from "playwright";
 import { notebookLmCsvStatusLine } from "../edushare-form.ts";
 import { emptyState } from "../state.ts";
-import { importNotebookLmCsv, notebookLmCsvCardText, verifyEduSharePaper } from "./edushare.ts";
+import { importNotebookLmCsv, notebookLmCsvCardText, usableEduShareTitle, verifyEduSharePaper } from "./edushare.ts";
 
 // 見出し → 説明 p → 状態 p → input。両欄の親には rounded クラスがある想定。
 function titleNode(status: string): Element {
@@ -72,4 +72,116 @@ test("両欄取り込み済みならCSVタブで欄が隠れ開始リンクが�
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("issue #131: usableEduShareTitle: PDF名・ページ範囲・掲載誌/会議名・編集者欄・途中切れ・応答文の実例で filesPaste の完全題名を優先する", () => {
+  // 1. PDF名（Second-law-of-information-dynamics → 075310_1_5.0100358.pdf）
+  const statePdf = emptyState({ filename: "Second-law-of-information-dynamics.pdf", inboxPdfPath: "", paperDir: "" });
+  statePdf.title = "075310_1_5.0100358.pdf";
+  statePdf.filesPaste = [
+    "Second-law-of-information-dynamics.pdf",
+    "The Second Law of Information Dynamics and Its Implications for Computing",
+    "2023 · Melvin M. Vopson",
+    "AIP Advances",
+  ].join("\n");
+  assert.equal(
+    usableEduShareTitle(statePdf),
+    "The Second Law of Information Dynamics and Its Implications for Computing",
+  );
+
+  // 2. ページ範囲（2024.findings-acl.660 → , pages 11095–11111）
+  const statePageRange = emptyState({ filename: "2024.findings-acl.660.pdf", inboxPdfPath: "", paperDir: "" });
+  statePageRange.title = ", pages 11095–11111";
+  statePageRange.filesPaste = [
+    "2024.findings-acl.660.pdf",
+    "Context-Aware Multi-Turn Dialogue Generation with Large Language Models",
+    "2024 · Author Name",
+    "Findings of ACL",
+  ].join("\n");
+  assert.equal(
+    usableEduShareTitle(statePageRange),
+    "Context-Aware Multi-Turn Dialogue Generation with Large Language Models",
+  );
+
+  // 3a. 掲載誌・会議名（56_244）
+  const stateConf1 = emptyState({ filename: "56_244.pdf", inboxPdfPath: "", paperDir: "" });
+  stateConf1.title = "56_244";
+  stateConf1.filesPaste = [
+    "56_244.pdf",
+    "Performance Evaluation of Distributed Consensus Protocols",
+    "2020 · Author Name",
+    "Journal of Systems Architecture",
+  ].join("\n");
+  assert.equal(
+    usableEduShareTitle(stateConf1),
+    "Performance Evaluation of Distributed Consensus Protocols",
+  );
+
+  // 3b. 掲載誌・会議名（sec18-zhang_0）
+  const stateConf2 = emptyState({ filename: "sec18-zhang_0.pdf", inboxPdfPath: "", paperDir: "" });
+  stateConf2.title = "sec18-zhang_0";
+  stateConf2.filesPaste = [
+    "sec18-zhang_0.pdf",
+    "Towards Automated Security Analysis of Smart Contracts",
+    "2018 · Alice Zhang, Bob Lee",
+    "USENIX Security Symposium",
+  ].join("\n");
+  assert.equal(
+    usableEduShareTitle(stateConf2),
+    "Towards Automated Security Analysis of Smart Contracts",
+  );
+
+  // 4. 編集者欄（Academic Editors: …）
+  const stateEditor = emptyState({ filename: "paper.pdf", inboxPdfPath: "", paperDir: "" });
+  stateEditor.title = "Academic Editors: …";
+  stateEditor.filesPaste = [
+    "paper.pdf",
+    "Single-Cell RNA Sequencing Analysis of Tumor Microenvironments",
+    "2022 · Author Name",
+    "Cancers",
+  ].join("\n");
+  assert.equal(
+    usableEduShareTitle(stateEditor),
+    "Single-Cell RNA Sequencing Analysis of Tumor Microenvironments",
+  );
+
+  // 5. 途中切れ（s41586-024-07566-y → AI models collapse when trained on）
+  const stateTruncated = emptyState({ filename: "s41586-024-07566-y.pdf", inboxPdfPath: "", paperDir: "" });
+  stateTruncated.title = "AI models collapse when trained on";
+  stateTruncated.filesPaste = [
+    "s41586-024-07566-y.pdf",
+    "AI models collapse when trained on recursively generated data",
+    "2024 · Ilia Shumailov, Zakhar Shumaylov, Yiren Zhao",
+    "Nature",
+  ].join("\n");
+  assert.equal(
+    usableEduShareTitle(stateTruncated),
+    "AI models collapse when trained on recursively generated data",
+  );
+
+  // 6. 応答文（nttjnl5103_20231101 → Not addressed in the paper.）
+  const stateResponse = emptyState({ filename: "nttjnl5103_20231101.pdf", inboxPdfPath: "", paperDir: "" });
+  stateResponse.title = "Not addressed in the paper.";
+  stateResponse.filesPaste = [
+    "nttjnl5103_20231101.pdf",
+    "Recent Advances in Quantum Key Distribution Technologies",
+    "2023 · Author Name",
+    "NTT Technical Review",
+  ].join("\n");
+  assert.equal(
+    usableEduShareTitle(stateResponse),
+    "Recent Advances in Quantum Key Distribution Technologies",
+  );
+
+  // 7. 不正な候補タイトルで filesPaste にも有効な題名が無い場合は空文字を返す
+  const stateInvalidNoPaste = emptyState({ filename: "bad.pdf", inboxPdfPath: "", paperDir: "" });
+  stateInvalidNoPaste.title = ", pages 11095–11111";
+  stateInvalidNoPaste.filesPaste = "";
+  assert.equal(usableEduShareTitle(stateInvalidNoPaste), "");
+
+  // 8. 正常な完全タイトルは維持される
+  const stateValid = emptyState({ filename: "resnet.pdf", inboxPdfPath: "", paperDir: "" });
+  stateValid.title = "Deep Residual Learning for Image Recognition";
+  stateValid.filesPaste = "";
+  assert.equal(usableEduShareTitle(stateValid), "Deep Residual Learning for Image Recognition");
 });

@@ -24,8 +24,12 @@ import {
   looksLikeUrlOrDomain,
   looksLikeSiteBoilerplate,
   isGenericJournalAlone,
+  isTitlePrefixOf,
   looksLikeAuthorOrPaperId,
+  looksLikeEditorField,
+  looksLikePageRange,
   reconcileMetaFromFilesPaste,
+  titleLooksLikeVenueOrConference,
   looksLikeCitationTitle,
   looksLikeSciSpaceNav,
   looksLikeUnansweredSciSpaceResponse,
@@ -1105,4 +1109,98 @@ test("outgoing partial metadata cannot become a wrong title or author in the rea
   assert.equal(absent.title, "Complete Verified Article Title");
   assert.equal(absent.authors, "");
   assert.equal(absent.venue, "");
+});
+
+test("issue #131: looksLikePageRange ページ範囲の判定", () => {
+  assert.equal(looksLikePageRange(", pages 11095–11111"), true);
+  assert.equal(looksLikePageRange("pages 11095–11111"), true);
+  assert.equal(looksLikePageRange(", pp. 11095-11111"), true);
+  assert.equal(looksLikePageRange("pp. 11095–11111"), true);
+  assert.equal(looksLikePageRange("p. 11095"), true);
+  assert.equal(looksLikePageRange("11095–11111"), true);
+  assert.equal(looksLikePageRange(", 11095-11111"), true);
+  // 通常のタイトル
+  assert.equal(looksLikePageRange("Pages from the History of Science"), false);
+  assert.equal(looksLikePageRange("A Comprehensive Survey of Neural Networks"), false);
+});
+
+test("issue #131: looksLikeEditorField 編集者欄の判定", () => {
+  assert.equal(looksLikeEditorField("Academic Editors: …"), true);
+  assert.equal(looksLikeEditorField("Academic Editors: John Doe, Jane Smith"), true);
+  assert.equal(looksLikeEditorField("Academic Editor: John Doe"), true);
+  assert.equal(looksLikeEditorField("Editors: Alice Bob"), true);
+  assert.equal(looksLikeEditorField("Edited by Charles Darwin"), true);
+  assert.equal(looksLikeEditorField("編集者: 山田太郎"), true);
+  assert.equal(looksLikeEditorField("編集委員: 佐藤次郎"), true);
+  // 通常のタイトル
+  assert.equal(looksLikeEditorField("Editorial Board Decisions in Modern Science"), false);
+  assert.equal(looksLikeEditorField("The Editor's Guide to Machine Learning"), false);
+});
+
+test("issue #131: isTitlePrefixOf 途中切れプレフィックスの判定", () => {
+  const full = "AI models collapse when trained on recursively generated data";
+  assert.equal(isTitlePrefixOf("AI models collapse when trained on", full), true);
+  assert.equal(isTitlePrefixOf("AI models collapse when trained on...", full), true);
+  assert.equal(isTitlePrefixOf("AI models collapse when trained on -", full), true);
+  assert.equal(isTitlePrefixOf("AI models collapse when trained on …", full), true);
+  // 完全一致は prefix ではない
+  assert.equal(isTitlePrefixOf(full, full), false);
+  // 別タイトル
+  assert.equal(isTitlePrefixOf("Attention Is All You Need", full), false);
+  // 候補の方が長い
+  assert.equal(isTitlePrefixOf(`${full} extra words`, full), false);
+});
+
+test("issue #131: titleLooksLikeVenueOrConference 会議名・識別子の判定", () => {
+  assert.equal(titleLooksLikeVenueOrConference("56_244"), true);
+  assert.equal(titleLooksLikeVenueOrConference("sec18-zhang_0"), true);
+  assert.equal(titleLooksLikeVenueOrConference("Agronomy", "Agronomy"), true);
+  assert.equal(titleLooksLikeVenueOrConference("Journal"), true);
+  assert.equal(titleLooksLikeVenueOrConference("Deep Residual Learning for Image Recognition"), false);
+});
+
+test("issue #131: titleLooksLikeBadSciSpaceCapture でページ範囲・編集者・識別コードを弾く", () => {
+  assert.equal(titleLooksLikeBadSciSpaceCapture(", pages 11095–11111"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Academic Editors: …"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Academic Editors: John Doe"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("56_244"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("sec18-zhang_0"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("075310_1_5.0100358.pdf"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("Not addressed in the paper."), true);
+});
+
+test("issue #131: reconcileMetaFromFilesPaste で途中切れや不正タイトルを完全な題名に戻す", () => {
+  // 途中切れ
+  const fullTitle = "AI models collapse when trained on recursively generated data";
+  const stateTruncated = {
+    title: "AI models collapse when trained on",
+    venue: "Nature",
+    doi: "10.1038/s41586-024-07566-y",
+    filesPaste: `s41586-024-07566-y.pdf\n${fullTitle}\n2024 · Ilia Shumailov\nNature`,
+    filename: "s41586-024-07566-y.pdf",
+  };
+  assert.equal(reconcileMetaFromFilesPaste(stateTruncated), true);
+  assert.equal(stateTruncated.title, fullTitle);
+
+  // ページ範囲
+  const statePageRange = {
+    title: ", pages 11095–11111",
+    venue: "Findings of ACL",
+    doi: "",
+    filesPaste: "2024.findings-acl.660.pdf\nContext-Aware Dialogue Generation\n2024 · Author\nFindings of ACL",
+    filename: "2024.findings-acl.660.pdf",
+  };
+  assert.equal(reconcileMetaFromFilesPaste(statePageRange), true);
+  assert.equal(statePageRange.title, "Context-Aware Dialogue Generation");
+
+  // 会議・論文識別コード
+  const stateConfCode = {
+    title: "sec18-zhang_0",
+    venue: "USENIX Security",
+    doi: "",
+    filesPaste: "sec18-zhang_0.pdf\nTowards Automated Security Analysis of Smart Contracts\n2018 · Alice Zhang\nUSENIX Security",
+    filename: "sec18-zhang_0.pdf",
+  };
+  assert.equal(reconcileMetaFromFilesPaste(stateConfCode), true);
+  assert.equal(stateConfCode.title, "Towards Automated Security Analysis of Smart Contracts");
 });
