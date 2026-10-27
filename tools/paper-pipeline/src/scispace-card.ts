@@ -364,6 +364,9 @@ function pickTitle(lines: string[], filename: string): string {
         !looksLikeVenueLine(s) &&
         !YEAR_AUTHOR.test(s) &&
         !isBibliographyLabel(s) &&
+        !looksLikePageRange(s) &&
+        !looksLikeEditorField(s) &&
+        !looksLikeAuthorOrPaperId(s) &&
         !/^arxiv:/i.test(s) &&
         !/^(this paper|the paper|本研究|本論文)\b/i.test(s),
     ) ?? ""
@@ -427,12 +430,58 @@ export function looksLikeAuthorOrPaperId(s: string): boolean {
   if (/^[a-z]{2,}\d{2}[a-z0-9]+$/i.test(t)) return true;
   // 論文/原稿番号・管理コード (例: 35_18C5-01, 18C5-01)
   if (/^\d{1,4}[_-][0-9A-Za-z]+(?:[-_][0-9A-Za-z]+)*$/.test(t)) return true;
-  // 会議・論文識別コード (例: sec18-zhang_0)
+  // 会議・論文識別コード (例: sec18-zhang_0, sec-18-zhang_0)
   if (/^[0-9A-Za-z]+[-_]\d{2,4}[-_][0-9A-Za-z_-]+$/i.test(t)) return true;
+  if (/^[a-z]+\d{2,4}[-_][0-9A-Za-z_-]+$/i.test(t)) return true;
   // 著者省略・著者リスト表記
   if (/\bet\s+al\.?\b/i.test(t)) return true;
   if (/(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i.test(t)) return true;
   if (isFilesAuthorMoreLabel(t)) return true;
+  return false;
+}
+
+/** ページ範囲（例: , pages 11095–11111, pages 10-25, pp. 100-110） */
+export function looksLikePageRange(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^,?\s*(?:pages?|pp\.|p\.)\s*\d+(?:\s*[-–—]\s*\d+)?\s*[.,]?\s*$/i.test(t)) return true;
+  if (/^,?\s*\d+\s*[-–—]\s*\d+\s*[.,]?\s*$/.test(t)) return true;
+  return false;
+}
+
+/** 編集者欄（例: Academic Editors: …, Guest Editor: ..., Edited by ...） */
+export function looksLikeEditorField(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^(?:academic\s+|guest\s+|section\s+)?editors?\s*[:：]/i.test(t)) return true;
+  if (/^edited\s+by\s*[:：]?/i.test(t)) return true;
+  if (/^(?:編集者|編集担当|編集委員)\s*[：:]/i.test(t)) return true;
+  return false;
+}
+
+/** candidate が fullTitle の先頭部分（途中切れ）かを判定する */
+export function isTitlePrefixOf(candidate: string, fullTitle: string): boolean {
+  const c = candidate.replace(/[\s.…-]+$/, "").trim().toLowerCase().replace(/\s+/g, " ");
+  const f = fullTitle.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!c || !f || c === f) return false;
+  return f.startsWith(c) && c.length < f.length;
+}
+
+/** 候補タイトルが掲載誌・会議名・識別コードに該当するか */
+export function titleLooksLikeVenueOrConference(
+  title: string,
+  cardVenue = "",
+  stateVenue = "",
+): boolean {
+  const t = title.trim();
+  if (!t) return false;
+  if (looksLikeAuthorOrPaperId(t)) return true;
+  if (looksLikeVenueLine(t)) return true;
+  if (isGenericJournalAlone(t)) return true;
+  if (looksLikeSiteBoilerplate(t)) return true;
+  const lower = t.toLowerCase();
+  if (cardVenue && lower === cardVenue.trim().toLowerCase()) return true;
+  if (stateVenue && lower === stateVenue.trim().toLowerCase()) return true;
   return false;
 }
 
@@ -463,6 +512,9 @@ export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
   if (/[-–—]\s*$/.test(t) && t.length < 120) return true;
   if (looksLikeCitationTitle(t)) return true;
   if (looksLikeVenueLine(t) && t.length < 90) return true;
+  if (looksLikePageRange(t)) return true;
+  if (looksLikeEditorField(t)) return true;
+  if (looksLikeAuthorOrPaperId(t)) return true;
   return false;
 }
 
@@ -516,15 +568,27 @@ export function reconcileMetaFromFilesPaste(
 ): boolean {
   const card = extractSciSpaceCardMeta(state.filesPaste, state.filename);
   let changed = false;
+  const filesTitle = card.title.trim();
+  const filesTitleUsable =
+    Boolean(filesTitle) &&
+    !isDummySciSpacePaste(filesTitle) &&
+    !titleLooksLikeFilename(filesTitle, state.filename) &&
+    !looksLikeUnansweredSciSpaceResponse(filesTitle) &&
+    !titleLooksLikeBadSciSpaceCapture(filesTitle);
+
   if (
     !state.sciTitleRejected &&
-    card.title &&
-    !titleLooksLikeFilename(card.title, state.filename) &&
-    !looksLikeUnansweredSciSpaceResponse(card.title) &&
-    (titleLooksLikeBadSciSpaceCapture(state.title) || looksLikeUnansweredSciSpaceResponse(state.title) || !state.title.trim())
+    filesTitleUsable &&
+    (titleLooksLikeBadSciSpaceCapture(state.title) ||
+      looksLikeUnansweredSciSpaceResponse(state.title) ||
+      !state.title.trim() ||
+      titleLooksLikeVenueOrConference(state.title, card.venue, state.venue) ||
+      isTitlePrefixOf(state.title, filesTitle))
   ) {
-    state.title = card.title;
-    changed = true;
+    if (state.title !== filesTitle) {
+      state.title = filesTitle;
+      changed = true;
+    }
   }
   if (card.venue && (venueLooksLikeBadSciSpaceCapture(state.venue, card.authors) || !state.venue.trim())) {
     state.venue = card.venue;

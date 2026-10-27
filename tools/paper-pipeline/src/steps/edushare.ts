@@ -9,11 +9,16 @@ import {
   eduShareSciSpaceMetadataPaste,
   extractSciSpaceCardMeta,
   isDummySciSpacePaste,
+  isTitlePrefixOf,
+  looksLikeEditorField,
+  looksLikePageRange,
   looksLikePdfApiSummary,
+  looksLikeUnansweredSciSpaceResponse,
   reconcileMetaFromFilesPaste,
   sciSpaceDescriptionUsable,
   titleLooksLikeBadSciSpaceCapture,
   titleLooksLikeFilename,
+  titleLooksLikeVenueOrConference,
   venueLooksLikeBadSciSpaceCapture,
 } from "../scispace-card.ts";
 import {
@@ -50,12 +55,25 @@ function shouldSkipSciSpacePaste(paste: string, filename: string): boolean {
 
 export function usableEduShareTitle(state: PaperState): string {
   if (state.sciTitleRejected) return "";
+  const card = extractSciSpaceCardMeta(state.filesPaste, state.filename);
+  const filesTitle = card.title.trim();
+  const filesTitleUsable =
+    Boolean(filesTitle) &&
+    !isDummySciSpacePaste(filesTitle) &&
+    !titleLooksLikeFilename(filesTitle, state.filename) &&
+    !titleLooksLikeBadSciSpaceCapture(filesTitle);
+
   let t = state.title.trim();
-  if (
-    !state.sciTitleRejected &&
-    (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t))
-  ) {
-    t = extractSciSpaceCardMeta(state.filesPaste, state.filename).title.trim();
+  const candidateNeedsFallback =
+    !t ||
+    isDummySciSpacePaste(t) ||
+    titleLooksLikeFilename(t, state.filename) ||
+    titleLooksLikeBadSciSpaceCapture(t) ||
+    titleLooksLikeVenueOrConference(t, card.venue, state.venue) ||
+    (filesTitleUsable && isTitlePrefixOf(t, filesTitle));
+
+  if (candidateNeedsFallback) {
+    t = filesTitleUsable ? filesTitle : "";
   }
   if (!t || isDummySciSpacePaste(t) || titleLooksLikeFilename(t, state.filename) || titleLooksLikeBadSciSpaceCapture(t)) {
     return "";
