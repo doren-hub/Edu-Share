@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import type { Locator, Page, Route } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
+import { setSourcePdf } from "../source-upload.ts";
 import { log, warn } from "../log.ts";
 import { isTargetClosedError } from "../browser.ts";
 import {
@@ -485,23 +486,6 @@ async function createNotebook(page: Page, homeUrl: string): Promise<string> {
   return settled;
 }
 
-async function setVisiblePdfInput(page: Page, pdfPath: string): Promise<boolean> {
-  const dialog = page.getByRole("dialog");
-  if (await dialog.first().isVisible({ timeout: 0 }).catch(() => false)) {
-    const inDlg = dialog.locator('input[type="file"]');
-    if ((await inDlg.count()) > 0) {
-      await inDlg.first().setInputFiles(pdfPath);
-      return true;
-    }
-  }
-  const inputs = page.locator('input[type="file"]');
-  if ((await inputs.count()) > 0) {
-    await inputs.first().setInputFiles(pdfPath);
-    return true;
-  }
-  return false;
-}
-
 async function confirmSourceInsert(page: Page): Promise<void> {
   const names = [/挿入/, /^Insert$/i, /ソースを挿入/, /追加する/, /^Add$/i, /アップロード$/, /^Upload$/i];
   for (const name of names) {
@@ -524,35 +508,8 @@ async function attachPdfAsSource(page: Page, pdfPath: string): Promise<void> {
     await page.waitForTimeout(800);
   }
 
-  if (await setVisiblePdfInput(page, pdfPath)) {
-    log("file input で PDF をセットしました");
-  } else {
-    const chooserPromise = page.waitForEvent("filechooser", { timeout: 15_000 }).catch(() => null);
-    await clickFirstByName(
-      page,
-      [
-        /パソコンから/,
-        /コンピュータ/,
-        /From computer/i,
-        /デバイス/,
-        /ファイルをアップロード/,
-        /Upload file/i,
-        /Choose file/i,
-        /ファイルを選択/,
-        /^PDF$/,
-      ],
-      { timeoutMs: 8_000 },
-    );
-    const chooser = await chooserPromise;
-    if (chooser) {
-      await chooser.setFiles(pdfPath);
-      log("file chooser で PDF をセットしました");
-    } else {
-      throw new Error(
-        "ソース追加の file chooser / input が見つかりませんでした（「+ ソースを追加」→ パソコンから）",
-      );
-    }
-  }
+  const method = await setSourcePdf(page, pdfPath);
+  log(`${method === "input" ? "file input" : "file chooser"} で PDF をセットしました`);
   await page.waitForTimeout(800);
   await confirmSourceInsert(page);
   await page.waitForTimeout(400);
