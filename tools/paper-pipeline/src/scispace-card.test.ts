@@ -918,15 +918,20 @@ test("issue #130: venueLooksLikeBadSciSpaceCapture は年だけ・URL/ドメイ�
   assert.equal(isGenericJournalAlone("Journal"), true);
   assert.equal(isGenericJournalAlone("journal"), true);
 
-  // 正常な掲載誌は false
+  // 正常な掲載誌や空白のない略誌名は false
   assert.equal(venueLooksLikeBadSciSpaceCapture("Nature"), false);
   assert.equal(venueLooksLikeBadSciSpaceCapture("Bone"), false);
   assert.equal(venueLooksLikeBadSciSpaceCapture("Lab on a Chip"), false);
   assert.equal(venueLooksLikeBadSciSpaceCapture("PHYSICS LETTERS B"), false);
-  assert.equal(venueLooksLikeBadSciSpaceCapture("Commun. math. Phys."), false);
   assert.equal(venueLooksLikeBadSciSpaceCapture("Journal of Example"), false);
   assert.equal(venueLooksLikeBadSciSpaceCapture("Proceedings of the National Academy of Sciences"), false);
   assert.equal(venueLooksLikeBadSciSpaceCapture("American Journal of Physics"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("eLife"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("npj Quantum Information"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Phys.Rev.Lett"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Nucl.Phys.B"), false);
+  assert.equal(looksLikeUrlOrDomain("Phys.Rev.Lett"), false);
+  assert.equal(looksLikeUrlOrDomain("Nucl.Phys.B"), false);
 });
 
 test("issue #130: 掲載誌抽出で年だけ・URL/ドメイン・著者名・サイト文言・Journal単体を採用せず空にする", () => {
@@ -1022,4 +1027,27 @@ test("issue #130: 掲載誌抽出で年だけ・URL/ドメイン・著者名・�
   const metaJournalLower = extractSciSpaceCardMeta(cardJournalLower, "paper-with-journal-lower.pdf");
   assert.equal(metaJournalLower.venue, "");
   assert.doesNotMatch(metaJournalLower.paste, /\njournal$/);
+
+  // 8. 小文字で始まる正規の掲載誌名 (eLife, npj Quantum Information) を維持する
+  const cardElife = [
+    "elife-test.pdf",
+    "Mechanisms of Cellular Signaling",
+    "2023 · Author Name",
+    "eLife",
+    "This paper presents structural insights into receptor phosphorylation dynamics.",
+  ].join("\n");
+  const metaElife = extractSciSpaceCardMeta(cardElife, "elife-test.pdf");
+  assert.equal(metaElife.venue, "eLife");
+  assert.match(metaElife.paste, /eLife$/);
+
+  const cardNpj = [
+    "npj-test.pdf",
+    "Fault-Tolerant Quantum Computation",
+    "2024 · Author Name",
+    "npj Quantum Information",
+    "This paper explores threshold theorems for topological quantum error correction.",
+  ].join("\n");
+  const metaNpj = extractSciSpaceCardMeta(cardNpj, "npj-test.pdf");
+  assert.equal(metaNpj.venue, "npj Quantum Information");
+  assert.match(metaNpj.paste, /npj Quantum Information$/);
 });
