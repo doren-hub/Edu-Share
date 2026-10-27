@@ -4,6 +4,7 @@ import {
   buildDescriptionFromParsedPaste,
   looksLikeMisparsedAuthors,
   parsePaperMetadataPaste,
+  splitAuthorNamesForPicklist,
 } from "./paper-metadata-paste.ts";
 
 test("既存フォーマット（Title: / DOI / 著者 / 年-掲載）は従来どおり解析できる", () => {
@@ -137,4 +138,23 @@ test("ワークショップ掲載の3行メタはタイトル・年・著者・�
   assert.equal(p.truncatedAuthorsCount, 2);
   assert.equal(p.venue, "ICLR 2026 CAO Workshop");
   assert.doesNotMatch(p.title, /switch-matrix/);
+});
+
+test("Issue #132: parsePaperMetadataPaste はドット無しの +N More も認識し著者から除外する", () => {
+  const raw = [
+    "Sample Paper Title",
+    "2026 · Alice Smith, Bob Jones +3 More",
+    "Journal of Testing",
+  ].join("\n");
+  const p = parsePaperMetadataPaste(raw);
+  assert.equal(p.authors, "Alice Smith, Bob Jones");
+  assert.equal(p.authorsTruncated, true);
+  assert.equal(p.truncatedAuthorsCount, 3);
+});
+
+test("Issue #132: splitAuthorNamesForPicklist は Show Less や +N More を著者名に残さない", () => {
+  const names = splitAuthorNamesForPicklist(
+    "Alice Smith, Bob JonesShow Less, Charlie Brown ...+2 More, +3 More, Show Less",
+  );
+  assert.deepEqual(names, ["Alice Smith", "Bob Jones", "Charlie Brown"]);
 });

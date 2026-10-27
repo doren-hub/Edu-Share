@@ -1048,25 +1048,40 @@ export async function captureSciSpaceCardMeta(
       if (filesPaste) warn("SciSpace Files がデモカード（Dewdney 等）なので捨てます");
       filesPaste = (await fillDummyCardFromKnownIds(filename, state.doi)) || "";
     }
-    if (filesRowHasTruncatedAuthors(filesPaste)) {
-      await expandFilesRowAuthors(page, filename, searchTitle);
-      const again = await collectFilesCardCandidates(page, filename, searchTitle);
-      for (const t of again.texts) {
-        const next = preferExpandedAuthorPaste(rawFilesCardPaste(t, filename));
-        if (next && !filesRowHasTruncatedAuthors(next)) {
-          filesPaste = next;
-          break;
-        }
-        if (next && next.length > filesPaste.length) filesPaste = next;
-      }
+    if (filesPaste && /Show\s*Less/i.test(filesPaste)) {
       filesPaste = preferExpandedAuthorPaste(filesPaste);
+    }
+    if (filesRowHasTruncatedAuthors(filesPaste)) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) {
+          log("SciSpace: 省略著者の展開を再試行します");
+          await page.waitForTimeout(1000);
+        }
+        await expandFilesRowAuthors(page, filename, searchTitle);
+        const again = await collectFilesCardCandidates(page, filename, searchTitle);
+        for (const t of again.texts) {
+          const next = preferExpandedAuthorPaste(rawFilesCardPaste(t, filename));
+          if (next && !filesRowHasTruncatedAuthors(next)) {
+            filesPaste = next;
+            break;
+          }
+          if (next && next.length > filesPaste.length) filesPaste = next;
+        }
+        filesPaste = preferExpandedAuthorPaste(filesPaste);
+        if (!filesRowHasTruncatedAuthors(filesPaste)) break;
+      }
     }
     if (filesRowHasTruncatedAuthors(filesPaste)) {
       const filled = await fillTruncatedAuthorsFromArxiv(filesPaste, filename);
       if (!filesRowHasTruncatedAuthors(filled)) {
         filesPaste = filled;
       } else {
-        warn("SciSpace: 著者の +N More を展開できなかったので、省略表記のまま貼ります");
+        const fromCrossref = await fillTruncatedAuthorsFromCrossref(filesPaste, filename, state.doi);
+        if (!filesRowHasTruncatedAuthors(fromCrossref)) {
+          filesPaste = fromCrossref;
+        } else {
+          warn("SciSpace: 著者の +N More を展開できなかったので、省略表記のまま Edu Share に渡し著者名としては保存しません");
+        }
       }
     }
     applyExtractedCard(state, filename, extractSciSpaceCardMeta(filesPaste, filename), found.dois, pdfText);
@@ -1186,6 +1201,24 @@ async function fillTruncatedAuthorsFromArxiv(paste: string, filename: string): P
   const line = `${year}${sep}${authors.join(", ")}`;
   log(`SciSpace: arXiv 著者 ${authors.length} 名を Files 行に入れます`);
   return replaceYearAuthorLine(paste, line);
+}
+
+async function fillTruncatedAuthorsFromCrossref(paste: string, filename: string, doi = ""): Promise<string> {
+  const key = doi.trim() || doiFromHrefOrText(paste);
+  if (!key) return paste;
+  try {
+    const work = await fetchCrossrefWork(key);
+    if (!work || work.authors.length < 2) return paste;
+    const ya = extractSciSpaceCardMeta(paste, filename);
+    const year = ya.publicationYear || work.year;
+    if (!year) return paste;
+    const sep = (ya.yearAuthorLine.match(/[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]/) ?? ["⋅"])[0]!;
+    const line = `${year}${sep}${work.authors.join(", ")}`;
+    log(`SciSpace: Crossref 著者 ${work.authors.length} 名を Files 行に入れます`);
+    return replaceYearAuthorLine(paste, line);
+  } catch {
+    return paste;
+  }
 }
 
 async function fillDummyCardFromArxiv(filename: string): Promise<string> {

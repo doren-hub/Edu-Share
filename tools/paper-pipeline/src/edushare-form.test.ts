@@ -4,6 +4,7 @@ import {
   FALLBACK_AUTHOR_NAME,
   authorFromFilesPaste,
   choosePaperAuthor,
+  cleanAuthorName,
   fallbackAuthorName,
   isAuthorRequiredError,
   isDummyAuthorValue,
@@ -190,4 +191,42 @@ test("fallbackAuthorName: 貼り付けが無ければ著者未設定", () => {
 test("isAuthorRequiredError", () => {
   assert.equal(isAuthorRequiredError("論文では著者を1人以上選択してください"), true);
   assert.equal(isAuthorRequiredError("タイトルを入力してください"), false);
+});
+
+test("Issue #132: cleanAuthorName は Show Less と +N More を取り除き単体表記は空にする", () => {
+  assert.equal(cleanAuthorName("Trung BuiShow Less"), "Trung Bui");
+  assert.equal(cleanAuthorName("Trung Bui Show Less"), "Trung Bui");
+  assert.equal(cleanAuthorName("Raad Khraishi ...+2 More"), "Raad Khraishi");
+  assert.equal(cleanAuthorName("Raad Khraishi +2 More"), "Raad Khraishi");
+  assert.equal(cleanAuthorName("+2 More"), "");
+  assert.equal(cleanAuthorName("...+4 More"), "");
+  assert.equal(cleanAuthorName("Show Less"), "");
+});
+
+test("Issue #132: authorFromFilesPaste と choosePaperAuthor は +N More を著者名にしない", () => {
+  const pasteOnlyMore = "2505.06120v1.pdf\nTitle\n2025 · ...+5 More\narXiv";
+  assert.equal(authorFromFilesPaste(pasteOnlyMore), "");
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "",
+      optionValues: ["", "Karl Popper", "その他"],
+      filesPaste: pasteOnlyMore,
+      title: "Title",
+      filename: "2505.06120v1.pdf",
+    }),
+    { action: "other", value: FALLBACK_AUTHOR_NAME },
+  );
+
+  const pasteShowLess = "paper.pdf\nTitle\n2025 · Vardhan DongreShow Less\narXiv";
+  assert.equal(authorFromFilesPaste(pasteShowLess), "Vardhan Dongre");
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "",
+      optionValues: ["", "その他"],
+      filesPaste: pasteShowLess,
+      title: "Title",
+      filename: "paper.pdf",
+    }),
+    { action: "other", value: "Vardhan Dongre" },
+  );
 });

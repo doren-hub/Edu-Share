@@ -1,23 +1,7 @@
-import { MAX_AUTHORS } from "@/lib/paper-authors";
 import { buildStoredOtherValue } from "@/lib/picklist-parse";
+import { splitAuthorNamesForPicklist } from "./paper-metadata-paste.ts";
 
-/** カンマ等で区切られた著者名を分割（貼り付け用） */
-export function splitAuthorNamesForPicklist(raw: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const part of raw.split(/[,，、]/)) {
-    const t = part
-      .replace(/\s*-\s*Show less\s*$/i, "")
-      .replace(/\s*Show less\s*$/i, "")
-      .trim();
-    if (!t || t.length > 200) continue;
-    if (seen.has(t)) continue;
-    seen.add(t);
-    out.push(t);
-    if (out.length >= MAX_AUTHORS) break;
-  }
-  return out;
-}
+export { splitAuthorNamesForPicklist };
 
 export type EnsureExpertPicklistResult = {
   /** フォームにセットする保存値（候補追加に成功したら素の名前、失敗時はその他（…）） */
