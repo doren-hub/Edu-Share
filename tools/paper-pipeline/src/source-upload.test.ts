@@ -98,7 +98,7 @@ test("NotebookLM source upload deadlines and resume (offline)", async t => {
       try {
         await page.route(notebookUrl, route => {
           navigations++;
-          return route.fulfill({ contentType: "text/html", body: `<button>ソースを追加</button>
+          return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<button>ソースを追加</button>
             <div id="sources">0 件のソース</div><h2>Studio</h2><button>スライド資料 chevron_forward</button>
             <div role="dialog" id="upload">ソースを追加 ファイルをアップロード
             <input type="file" id="pdf" onchange="document.getElementById('sources').textContent='1 件のソース input.pdf';document.getElementById('upload').remove()"></div>` });
@@ -107,7 +107,7 @@ test("NotebookLM source upload deadlines and resume (offline)", async t => {
         state.notebooklmUrl = notebookUrl;
         state.completed = ["nlm-create", "nlm-slides", "nlm-video", "nlm-quiz", "nlm-flashcards"];
         saveState(state);
-        const run = () => runNotebookLm(page, { homeUrl: "https://notebooklm.google.com/", pdfPath: pdf, paperDir: dir, state });
+        const run = () => runNotebookLm(page, { homeUrl: "https://notebooklm.google.com/", pdfPath: pdf, paperDir: dir, state, studioSkip: ["nlm-slides", "nlm-video", "nlm-quiz", "nlm-flashcards"] });
         await run();
         assert.equal(state.notebooklmUrl, notebookUrl);
         assert.ok(loadState(dir, state).completed.includes("nlm-upload"));
