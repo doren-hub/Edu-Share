@@ -4,9 +4,18 @@ import type { Locator, Page, Route } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
 import { isTargetClosedError } from "../browser.ts";
-import { hasReadyStudioArtifact, hasStudioArtifact, openStudioArtifact, studioArtifactCards, type StudioArtifactKind } from "../studio-artifact-cards.ts";
+import {
+  hasBusyStudioArtifact,
+  hasInProgressStudioArtifact,
+  hasReadyStudioArtifact,
+  hasStudioArtifact,
+  openStudioArtifact,
+  studioArtifactCards,
+  type StudioArtifactKind,
+} from "../studio-artifact-cards.ts";
 import {
   firstPendingStudioStage,
+  firstUnstartedStudioStage,
   hasStudioStarted,
   isCompleted,
   markCompleted,
@@ -30,7 +39,11 @@ import {
   STUDIO_RELATIVE_TIME,
   formatVideoScan,
   isChatCustomizeLabel,
+  isSlideGenerationInProgress,
+  isSlideReadyNotificationText,
+  isStudioArtifactViewerText,
   isStudioGenerateLabel,
+  isVideoGenerationInProgress,
   scanStudioVideoOutputs,
   studioText,
   shouldKickoffSlides,
@@ -197,6 +210,7 @@ function textHasReadySources(t: string): boolean {
 
 async function expandNotebookPanels(page: Page): Promise<void> {
   await dismissSourceDeleteMenu(page);
+  await dismissStudioViewer(page);
   const t = await notebookBody(page);
   if (textHasReadySources(t) && !textHasZeroSources(t)) {
     if (!(await isVisibleNow(page.getByText("スライド資料", { exact: false })))) {
@@ -612,27 +626,75 @@ async function uploadPdfToNotebook(page: Page, pdfPath: string): Promise<void> {
   throw new Error(`NotebookLM のソース取り込みがタイムアウトしました（${lastHint}）`);
 }
 
-async function studioArtifactViewerOpen(page: Page): Promise<boolean> {
-  const t = await notebookBody(page);
-  if (/をカスタマイズ|後で生成|Generate later/i.test(t)) return false;
-  if (/個のソースを表示/.test(t) && /チャットパネル|collapse_content|expand_content/.test(t)) {
-    return true;
+export async function studioArtifactViewerOpen(page: Page): Promise<boolean> {
+  if (await studioCustomizeVisible(page)) return false;
+  const listCards = page.locator("artifact-library-item, .artifact-item-button, [data-artifact-id]");
+  const cardCount = Math.min(await listCards.count().catch(() => 0), 8);
+  for (let i = 0; i < cardCount; i++) {
+    if (await isVisibleNow(listCards.nth(i))) return false;
   }
-  return false;
+  const appRoots = page.locator("app-root[data-app-data], [data-app-data]");
+  const appCount = Math.min(await appRoots.count().catch(() => 0), 4);
+  for (let i = 0; i < appCount; i++) {
+    if (await isVisibleNow(appRoots.nth(i))) return true;
+  }
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    const fRoots = frame.locator("app-root[data-app-data], [data-app-data]");
+    if (await isVisibleNow(fRoots)) return true;
+  }
+  const t = await notebookBody(page);
+  return isStudioArtifactViewerText(t);
 }
 
-/** スライド/動画の全画面ビューアが Studio タイルを隠すので閉じる */
-async function dismissStudioViewer(page: Page): Promise<void> {
-  for (let i = 0; i < 4; i++) {
+/** スライド/動画/クイズ/単語帳のビューアが Studio 一覧・作成タイルを隠すので閉じる */
+export async function dismissStudioViewer(page: Page): Promise<void> {
+  for (let i = 0; i < 5; i++) {
     if (!(await studioArtifactViewerOpen(page))) return;
     log("Studio の成果物ビューアを閉じます");
     const hit = await clickFirstByName(
       page,
-      [/^閉じる$/, /^Close$/i, /collapse_content/, /arrow_back/, /戻る/],
-      { timeoutMs: 2_000 },
+      [
+        /^閉じる$/,
+        /^Close$/i,
+        /collapse_content/,
+        /close_fullscreen/,
+        /arrow_back/,
+        /戻る/,
+        /^(?:アプリ|App)(?:\s*chevron_right)?$/i,
+      ],
+      { timeoutMs: 1_500 },
     );
-    if (!hit) await page.keyboard.press("Escape").catch(() => undefined);
-    await page.waitForTimeout(600);
+    if (!hit || (await studioArtifactViewerOpen(page))) {
+      const studioCrumb = await page
+        .evaluate(`(() => {
+          const nodes = Array.from(document.querySelectorAll("button, [role='button'], a"));
+          for (const el of nodes) {
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8 || r.bottom < 0 || r.top > window.innerHeight) continue;
+            const t = ((el.innerText || "") + " " + (el.getAttribute("aria-label") || "")).replace(/\\s+/g, " ").trim();
+            if (/^(?:Studio|スタジオ)(?:\\s*chevron_right)?$/i.test(t)) {
+              el.click();
+              return true;
+            }
+          }
+          return false;
+        })()`)
+        .catch(() => false);
+      if (!studioCrumb || (await studioArtifactViewerOpen(page))) {
+        await page.keyboard.press("Escape").catch(() => undefined);
+      }
+    }
+    await page.waitForTimeout(400);
+  }
+}
+
+export async function returnToStudioList(page: Page): Promise<void> {
+  await dismissStudioViewer(page);
+  await dismissPointerBlockers(page);
+  await expandNotebookPanels(page);
+  if (!(await studioArtifactViewerOpen(page))) {
+    await revealStudioOutputs(page);
   }
 }
 
@@ -691,9 +753,10 @@ async function waitUntilStudioOutputsReady(page: Page, timeoutMs = 45_000): Prom
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (page.isClosed()) return false;
+    await dismissStudioViewer(page);
     await revealStudioOutputs(page);
     const t = await notebookBody(page).catch(() => "");
-    if (!studioOutputScanIncomplete(t)) return true;
+    if (!(await studioArtifactViewerOpen(page)) && !studioOutputScanIncomplete(t)) return true;
     await page.waitForTimeout(500).catch(() => undefined);
   }
   warn("Studio 出力カードがまだ出ていません");
@@ -709,10 +772,16 @@ async function logStudioCardSummaries(page: Page): Promise<void> {
 }
 
 async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
+  await dismissStudioViewer(page);
   await expandNotebookPanels(page);
   await dismissStudioCustomize(page);
+  if (await studioArtifactViewerOpen(page)) {
+    warn("Studio 成果物ビューアが開いたままのため、スライド出力判定を保留します");
+    return false;
+  }
   await revealStudioOutputs(page);
-  await page.waitForTimeout(1200);
+  if (await hasReadyStudioArtifact(page, "slides")) return true;
+  await page.waitForTimeout(400);
   const body = await notebookBody(page);
   const studioAt = body.search(/Studio/);
   const snippet = body.replace(/\s+/g, " ").slice(Math.max(0, studioAt), Math.max(0, studioAt) + 500);
@@ -722,6 +791,14 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
     return true;
   }
   if (await hasReadyStudioArtifact(page, "slides")) return true;
+  if (
+    isSlideReadyNotificationText(body) &&
+    (await hasStudioArtifact(page, "slides")) &&
+    !(await hasBusyStudioArtifact(page, "slides"))
+  ) {
+    log("スライド完了通知と Studio スライドカードを確認しました");
+    return true;
+  }
   const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = await stamps.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
@@ -733,8 +810,7 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
 }
 
 async function openStudioCardMatching(page: Page, kind: StudioArtifactKind): Promise<boolean> {
-  await expandNotebookPanels(page);
-  await dismissPointerBlockers(page);
+  await returnToStudioList(page);
   const opened = await openStudioArtifact(page, kind);
   if (opened) await page.waitForTimeout(1500);
   return opened;
@@ -806,11 +882,13 @@ function generationStartIsRecent(state: PaperState): boolean {
 }
 
 async function studioHasCardMatching(page: Page, kind: StudioArtifactKind): Promise<boolean> {
+  await dismissStudioViewer(page);
   await expandNotebookPanels(page);
   return hasStudioArtifact(page, kind);
 }
 
 async function studioHasReadyCardMatching(page: Page, kind: StudioArtifactKind): Promise<boolean> {
+  await dismissStudioViewer(page);
   await expandNotebookPanels(page);
   return hasReadyStudioArtifact(page, kind);
 }
@@ -1036,9 +1114,9 @@ async function generateStudioItem(
   page: Page,
   labels: (string | RegExp)[],
   timeoutMs: number,
-  opts: { explainerVideo?: boolean; stage?: StageId; kickoff?: boolean } = {},
+  opts: { explainerVideo?: boolean; stage?: StageId; kickoff?: boolean; kickoffConfirmMs?: number } = {},
 ): Promise<"complete" | "started"> {
-  await dismissStudioViewer(page);
+  await returnToStudioList(page);
   await dismissStudioCustomize(page);
   await dismissNotebookLmPopups(page);
   await openSourcesPanel(page);
@@ -1128,7 +1206,7 @@ async function generateStudioItem(
   }
 
   if (opts.kickoff) {
-    const confirmUntil = Date.now() + 8_000;
+    const confirmUntil = Date.now() + (opts.kickoffConfirmMs ?? 8_000);
     while (Date.now() < confirmUntil) {
       await clickFailedStudioRetry(page);
       const t = await notebookBody(page);
@@ -1246,7 +1324,9 @@ async function studioHasVideoOutput(page: Page): Promise<boolean> {
 }
 
 async function studioCardTexts(page: Page): Promise<string[]> {
+  await dismissStudioViewer(page);
   await expandNotebookPanels(page);
+  if (await studioArtifactViewerOpen(page)) return [];
   const rows: string[] = [];
   const add = (text: string) => {
     const t = text.replace(/\s+/g, " ").trim();
@@ -1269,7 +1349,8 @@ async function studioCardTexts(page: Page): Promise<string[]> {
     add(await card.innerText({ timeout: 2_000 }).catch(() => ""));
     add(await durations.nth(i).innerText({ timeout: 1_000 }).catch(() => ""));
   }
-  add(await notebookBody(page));
+  const body = await notebookBody(page);
+  if (!isStudioArtifactViewerText(body)) add(body);
   return rows;
 }
 
@@ -1414,6 +1495,14 @@ async function fetchSlidePdfViaRpc(page: Page, destPath: string): Promise<boolea
 }
 
 async function fetchUrlToPdf(page: Page, src: string, destPath: string): Promise<boolean> {
+  if (/^data:application\/pdf;base64,/i.test(src)) {
+    const b64 = src.replace(/^data:application\/pdf;base64,/i, "").trim();
+    const buf = Buffer.from(b64, "base64");
+    if (buf.length <= 10_000 || buf.subarray(0, 5).toString("utf8") !== "%PDF-") return false;
+    writeFileSync(destPath, buf);
+    log(`保存: ${destPath}（${buf.length} bytes）`);
+    return true;
+  }
   if (!/^https?:/i.test(src)) return false;
   try {
     const res = await page.request.get(src, {
@@ -1485,10 +1574,21 @@ async function collectSlidePdfUrls(page: Page): Promise<string[]> {
 }
 
 async function openSlideDeck(page: Page): Promise<void> {
-  await expandNotebookPanels(page);
+  await returnToStudioList(page);
   await dismissStudioCustomize(page);
   await logStudioCardSummaries(page);
   if (await openStudioCardMatching(page, "slides")) return;
+  const body = await notebookBody(page);
+  if (isSlideReadyNotificationText(body)) {
+    const cards = (await studioArtifactCards(page)).filter((c) => c.kind === "slides" && !c.busy);
+    if (cards[0]) {
+      const clicked = await cards[0].target.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+      if (clicked) {
+        await page.waitForTimeout(1500);
+        return;
+      }
+    }
+  }
   const stamps = page.getByText(STUDIO_RELATIVE_TIME);
   const n = await stamps.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
@@ -1537,7 +1637,7 @@ async function downloadStudioSlidePdf(page: Page, destPath: string): Promise<voi
       const embeds = await collectSlidePdfUrls(page);
       log(`スライド埋め込み ${embeds.length} 件`);
       for (const src of embeds) {
-        if (!/pdf|googleusercontent|presentation|slides|drive\.google/i.test(src)) continue;
+        if (!/pdf|googleusercontent|presentation|slides|drive\.google|^data:application\/pdf/i.test(src)) continue;
         if (await fetchUrlToPdf(page, src, destPath) && (await acceptIfRealSlidePdf(destPath))) {
           return;
         }
@@ -2199,18 +2299,31 @@ async function unmarkStaleStudioStarts(
   state: PaperState,
   skipKickoff = false,
 ): Promise<void> {
+  await dismissStudioViewer(page);
+  if (await studioArtifactViewerOpen(page)) {
+    log("Studio 成果物ビューアが開いたままのため、開始記録のリセットは保留します");
+    return;
+  }
   const body = await notebookBody(page);
   if (generationStartIsRecent(state)) {
     log("生成開始から間もないので、出力カードがまだ無くてもやり直ししません");
     return;
   }
-  if (textLooksLikeGenerating(body)) {
+  const busySlides = await hasInProgressStudioArtifact(page, "slides");
+  const busyVideo = await hasInProgressStudioArtifact(page, "video");
+  const anyGenerating =
+    textLooksLikeGenerating(body) ||
+    busySlides ||
+    busyVideo ||
+    isSlideGenerationInProgress(body) ||
+    isVideoGenerationInProgress(body);
+  if (anyGenerating) {
     log("Studio に生成中表示がありますが開始から時間が経っているので、出力の有無で判断します");
   }
-  if (studioOutputScanIncomplete(body)) {
+  if (studioOutputScanIncomplete(body) && !busySlides && !busyVideo) {
     const decision = decideIncompleteStudioScan({
       generationStartedAt: state.generationStartedAt,
-      generating: textLooksLikeGenerating(body),
+      generating: anyGenerating,
     });
     const action = skipKickoff && decision === "unmark" ? "cooldown" : decision;
     if (action === "keep") {
@@ -2229,17 +2342,13 @@ async function unmarkStaleStudioStarts(
     log("Studio 出力カードが長時間無いので開始記録を捨ててやり直します");
   }
   if (hasStudioStarted(state, "nlm-slides") && !isCompleted(state, "nlm-slides")) {
-    const stamps = page.getByText(STUDIO_RELATIVE_TIME);
-    const n = Math.min(await stamps.count().catch(() => 0), 16);
-    let hasSlideCard = false;
-    for (let i = 0; i < n; i++) {
-      const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
-      const text = await card.innerText({ timeout: 2_000 }).catch(() => "");
-      if (isSlideDeckCardText(text)) {
-        hasSlideCard = true;
-        break;
-      }
-    }
+    const slideCards = await studioCardTexts(page);
+    const hasSlideCard =
+      busySlides ||
+      (await studioHasCardMatching(page, "slides")) ||
+      !shouldKickoffSlides(slideCards) ||
+      isSlideReadyNotificationText(body) ||
+      textLooksLikeGenerating(body);
     if (!hasSlideCard) {
       log("nlm-slides は開始記録があるが出力も生成中もないので、やり直しします");
       unmarkStudioStarted(state, "nlm-slides");
@@ -2249,7 +2358,12 @@ async function unmarkStaleStudioStarts(
   }
   if (hasStudioStarted(state, "nlm-video") && !isCompleted(state, "nlm-video")) {
     const scan = await scanPageVideoOutputs(page);
-    if (scan.explainerCount + scan.shortCount === 0) {
+    const hasVideoProgress =
+      scan.explainerCount + scan.shortCount > 0 ||
+      busyVideo ||
+      isVideoGenerationInProgress(body) ||
+      textLooksLikeGenerating(body);
+    if (!hasVideoProgress) {
       log("nlm-video は開始記録があるが出力も生成中もないので、やり直しします");
       unmarkStudioStarted(state, "nlm-video");
       state.kickoffRetryAt = "";
@@ -2265,7 +2379,7 @@ async function tryKickoffStudio(
   stage: StageId,
   labels: (string | RegExp)[],
   timeoutMs: number,
-  extra: { explainerVideo?: boolean } = {},
+  extra: { explainerVideo?: boolean; kickoffConfirmMs?: number } = {},
 ): Promise<"complete" | "started" | "skipped"> {
   if (hasStudioStarted(state, stage)) {
     log(`${stage} はすでに開始済み。待ち中に他の Studio を進めます`);
@@ -2279,13 +2393,19 @@ async function tryKickoffStudio(
       kickoff: true,
     });
     markStudioStarted(state, stage);
-    state.kickoffRetryAt = "";
-    state.kickoffRetryStage = "";
+    if (!state.kickoffRetryStage || state.kickoffRetryStage === stage) {
+      state.kickoffRetryAt = "";
+      state.kickoffRetryStage = "";
+    }
     saveState(state);
     return r;
   } catch (e) {
     if (e instanceof GenerationWaitingError) throw e;
-    warn(`${stage} の開始に失敗したので後でやり直します: ${collectErrMsg(e)}`);
+    const msg = collectErrMsg(e);
+    if (/ソースが 0 件のため|Studio 生成が失敗したままです/.test(msg)) {
+      throw e instanceof Error ? e : new Error(msg);
+    }
+    warn(`${stage} の開始に失敗したので後でやり直します: ${msg}`);
     state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
     state.kickoffRetryStage = stage;
     saveState(state);
@@ -2293,12 +2413,13 @@ async function tryKickoffStudio(
   }
 }
 
-async function collectReadyStudio(
+export async function collectReadyStudio(
   page: Page,
   paperDir: string,
   state: PaperState,
   ctx: { skipVideoDownload: boolean },
 ): Promise<void> {
+  await returnToStudioList(page);
   if (!isCompleted(state, "nlm-slides")) {
     const dest = join(paperDir, "slides.pdf");
     try {
@@ -2312,7 +2433,11 @@ async function collectReadyStudio(
           unlinkSync(dest);
         }
         log("既存のスライド出力から PDF を保存します");
-        await downloadStudioSlidePdf(page, dest);
+        try {
+          await downloadStudioSlidePdf(page, dest);
+        } finally {
+          await returnToStudioList(page);
+        }
         if (slidesArtifactReady(dest)) {
           state.slidePdfPath = dest;
           markCompleted(state, "nlm-slides");
@@ -2320,6 +2445,7 @@ async function collectReadyStudio(
       }
     } catch (e) {
       warn(`スライドの保存はまだできません: ${collectErrMsg(e)}`);
+      await returnToStudioList(page).catch(() => undefined);
     }
   }
 
@@ -2339,6 +2465,7 @@ async function collectReadyStudio(
     }
   } else if (!ctx.skipVideoDownload) {
     try {
+      await returnToStudioList(page);
       if (await studioHasExplainerVideoOutput(page)) {
         await dismissPointerBlockers(page);
         log("既存の Studio 動画から MP4 を保存します（再生せず、再生成しません）");
@@ -2362,6 +2489,7 @@ async function collectReadyStudio(
       }
       warn(`動画の保存はまだできません: ${msg}`);
       if (isTargetClosedError(e) || page.isClosed()) return;
+      await returnToStudioList(page).catch(() => undefined);
     }
   }
 
@@ -2371,20 +2499,28 @@ async function collectReadyStudio(
       if (existsSync(dest) && statSync(dest).size > 80) {
         state.quizCsvPath = dest;
         markCompleted(state, "nlm-quiz");
-      } else if (await studioHasReadyCardMatching(page, "quiz")) {
-        log("既存のクイズを開きます（再生成しません）");
-        if (!(await openStudioCardMatching(page, "quiz"))) {
-          await clickFirstByName(page, [/^クイズ$/, /^Quiz$/i, /開く/, /Open/i]);
-        }
-        await page.waitForTimeout(1500);
-        await saveStudioArtifactCsv(page, dest, "quiz");
-        if (existsSync(dest)) {
-          state.quizCsvPath = dest;
-          markCompleted(state, "nlm-quiz");
+      } else {
+        await returnToStudioList(page);
+        if (await studioHasReadyCardMatching(page, "quiz")) {
+          log("既存のクイズを開きます（再生成しません）");
+          try {
+            if (!(await openStudioCardMatching(page, "quiz"))) {
+              await clickFirstByName(page, [/^クイズ$/, /^Quiz$/i, /開く/, /Open/i]);
+            }
+            await page.waitForTimeout(1500);
+            await saveStudioArtifactCsv(page, dest, "quiz");
+          } finally {
+            await returnToStudioList(page);
+          }
+          if (existsSync(dest)) {
+            state.quizCsvPath = dest;
+            markCompleted(state, "nlm-quiz");
+          }
         }
       }
     } catch (e) {
       warn(`クイズの保存はまだできません: ${collectErrMsg(e)}`);
+      await returnToStudioList(page).catch(() => undefined);
     }
   }
 
@@ -2394,33 +2530,42 @@ async function collectReadyStudio(
       if (existsSync(dest) && statSync(dest).size > 80) {
         state.vocabCsvPath = dest;
         markCompleted(state, "nlm-flashcards");
-      } else if (await studioHasReadyCardMatching(page, "flashcards")) {
-        log("既存の単語帳を開きます（再生成しません）");
-        if (!(await openStudioCardMatching(page, "flashcards"))) {
-          await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
-        }
-        await page.waitForTimeout(1500);
-        await saveStudioArtifactCsv(page, dest, "flashcards");
-        if (existsSync(dest)) {
-          state.vocabCsvPath = dest;
-          markCompleted(state, "nlm-flashcards");
+      } else {
+        await returnToStudioList(page);
+        if (await studioHasReadyCardMatching(page, "flashcards")) {
+          log("既存の単語帳を開きます（再生成しません）");
+          try {
+            if (!(await openStudioCardMatching(page, "flashcards"))) {
+              await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
+            }
+            await page.waitForTimeout(1500);
+            await saveStudioArtifactCsv(page, dest, "flashcards");
+          } finally {
+            await returnToStudioList(page);
+          }
+          if (existsSync(dest)) {
+            state.vocabCsvPath = dest;
+            markCompleted(state, "nlm-flashcards");
+          }
         }
       }
     } catch (e) {
       warn(`単語帳の保存はまだできません: ${collectErrMsg(e)}`);
+      await returnToStudioList(page).catch(() => undefined);
     }
   }
 }
 
-async function runStudioParallel(
+export async function runStudioParallel(
   page: Page,
   paperDir: string,
   state: PaperState,
   skipStudio: readonly StudioStageId[] = [],
   skipKickoff = false,
+  opts: { outputReadyTimeoutMs?: number; kickoffConfirmMs?: number } = {},
 ): Promise<void> {
-  await expandNotebookPanels(page);
-  const outputsReady = await waitUntilStudioOutputsReady(page);
+  await returnToStudioList(page);
+  const outputsReady = await waitUntilStudioOutputsReady(page, opts.outputReadyTimeoutMs ?? 45_000);
   await logStudioCardSummaries(page);
   await unmarkStaleStudioStarts(page, state, skipKickoff);
 
@@ -2440,7 +2585,7 @@ async function runStudioParallel(
   if (want("nlm-video") && !isCompleted(state, "nlm-video") && !videoKickoffCooling) {
     videoScan = await peekStudioVideoOutputs(page);
     log(`動画スキャン: ${formatVideoScan(videoScan)}`);
-    if (!shouldKickoffVideo(videoScan)) {
+    if (!shouldKickoffVideo(videoScan) || (await hasInProgressStudioArtifact(page, "video"))) {
       log(`既存の解説動画があるので再生成しません（${formatVideoScan(videoScan)}）`);
       markStudioStarted(state, "nlm-video");
     } else if (!outputsReady && hasStudioStarted(state, "nlm-video")) {
@@ -2459,7 +2604,12 @@ async function runStudioParallel(
     extra: { explainerVideo?: boolean } = {},
   ): Promise<void> => {
     if (skipKickoff) return;
-    const r = await tryKickoffStudio(page, state, stage, labels, timeoutMs, extra);
+    await returnToStudioList(page);
+    const r = await tryKickoffStudio(page, state, stage, labels, timeoutMs, {
+      ...extra,
+      kickoffConfirmMs: opts.kickoffConfirmMs,
+    });
+    await returnToStudioList(page);
     if (r === "complete") await collectReadyStudio(page, paperDir, state, studioCollect);
   };
 
@@ -2468,18 +2618,35 @@ async function runStudioParallel(
   }
 
   if (want("nlm-slides") && !isCompleted(state, "nlm-slides")) {
+    await returnToStudioList(page);
+    const body = await notebookBody(page);
     const slideCards = await studioCardTexts(page);
-    if (!shouldKickoffSlides(slideCards) || (await studioHasSlideDeckOutput(page))) {
-      if (!shouldKickoffSlides(slideCards)) {
-        log("既存のスライドがあるので再生成しません");
-      }
+    const hasSlides =
+      (await studioHasCardMatching(page, "slides")) ||
+      !shouldKickoffSlides(slideCards) ||
+      isSlideReadyNotificationText(body) ||
+      (await studioHasSlideDeckOutput(page));
+    if (hasSlides) {
+      log("既存のスライドまたは生成中スライドがあるため再生成しません");
       markStudioStarted(state, "nlm-slides");
+      if (!isCompleted(state, "nlm-slides") && (await studioHasSlideDeckOutput(page))) {
+        await collectReadyStudio(page, paperDir, state, studioCollect);
+      }
+    } else if ((await studioArtifactViewerOpen(page)) || /Loading Notebook/i.test(body)) {
+      log("Studio 一覧に戻れていないため、スライドの生成開始を保留します");
+      state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
+      state.kickoffRetryStage = "nlm-slides";
+      saveState(state);
     } else {
       await kick("nlm-slides", [/スライド資料/, /Slide deck/i, /スライドデッキ/], SLIDE_MS);
     }
   }
   if (want("nlm-video") && !isCompleted(state, "nlm-video")) {
+    await returnToStudioList(page);
     const cooldown = Date.parse(state.kickoffRetryAt || "") || 0;
+    const body = await notebookBody(page);
+    const viewerOpen = await studioArtifactViewerOpen(page);
+    const busyVideo = await hasInProgressStudioArtifact(page, "video");
     if (
       state.kickoffRetryStage === "nlm-video" &&
       cooldown > Date.now() &&
@@ -2488,24 +2655,38 @@ async function runStudioParallel(
       log(
         `nlm-video の開始に失敗した直後なので、${new Date(cooldown).toISOString()} まで生成開始を飛ばします`,
       );
-    } else if (!outputsReady && hasStudioStarted(state, "nlm-video")) {
+    } else if ((!outputsReady || viewerOpen) && hasStudioStarted(state, "nlm-video")) {
       log("Studio 出力カード待ちのため、動画の生成タイルは開きません");
     } else {
-      videoScan = videoScan ?? (await scanPageVideoOutputs(page));
-      if (!shouldKickoffVideo(videoScan)) {
+      videoScan = await scanPageVideoOutputs(page);
+      if (!shouldKickoffVideo(videoScan) || busyVideo) {
         markStudioStarted(state, "nlm-video");
-      } else if (studioOutputScanIncomplete(await notebookBody(page))) {
-        log("Studio 出力カード待ちのため、動画の生成タイルは開きません");
-      } else {
-        if (hasStudioStarted(state, "nlm-video") && videoScan.durationsSec.length === 0) {
-          const generating = textLooksLikeGenerating(await notebookBody(page));
-          if (generating) {
-            log("nlm-video の出力カードはまだ無いが生成中なので、開始は維持します");
-          } else {
-            log("nlm-video は開始記録があるが出力カードが無いので、生成をやり直します");
-            unmarkStudioStarted(state, "nlm-video");
-          }
+      } else if (hasStudioStarted(state, "nlm-video")) {
+        const generating =
+          textLooksLikeGenerating(body) || isVideoGenerationInProgress(body) || busyVideo;
+        if (
+          generating ||
+          viewerOpen ||
+          studioOutputScanIncomplete(body) ||
+          generationStartIsRecent(state)
+        ) {
+          log("nlm-video の出力カードはまだ無いが生成中・確認待ちなので、開始は維持します");
+        } else {
+          log("nlm-video は開始記録があるが出力カードが無いので、生成をやり直します");
+          unmarkStudioStarted(state, "nlm-video");
+          await kick(
+            "nlm-video",
+            [/動画解説/, /Video overview/i, /^動画$/, /ビデオ概要/],
+            VIDEO_MS,
+            { explainerVideo: true },
+          );
         }
+      } else if (viewerOpen || /Loading Notebook/i.test(body)) {
+        log("Studio 一覧がまだ見えないため、動画の生成開始を後回しにします");
+        state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
+        state.kickoffRetryStage = "nlm-video";
+        saveState(state);
+      } else {
         await kick(
           "nlm-video",
           [/動画解説/, /Video overview/i, /^動画$/, /ビデオ概要/],
@@ -2516,10 +2697,12 @@ async function runStudioParallel(
     }
   }
   if (want("nlm-quiz") && !isCompleted(state, "nlm-quiz")) {
+    await returnToStudioList(page);
     if (await studioHasCardMatching(page, "quiz")) markStudioStarted(state, "nlm-quiz");
     else await kick("nlm-quiz", [/^クイズ$/, /^Quiz$/i], QUIZ_MS);
   }
   if (want("nlm-flashcards") && !isCompleted(state, "nlm-flashcards")) {
+    await returnToStudioList(page);
     if (await studioHasCardMatching(page, "flashcards")) {
       markStudioStarted(state, "nlm-flashcards");
     } else {
@@ -2534,7 +2717,7 @@ async function runStudioParallel(
   await collectReadyStudio(page, paperDir, state, studioCollect);
 
   if (want("nlm-video") && !isCompleted(state, "nlm-video")) {
-    videoScan = videoScan ?? (await scanPageVideoOutputs(page));
+    videoScan = await scanPageVideoOutputs(page);
     if (studioVideoGenerationDone(videoScan)) {
       log(
         `解説動画の生成は終わっているので、MP4 が無くても次の作業へ進みます（${formatVideoScan(videoScan)}）`,
@@ -2543,8 +2726,7 @@ async function runStudioParallel(
     }
   }
 
-  await dismissPointerBlockers(page);
-  await dismissStudioViewer(page);
+  await returnToStudioList(page);
 
   const pending = firstPendingStudioStage(state, skipStudio);
   if (!pending) return;
@@ -2553,19 +2735,26 @@ async function runStudioParallel(
     return;
   }
   if (!studioKickoffSettled(state, skipStudio)) {
+    const unstarted = firstUnstartedStudioStage(state, skipStudio) ?? pending;
+    const waitingStage = waitingStudioStage(state, skipStudio);
     const cooldown = Date.parse(state.kickoffRetryAt || "") || 0;
     if (cooldown > Date.now()) {
-      throw new GenerationWaitingError(pending);
+      throw new GenerationWaitingError(waitingStage ?? unstarted);
     }
     const body = await notebookBody(page).catch(() => "");
-    if (studioOutputScanIncomplete(body)) {
-      log("Studio 出力カード待ちなので、この論文は後回しにします");
+    if (
+      (await studioArtifactViewerOpen(page)) ||
+      studioOutputScanIncomplete(body) ||
+      textLooksLikeGenerating(body) ||
+      Boolean(waitingStage)
+    ) {
+      log("Studio 出力カードまたは他教材の生成待ちなので、この論文は後回しにします");
       state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
-      state.kickoffRetryStage = pending;
+      state.kickoffRetryStage = unstarted;
       saveState(state);
-      throw new GenerationWaitingError(pending);
+      throw new GenerationWaitingError(waitingStage ?? unstarted);
     }
-    throw new Error(`${pending} を開始できませんでした`);
+    throw new Error(`${unstarted} を開始できませんでした`);
   }
   const waitingStage = waitingStudioStage(state, skipStudio) ?? pending;
   throw new GenerationWaitingError(waitingStage);

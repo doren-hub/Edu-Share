@@ -7,7 +7,10 @@ import {
   formatVideoScan,
   isChatCustomizeLabel,
   isExplainerVideoCardText,
+  isSlideReadyNotificationText,
+  isStudioArtifactViewerText,
   isStudioGenerateLabel,
+  isVideoGenerationInProgress,
   listVideoDurationsSec,
   looksLikeOverflowMenuLabel,
   looksLikeVideoDownloadLabel,
@@ -218,4 +221,45 @@ test("explicit quiz/copy icons cannot become slides through a relative timestamp
   for (const card of cards) assert.equal(isSlideDeckCardText(card), false, card);
   assert.equal(shouldKickoffSlides(cards), true);
   assert.equal(isSlideDeckCardText("tablet クイズの作り方 1 件のソース · 7 日前"), true);
+});
+
+test("isStudioArtifactViewerText / isSlideReadyNotificationText: 成果物ビューアと完了通知を識別する", () => {
+  const viewerWithToast =
+    "Studio dock_to_left アプリ chevron_right 適切なコンテンツ 不適切なコンテンツ スライド資料「高レイノルズ数乱流の統計則と構造」の準備ができました。表示 閉じる";
+  assert.equal(isStudioArtifactViewerText(viewerWithToast), true);
+  assert.equal(isSlideReadyNotificationText(viewerWithToast), true);
+  assert.equal(studioOutputScanIncomplete(viewerWithToast), true);
+  assert.equal(shouldKickoffSlides([viewerWithToast]), false);
+
+  const viewerWithoutToast =
+    "1 件のソース Studio dock_to_left アプリ chevron_right 適切なコンテンツ 不適切なコンテンツ 1 / 10";
+  assert.equal(isStudioArtifactViewerText(viewerWithoutToast), true);
+  assert.equal(studioOutputScanIncomplete(viewerWithoutToast), true);
+  assert.equal(shouldKickoffSlides([viewerWithoutToast]), false);
+
+  const studioList =
+    "Studio 音声解説 動画解説 chevron_forward スライド資料 chevron_forward クイズ chevron_forward フラッシュカード chevron_forward quiz 乱流 クイズ 1 件のソース · 2 分前";
+  assert.equal(isStudioArtifactViewerText(studioList), false);
+  assert.equal(studioOutputScanIncomplete(studioList), false);
+});
+
+test("isSlideGenerationInProgress / isVideoGenerationInProgress: 生成中カードと進捗文言を認識する", () => {
+  assert.equal(
+    isSlideGenerationInProgress("tablet スライド資料を生成しています... 1 件のソース sync"),
+    true,
+  );
+  assert.equal(isSlideGenerationInProgress("スライド資料 の生成を開始しています"), true);
+  assert.equal(
+    shouldKickoffSlides(["tablet スライド資料を生成しています... 1 件のソース sync"]),
+    false,
+  );
+  assert.equal(
+    isVideoGenerationInProgress("videocam 動画解説を生成しています... 1 件のソース sync"),
+    true,
+  );
+  assert.equal(isVideoGenerationInProgress("動画解説 の生成を開始しています"), true);
+  assert.equal(
+    isVideoGenerationInProgress("videocam 解説動画 6:10 · 解説 · 1 件のソース · 5 分前"),
+    false,
+  );
 });

@@ -7,7 +7,9 @@ import {
   bindEduSharePaper,
   emptyState,
   firstPendingStudioStage,
+  firstUnstartedStudioStage,
   hasStudioStarted,
+  markCompleted,
   SKIP_SLIDES_VIDEO_STAGES,
   STAGES,
   studioKickoffBegun,
@@ -124,6 +126,31 @@ test("bindEduSharePaper: 論文 ID が変わったら載せ済み印と DONE を
       bindEduSharePaper(state, "new-id", "http://localhost:3000/tests/new-id"),
       false,
     );
+  } finally {
+    rmSync(paperDir, { recursive: true, force: true });
+  }
+});
+
+test("firstUnstartedStudioStage / markCompleted: 開始済み段階を除き、他段階の生成待ち中は generationStartedAt を残す", () => {
+  const paperDir = mkdtempSync(join(tmpdir(), "pp-state-wait-"));
+  try {
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    const state = paper({
+      paperDir,
+      completed: ["nlm-quiz"],
+      studioStarted: ["nlm-slides", "nlm-quiz"],
+      waitingFor: "nlm-quiz",
+      generationStartedAt: startedAt,
+    });
+    assert.equal(firstPendingStudioStage(state), "nlm-slides");
+    assert.equal(firstUnstartedStudioStage(state), "nlm-video");
+
+    markCompleted(state, "nlm-quiz");
+    assert.equal(state.generationStartedAt, startedAt);
+    assert.equal(waitingStudioStage(state), "nlm-slides");
+
+    markCompleted(state, "nlm-slides");
+    assert.equal(waitingStudioStage(state), undefined);
   } finally {
     rmSync(paperDir, { recursive: true, force: true });
   }

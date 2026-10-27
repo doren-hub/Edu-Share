@@ -114,19 +114,92 @@ export function isPresenterSlideFormatText(text: string): boolean {
   return /プレゼンターのスライド|Presenter Slides|Presenter'?s slides/i.test(t);
 }
 
+const STUDIO_CREATION_TILES_VISIBLE =
+  /(?:tablet\s*)?(?:スライド資料|Slide deck)\s*chevron_forward|(?:subscriptions\s*)?(?:動画解説|Video overview)\s*chevron_forward/i;
+
+/** Studio の成果物ビューア（クイズ・単語帳・スライド等の個別表示）が開いているか */
+export function isStudioArtifactViewerText(text: string): boolean {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (/をカスタマイズ|後で生成|Generate later/i.test(t)) return false;
+  if (STUDIO_CREATION_TILES_VISIBLE.test(t)) return false;
+  if (/個のソースを表示/.test(t) && /チャットパネル|collapse_content|expand_content/.test(t)) {
+    return true;
+  }
+  if (/\b(?:collapse_content|expand_content|close_fullscreen)\b/.test(t)) {
+    return true;
+  }
+  if (
+    /適切なコンテンツ[\s\S]{0,160}不適切なコンテンツ|Good content[\s\S]{0,160}Bad content/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (/(?:アプリ|\bApp\b|\bStudio\b)\s*chevron_right/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/** スライド生成完了の通知バナー・トースト表示か */
+export function isSlideReadyNotificationText(text: string): boolean {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  return /(?:スライド資料|スライドデッキ|スライド)\s*(?:「[^」]*」\s*)?(?:の準備ができました|の準備完了|が完成しました|の生成が完了しました)|Slide deck (?:is )?ready|Slides are ready/i.test(
+    t,
+  );
+}
+
 /** スライド出力カードが生成中か。生成タイル＋ページ内の sync だけでは真にしない */
 export function isSlideGenerationInProgress(text: string): boolean {
   const t = text.replace(/\s+/g, " ").trim();
-  if (!t) return false;
-  if (/スライド資料を生成|スライドを生成中|Generating slide/i.test(t)) return true;
+  if (!t || isStudioArtifactViewerText(t)) return false;
+  if (
+    /スライド資料を生成|スライドを生成中|スライド資料を作成中|スライド資料\s*の生成を開始しています|Generating slide/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
   if (!/\bsync\b/i.test(t)) return false;
+  const kind = studioKindFromIcon(t.split(" ")[0]);
+  if (kind === "slides" && !/chevron_forward|chevron_right/i.test(t)) {
+    return true;
+  }
   return isSlideDeckCardText(t.replace(/\bsync\b/gi, " "));
 }
 
-/** 既存スライドや生成中があれば、もう一枚作らない */
+/** 動画出力カードが生成中か。生成タイルだけの場合は真にしない */
+export function isVideoGenerationInProgress(text: string): boolean {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t || isStudioArtifactViewerText(t)) return false;
+  if (
+    /動画を生成中|動画解説を生成|動画解説を作成中|動画解説\s*の生成を開始しています|Generating video/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (!/\bsync\b/i.test(t)) return false;
+  const kind = studioKindFromIcon(t.split(" ")[0]);
+  if (kind === "video" && !/chevron_forward|chevron_right/i.test(t)) {
+    return true;
+  }
+  return /sync\s*(?:subscriptions\s*)?(?:動画解説|Video overview)|(?:動画解説|Video overview)\s*sync/i.test(
+    t,
+  );
+}
+
+/** 既存スライドや生成中・完了通知があれば、もう一枚作らない。ビューア表示中も未生成扱いしない */
 export function shouldKickoffSlides(texts: string[]): boolean {
-  if (texts.some((t) => isSlideGenerationInProgress(t))) return false;
-  return !texts.some((t) => isSlideDeckCardText(t));
+  const nonEmpty = texts.map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const nonViewer = nonEmpty.filter((t) => !isStudioArtifactViewerText(t));
+  if (nonViewer.length === 0 && nonEmpty.length > 0) return false;
+  if (nonViewer.some((t) => isSlideGenerationInProgress(t) || isSlideReadyNotificationText(t))) {
+    return false;
+  }
+  return !nonViewer.some((t) => isSlideDeckCardText(t));
 }
 
 export function formatVideoScan(scan: VideoKickoffScan): string {
@@ -136,10 +209,11 @@ export function formatVideoScan(scan: VideoKickoffScan): string {
   return `動画カード ${scan.durationsSec.length} 件（${scan.durationsSec.map(clock).join(", ")}）`;
 }
 
-/** 読み込み中のツールバーだけを「出力が無い」と誤判定しない */
+/** 読み込み中のツールバーや成果物ビューアだけを「出力が無い」と誤判定しない */
 export function studioOutputScanIncomplete(text: string): boolean {
   const t = text.replace(/\s+/g, " ");
   if (/Loading Notebook/i.test(t)) return true;
+  if (isStudioArtifactViewerText(t)) return true;
   if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)\b/.test(t)) return false;
   if (STUDIO_RELATIVE_TIME.test(t)) return false;
   return true;

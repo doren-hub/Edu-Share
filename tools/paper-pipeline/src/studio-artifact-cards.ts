@@ -1,5 +1,13 @@
 import type { Locator, Page } from "playwright";
-import { FLASHCARD_CARD, STUDIO_RELATIVE_TIME, isSlideDeckCardText, studioKindFromIcon } from "./studio-cards.ts";
+import {
+  FLASHCARD_CARD,
+  STUDIO_RELATIVE_TIME,
+  isExplainerVideoCardText,
+  isSlideDeckCardText,
+  isSlideGenerationInProgress,
+  isVideoGenerationInProgress,
+  studioKindFromIcon,
+} from "./studio-cards.ts";
 
 export type StudioCardKind = "quiz" | "flashcards" | "slides" | "video" | "other" | null;
 export type StudioArtifactKind = "quiz" | "flashcards" | "slides";
@@ -51,16 +59,44 @@ export async function studioArtifactCards(page: Page): Promise<StudioArtifactCar
   return cards;
 }
 
-function matchesKind(card: StudioArtifactCard, kind: StudioArtifactKind): boolean {
+function matchesKind(card: StudioArtifactCard, kind: StudioArtifactKind | "video"): boolean {
   if (card.kind !== null) return card.kind === kind;
   if (kind === "quiz") return /クイズ|\bQuiz\b/i.test(card.text);
   if (kind === "flashcards") return FLASHCARD_CARD.test(card.text);
-  return /スライド資料|Slide deck|スライドデッキ/i.test(card.text) && isSlideDeckCardText(card.text);
+  if (kind === "video") {
+    return (
+      isExplainerVideoCardText(card.text) ||
+      isVideoGenerationInProgress(card.text) ||
+      (/動画解説|Video overview|解説動画/i.test(card.text) && card.busy)
+    );
+  }
+  return (
+    /スライド資料|Slide deck|スライドデッキ/i.test(card.text) &&
+    (isSlideDeckCardText(card.text) || isSlideGenerationInProgress(card.text))
+  );
 }
 
 /** Returns true if a card for the given kind exists, including cards currently generating/syncing. */
 export async function hasStudioArtifact(page: Page, kind: StudioArtifactKind): Promise<boolean> {
   return (await studioArtifactCards(page)).some(card => matchesKind(card, kind));
+}
+
+/** Returns true if a card for the given kind exists and is currently syncing/busy. */
+export async function hasBusyStudioArtifact(
+  page: Page,
+  kind: StudioArtifactKind | "video",
+): Promise<boolean> {
+  return (await studioArtifactCards(page)).some(card => matchesKind(card, kind) && card.busy);
+}
+
+/** Returns true if a card for the given kind exists and is still generating (syncing or undated). */
+export async function hasInProgressStudioArtifact(
+  page: Page,
+  kind: StudioArtifactKind | "video",
+): Promise<boolean> {
+  return (await studioArtifactCards(page)).some(
+    card => matchesKind(card, kind) && (card.busy || !card.ready),
+  );
 }
 
 /** Returns true if a card for the given kind exists and is completed and ready to open. */
