@@ -20,6 +20,11 @@ import {
   titleLooksLikeFilename,
   titleLooksLikeBadSciSpaceCapture,
   venueLooksLikeBadSciSpaceCapture,
+  looksLikeYearOnly,
+  looksLikeUrlOrDomain,
+  looksLikeSiteBoilerplate,
+  isGenericJournalAlone,
+  looksLikeAuthorOrPaperId,
   reconcileMetaFromFilesPaste,
   looksLikeCitationTitle,
   looksLikeSciSpaceNav,
@@ -879,6 +884,172 @@ test("rawFilesCardPaste: 語中改行の名前をまとめ、隣の PDF のメ�
   const paste = rawFilesCardPaste(raw, "phase2_3_0_1.pdf");
   assert.match(paste, /Alice Smith/);
   assert.doesNotMatch(paste, /Bob Jones|Unrelated Paper/);
+});
+
+test("issue #130: venueLooksLikeBadSciSpaceCapture は年だけ・URL/ドメイン・著者名・サイト文言・Journal単体を弾く", () => {
+  // 年だけ
+  assert.equal(venueLooksLikeBadSciSpaceCapture("2023"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("(2023)"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("2020"), true);
+  assert.equal(looksLikeYearOnly("2023"), true);
+  assert.equal(looksLikeYearOnly("2021-2022"), true);
+
+  // 記事URL・ドメイン
+  assert.equal(venueLooksLikeBadSciSpaceCapture("journal.ntt.co.jp"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("http://www.mdpi.com/journal/sensors"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("https://www.nature.com/articles/xyz"), true);
+  assert.equal(looksLikeUrlOrDomain("journal.ntt.co.jp"), true);
+  assert.equal(looksLikeUrlOrDomain("http://www.mdpi.com/journal/sensors"), true);
+
+  // 著者名・原稿/論文ID
+  assert.equal(venueLooksLikeBadSciSpaceCapture("35_18C5-01"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("kan17yamagiwa"), true);
+  assert.equal(looksLikeAuthorOrPaperId("35_18C5-01"), true);
+  assert.equal(looksLikeAuthorOrPaperId("kan17yamagiwa"), true);
+
+  // サイト文言
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Open access to the Proceedings of the"), true);
+  assert.equal(looksLikeSiteBoilerplate("Open access to the Proceedings of the"), true);
+
+  // 汎用語 Journal / journal 単体
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Journal"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("journal"), true);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("The Journal"), true);
+  assert.equal(isGenericJournalAlone("Journal"), true);
+  assert.equal(isGenericJournalAlone("journal"), true);
+
+  // 正常な掲載誌や空白のない略誌名は false
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Nature"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Bone"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Lab on a Chip"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("PHYSICS LETTERS B"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Journal of Example"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Proceedings of the National Academy of Sciences"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("American Journal of Physics"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("eLife"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("npj Quantum Information"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Phys.Rev.Lett"), false);
+  assert.equal(venueLooksLikeBadSciSpaceCapture("Nucl.Phys.B"), false);
+  assert.equal(looksLikeUrlOrDomain("Phys.Rev.Lett"), false);
+  assert.equal(looksLikeUrlOrDomain("Nucl.Phys.B"), false);
+});
+
+test("issue #130: 掲載誌抽出で年だけ・URL/ドメイン・著者名・サイト文言・Journal単体を採用せず空にする", () => {
+  // 1. 年だけ (2023)
+  const cardYearOnly = [
+    "example-paper.pdf",
+    "Sample Research Paper Title",
+    "2023",
+    "This paper investigates quantum algorithms for molecular simulation and presents benchmark results.",
+  ].join("\n");
+  const metaYearOnly = extractSciSpaceCardMeta(cardYearOnly, "example-paper.pdf");
+  assert.equal(metaYearOnly.venue, "");
+  assert.doesNotMatch(metaYearOnly.paste, /\n2023$/);
+  assert.equal(eduShareSciSpaceMetadataPaste(cardYearOnly, "example-paper.pdf"), "Sample Research Paper Title");
+
+  // 2. 記事URL (sensors-15-09681: http://www.mdpi.com/journal/sensors)
+  const cardUrl = [
+    "sensors-15-09681.pdf",
+    "A Low-Cost Multi-Sensor Wireless Body Area Network for Healthcare Applications",
+    "2015 · John Doe, Jane Smith",
+    "http://www.mdpi.com/journal/sensors",
+    "This paper presents the design and evaluation of a low-cost wireless sensor network for remote health monitoring.",
+  ].join("\n");
+  const metaUrl = extractSciSpaceCardMeta(cardUrl, "sensors-15-09681.pdf");
+  assert.equal(metaUrl.venue, "");
+  assert.doesNotMatch(metaUrl.paste, /mdpi\.com/);
+
+  // 3. ドメイン (nttjnl5003_20231201: journal.ntt.co.jp)
+  const cardDomain = [
+    "nttjnl5003_20231201.pdf",
+    "Advances in Next-Generation Optical Fiber Technologies",
+    "2023 · Taro Yamada, Hanako Suzuki",
+    "journal.ntt.co.jp",
+    "This paper introduces recent breakthroughs in high-capacity optical fiber transmission systems and future prospects.",
+  ].join("\n");
+  const metaDomain = extractSciSpaceCardMeta(cardDomain, "nttjnl5003_20231201.pdf");
+  assert.equal(metaDomain.venue, "");
+  assert.doesNotMatch(metaDomain.paste, /ntt\.co\.jp/);
+
+  // 4. 著者名/ID (35_18C5-01)
+  const cardId1 = [
+    "35_18C5-01.pdf",
+    "A Study on Parallel Processing Efficiency in Distributed Computing",
+    "35_18C5-01",
+    "This paper discusses performance optimization techniques in modern distributed cluster architectures.",
+  ].join("\n");
+  const metaId1 = extractSciSpaceCardMeta(cardId1, "35_18C5-01.pdf");
+  assert.equal(metaId1.venue, "");
+  assert.doesNotMatch(metaId1.paste, /35_18C5-01$/);
+
+  // 5. 著者名/citekey (kan17yamagiwa)
+  const cardId2 = [
+    "kan17yamagiwa.pdf",
+    "Acceleration of Sparse Matrix Computations on Stream Architectures",
+    "kan17yamagiwa",
+    "This paper explores stream processing optimizations for sparse linear algebra workloads.",
+  ].join("\n");
+  const metaId2 = extractSciSpaceCardMeta(cardId2, "kan17yamagiwa.pdf");
+  assert.equal(metaId2.venue, "");
+  assert.doesNotMatch(metaId2.paste, /kan17yamagiwa$/);
+
+  // 6. サイト文言 (sec18-zhang_0: Open access to the Proceedings of the)
+  const cardBoilerplate = [
+    "sec18-zhang_0.pdf",
+    "Towards Automated Security Analysis of Smart Contracts",
+    "2018 · Alice Zhang, Bob Lee",
+    "Open access to the Proceedings of the",
+    "This paper addresses vulnerability detection in decentralized smart contract execution environments.",
+  ].join("\n");
+  const metaBoilerplate = extractSciSpaceCardMeta(cardBoilerplate, "sec18-zhang_0.pdf");
+  assert.equal(metaBoilerplate.venue, "");
+  assert.doesNotMatch(metaBoilerplate.paste, /Open access/);
+
+  // 7. 汎用語 Journal / journal 単体
+  const cardJournalUpper = [
+    "paper-with-journal.pdf",
+    "Theoretical Foundation of Neural Network Regularization",
+    "2022 · Author One",
+    "Journal",
+    "This paper analyzes the mathematical foundations of regularization dynamics in overparameterized models.",
+  ].join("\n");
+  const metaJournalUpper = extractSciSpaceCardMeta(cardJournalUpper, "paper-with-journal.pdf");
+  assert.equal(metaJournalUpper.venue, "");
+  assert.doesNotMatch(metaJournalUpper.paste, /\nJournal$/);
+
+  const cardJournalLower = [
+    "paper-with-journal-lower.pdf",
+    "Theoretical Foundation of Neural Network Regularization",
+    "2022 · Author One",
+    "journal",
+    "This paper analyzes the mathematical foundations of regularization dynamics in overparameterized models.",
+  ].join("\n");
+  const metaJournalLower = extractSciSpaceCardMeta(cardJournalLower, "paper-with-journal-lower.pdf");
+  assert.equal(metaJournalLower.venue, "");
+  assert.doesNotMatch(metaJournalLower.paste, /\njournal$/);
+
+  // 8. 小文字で始まる正規の掲載誌名 (eLife, npj Quantum Information) を維持する
+  const cardElife = [
+    "elife-test.pdf",
+    "Mechanisms of Cellular Signaling",
+    "2023 · Author Name",
+    "eLife",
+    "This paper presents structural insights into receptor phosphorylation dynamics.",
+  ].join("\n");
+  const metaElife = extractSciSpaceCardMeta(cardElife, "elife-test.pdf");
+  assert.equal(metaElife.venue, "eLife");
+  assert.match(metaElife.paste, /eLife$/);
+
+  const cardNpj = [
+    "npj-test.pdf",
+    "Fault-Tolerant Quantum Computation",
+    "2024 · Author Name",
+    "npj Quantum Information",
+    "This paper explores threshold theorems for topological quantum error correction.",
+  ].join("\n");
+  const metaNpj = extractSciSpaceCardMeta(cardNpj, "npj-test.pdf");
+  assert.equal(metaNpj.venue, "npj Quantum Information");
+  assert.match(metaNpj.paste, /npj Quantum Information$/);
 });
 
 test("bibliography regression: DOI / journal UI labels never become authors or venue", () => {
