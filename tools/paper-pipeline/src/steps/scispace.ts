@@ -26,6 +26,7 @@ import {
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
+import { isShorterTitle, titleHasPdfContinuation, titleLooksTruncated, verifiedReferenceTitle } from "../bibliography.ts";
 import { extractPdfText } from "../pdf-text.ts";
 import { arxivIdFromFilename, fetchArxivAbstract, fetchArxivAtom, parseArxivAtomAuthors, parseArxivAtomTitle, parseArxivAtomYear } from "../arxiv-abstract.ts";
 import { bibliographicPasteFromWork, fetchCrossrefWork } from "../crossref.ts";
@@ -1111,6 +1112,7 @@ export async function captureSciSpaceCardMeta(
       }
     }
 
+    await verifySciSpaceBibliography(state, filename, pdfText);
     if (pdfText !== undefined) {
       if (state.title && !isTitleGroundedInPdfText(state.title, pdfText)) {
         state.title = filename.replace(/\.pdf$/i, "");
@@ -1135,6 +1137,38 @@ export async function captureSciSpaceCardMeta(
   } catch (e) {
     await saveFailureShot(page, paperDir, "scispace-meta");
     throw e;
+  }
+}
+
+/** Verify against this PDF's DOI, preserving existing metadata when lookup cannot confirm it. */
+export async function verifySciSpaceBibliography(
+  state: PaperState,
+  filename: string,
+  pdfText: string | undefined,
+  lookup: typeof fetchCrossrefWork = fetchCrossrefWork,
+): Promise<void> {
+  if (!pdfText) return;
+  if (titleLooksTruncated(state.title) || titleHasPdfContinuation(state.title, pdfText)) {
+    state.sciTitleRejected = true;
+  }
+  const pdfDoi = doiFromHrefOrText(pdfText);
+  if (pdfDoi) {
+    try {
+      const work = await lookup(pdfDoi);
+      const candidate = state.sciTitleRejected || titleLooksLikeFilename(state.title, filename)
+        ? extractSciSpaceCardMeta(state.filesPaste, filename).title : state.title;
+      const title = verifiedReferenceTitle(candidate, pdfText, pdfDoi, work);
+      if (title) {
+        state.title = title;
+        state.sciTitleRejected = false;
+        if (!state.doi.trim() && work) state.doi = work.doi;
+        if (work && venueLooksLikeBadSciSpaceCapture(state.venue) && !venueLooksLikeBadSciSpaceCapture(work.venue)) {
+          state.venue = work.venue;
+        }
+      }
+    } catch (error) {
+      warn(`SciSpace: 原本 DOI の公式書誌を確認できません: ${firstLine(error)}`);
+    }
   }
 }
 
@@ -1212,7 +1246,11 @@ export function applyExtractedCard(
     !looksLikeUnansweredSciSpaceResponse(card.authors) &&
     titleGrounded
   ) {
-    state.title = card.title;
+    if (!isShorterTitle(card.title, state.title) &&
+        (!state.title || titleLooksLikeFilename(state.title, filename) || titleLooksLikeBadSciSpaceCapture(state.title) ||
+          (isShorterTitle(state.title, card.title) && pdfText !== undefined && isTitleGroundedInPdfText(card.title, pdfText)))) {
+      state.title = card.title;
+    }
     state.sciTitleRejected = false;
   } else {
     if (
@@ -1233,15 +1271,15 @@ export function applyExtractedCard(
   if (
     card.venue &&
     !looksLikeSciSpaceNav(card.venue) &&
-    !venueLooksLikeBadSciSpaceCapture(card.venue) &&
+    !venueLooksLikeBadSciSpaceCapture(card.venue, card.authors) &&
     !looksLikeUnansweredSciSpaceResponse(card.venue)
   ) {
-    state.venue = card.venue;
-  } else if (looksLikePublisherOrPaywall(state.venue) || looksLikeUnansweredSciSpaceResponse(state.venue)) {
+    if (venueLooksLikeBadSciSpaceCapture(state.venue, card.authors)) state.venue = card.venue;
+  } else if (venueLooksLikeBadSciSpaceCapture(state.venue, card.authors) || looksLikeUnansweredSciSpaceResponse(state.venue)) {
     state.venue = "";
   }
   const doi = card.doi || dois.map((d) => doiFromHrefOrText(d)).find(Boolean) || "";
-  if (doi) state.doi = doi;
+  if (doi && !state.doi.trim()) state.doi = doi;
   const filesTldrOpener =
     /^(The paper|This paper|The study|This study|本研究|本論文)\b/i;
   const descGrounded = pdfText === undefined || isDescriptionGroundedInPdfText(card.tldr, pdfText);

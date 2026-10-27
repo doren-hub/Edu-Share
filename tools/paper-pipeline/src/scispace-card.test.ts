@@ -880,3 +880,33 @@ test("rawFilesCardPaste: 語中改行の名前をまとめ、隣の PDF のメ�
   assert.match(paste, /Alice Smith/);
   assert.doesNotMatch(paste, /Bob Jones|Unrelated Paper/);
 });
+
+test("bibliography regression: DOI / journal UI labels never become authors or venue", () => {
+  for (const label of ["DOI", "journal", "Authors", "掲載誌", "DOI:"]) {
+    const raw = ["agronomy-09-00403.pdf", "AgROS: A Robot Operating System Based Emulation", `2019⋅${label}`, label].join("\n");
+    const card = extractSciSpaceCardMeta(raw, "agronomy-09-00403.pdf");
+    assert.equal(card.authors, "", label);
+    assert.equal(card.yearAuthorLine, "", label);
+    assert.equal(card.venue, "", label);
+    const paste = eduShareSciSpaceMetadataPaste(raw, "agronomy-09-00403.pdf");
+    assert.doesNotMatch(paste, /2019/);
+    assert.equal(venueLooksLikeBadSciSpaceCapture(label), true);
+  }
+});
+
+test("bibliography regression: author names cannot be reused as the venue", () => {
+  const raw = ["agronomy-09-00403.pdf", "AgROS: A Robot Operating System Based Emulation", "2019⋅Naoum Tsolakis, Dimitrios Bechtsis", "Naoum Tsolakis", "journal", "Agronomy"].join("\n");
+  assert.equal(extractSciSpaceCardMeta(raw, "agronomy-09-00403.pdf").venue, "Agronomy");
+});
+
+test("bibliography regression: preserve full saved title and venue in the actual outgoing paste", () => {
+  const short = "AgROS: A Robot Operating System Based Emulation";
+  const full = `${short} Tool for Agricultural Robotics`;
+  const raw = ["agronomy-09-00403.pdf", short, "2019⋅Naoum Tsolakis", "Other Journal"].join("\n");
+  const paste = eduShareSciSpaceMetadataPaste(raw, "agronomy-09-00403.pdf", { currentTitle: full, currentVenue: "Agronomy" });
+  assert.match(paste, /Emulation Tool for Agricultural Robotics/);
+  assert.match(paste, /Agronomy/);
+  assert.doesNotMatch(paste, /Other Journal/);
+  assert.equal(titleLooksLikeBadSciSpaceCapture(`${short}…`), true);
+  assert.doesNotMatch(eduShareSciSpaceMetadataPaste(raw.replace(short, `${short}…`), "agronomy-09-00403.pdf"), /Emulation/);
+});
