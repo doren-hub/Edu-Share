@@ -916,3 +916,22 @@ test("venue fallback without an author line requires an explicit venue hint", ()
   assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${title}\nNaoum Tsolakis`, "paper.pdf").venue, "");
   assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${title}\nJournal of Agricultural Robotics`, "paper.pdf").venue, "Journal of Agricultural Robotics");
 });
+
+test("outgoing partial metadata cannot become a wrong title or author in the real app parser", async () => {
+  // Import by URL at runtime: the application parser belongs to a separate TypeScript package.
+  const appParser = new URL("../../../src/lib/paper-metadata-paste.ts", import.meta.url).href;
+  const { parsePaperMetadataPaste } = await import(appParser) as {
+    parsePaperMetadataPaste: (text: string) => { title: string; authors: string; venue: string };
+  };
+  const raw = "paper.pdf\nTruncated Article Title…\n2023 · Alice Smith\nJournal of Software and Systems";
+  const noTitle = eduShareSciSpaceMetadataPaste(raw, "paper.pdf", { sciTitleRejected: true });
+  const parsed = parsePaperMetadataPaste(noTitle);
+  assert.equal(parsed.title, "");
+  assert.equal(parsed.authors, "Alice Smith");
+  assert.equal(parsed.venue, "Journal of Software and Systems");
+  const noAuthors = eduShareSciSpaceMetadataPaste(raw.replace("2023 · Alice Smith", "2023 · DOI"), "paper.pdf", { currentTitle: "Complete Verified Article Title", currentVenue: "Journal of Software and Systems" });
+  const absent = parsePaperMetadataPaste(noAuthors);
+  assert.equal(absent.title, "Complete Verified Article Title");
+  assert.equal(absent.authors, "");
+  assert.equal(absent.venue, "");
+});

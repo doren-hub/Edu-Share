@@ -525,7 +525,10 @@ export function metadataPasteFromCard(
   const currentVenue = options?.currentVenue ?? "";
   const venue = !venueLooksLikeBadSciSpaceCapture(currentVenue, ya?.authors) ? currentVenue :
     venueLooksLikeBadSciSpaceCapture(card.venue, ya?.authors) ? "" : card.venue;
-  return [title, authorLine, venue]
+  // Without a title the app would promote an unlabelled venue to title; without authors it
+  // could infer a comma/"and" venue as authors. Preserve those app fields instead.
+  const venueLine = !ya ? "" : !title && venue ? `${ya.year}-${venue}` : venue;
+  return [title, authorLine, venueLine]
     .map((l) => l.trim())
     .filter(Boolean)
     .join("\n")
