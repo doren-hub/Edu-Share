@@ -1556,20 +1556,15 @@ async function clickSlideOverflowMenu(page: Page): Promise<boolean> {
 async function collectSlidePdfUrls(page: Page): Promise<string[]> {
   return page
     .evaluate(() => {
-      const out: string[] = [];
-      const add = (u: string | null | undefined) => {
-        const s = (u ?? "").trim();
-        if (s && !out.includes(s)) out.push(s);
-      };
+      const out = new Set<string>();
       for (const el of document.querySelectorAll("iframe, embed, object, a")) {
         const node = el as HTMLIFrameElement & HTMLAnchorElement;
-        add(node.src);
-        add(node.href);
-        add(el.getAttribute("src"));
-        add(el.getAttribute("href"));
-        add(el.getAttribute("data-src"));
+        for (const value of [node.src, node.href, el.getAttribute("src"), el.getAttribute("href"), el.getAttribute("data-src")]) {
+          const url = (value ?? "").trim();
+          if (url) out.add(url);
+        }
       }
-      return out;
+      return [...out];
     })
     .catch(() => [] as string[]);
 }
