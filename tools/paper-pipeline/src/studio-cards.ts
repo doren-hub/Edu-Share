@@ -3,7 +3,7 @@ export const STUDIO_RELATIVE_TIME =
   /(?:\d+\s*(?:秒前|分前|時間前|日前|週間前|か月前|ヶ月前)|たった今|昨日|おととい|just now|\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?)\s+ago|yesterday)/i;
 
 /** 単語帳の出力カード。NotebookLM は「単語帳」「暗記カード」など名前を変える */
-export const FLASHCARD_CARD = /フラッシュ|単語帳|暗記カード|Flashcard/i;
+export const FLASHCARD_CARD = /フラッシュ|単語帳|暗記カード|単語カード|Flashcard/i;
 
 /** Material icon identity takes precedence over an arbitrary generated title. */
 export function studioKindFromIcon(icon: string): "quiz" | "flashcards" | "slides" | "video" | "other" | null {
@@ -15,11 +15,61 @@ export function studioKindFromIcon(icon: string): "quiz" | "flashcards" | "slide
   return null;
 }
 
-const NON_VIDEO =
-  /フラッシュカード|単語帳|暗記カード|クイズ|マインドマップ|インフォグラフィ|スライド資料|Slide deck/i;
+/** カード文字列の先頭付近（未読などのプレフィックスを除く）から Material アイコン名を抽出する */
+export function extractStudioIcon(text: string): string | null {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  const words = t.split(" ");
+  for (let i = 0; i < Math.min(words.length, 3); i++) {
+    const w = words[i].toLowerCase();
+    if (w === "未読" || w === "unread") continue;
+    if (studioKindFromIcon(w) !== null) return w;
+    break;
+  }
+  return null;
+}
 
-const NON_SLIDE_CARD =
-  /フラッシュカード|単語帳|暗記カード|クイズ|マインドマップ|インフォグラフィ|Data Table|音声解説|Audio overview|新しいメモ|sticky_note|Add note|レポートを作成/i;
+export type StudioCardKind = "quiz" | "flashcards" | "slides" | "video" | "other" | null;
+
+const NON_VIDEO =
+  /フラッシュカード|単語帳|暗記カード|単語カード|クイズ|マインドマップ|インフォグラフィ|スライド資料|Slide deck/i;
+
+export const NON_SLIDE_CARD =
+  /フラッシュカード|単語帳|暗記カード|単語カード|クイズ|マインドマップ|インフォグラフィ|Data Table|音声解説|Audio overview|新しいメモ|sticky_note|Add note|レポートを作成/i;
+
+/**
+ * カード文字列から種別を判定する。
+ * アイコン名（quiz, copy, tablet, videocam 等）が先頭付近にあればタイトル語より優先する。
+ * アイコン名が無ければタイトル語で判定する。
+ */
+export function detectStudioCardKind(text: string): StudioCardKind {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return null;
+
+  const icon = extractStudioIcon(t);
+  if (icon) {
+    const kind = studioKindFromIcon(icon);
+    if (kind !== null) return kind;
+  }
+
+  if (isExplainerVideoCardText(t) || /\b(動画解説|Video overview|ビデオ概要)\b/i.test(t)) {
+    return "video";
+  }
+  if (/クイズ|\bQuiz\b/i.test(t)) {
+    return "quiz";
+  }
+  if (FLASHCARD_CARD.test(t)) {
+    return "flashcards";
+  }
+  if (/スライド資料|Slide deck|スライドデッキ/i.test(t)) {
+    return "slides";
+  }
+  if (NON_SLIDE_CARD.test(t)) {
+    return "other";
+  }
+
+  return null;
+}
 
 const EXPLAINER_DURATION =
   /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明)\b/gi;
@@ -87,22 +137,17 @@ export function studioVideoGenerationDone(scan: VideoKickoffScan): boolean {
 export function isSlideDeckCardText(text: string): boolean {
   const t = text.replace(/\s+/g, " ").trim();
   if (!t) return false;
-  const kind = studioKindFromIcon(t.split(" ")[0]);
-  if (kind !== null) {
-    if (kind !== "slides") return false;
-    if (/スライド資料を生成|Generating slide/i.test(t)) return false;
-    return /件のソース/.test(t) || STUDIO_RELATIVE_TIME.test(t);
-  }
-  if (NON_SLIDE_CARD.test(t)) return false;
+  if (/スライド資料を生成|スライドを生成中|Generating slide/i.test(t)) return false;
   if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/.test(t)) return false;
   if (/chevron_forward/.test(t) && !/件のソース/.test(t)) return false;
-  if (/スライド資料を生成|Generating slide/i.test(t)) return false;
-  if (
-    /スライド資料|Slide deck|スライドデッキ|\btablet\b/i.test(t) &&
-    (/件のソース/.test(t) || STUDIO_RELATIVE_TIME.test(t))
-  ) {
-    return true;
+
+  const kind = detectStudioCardKind(t);
+  if (kind !== null) {
+    if (kind !== "slides") return false;
+    return /件のソース/.test(t) || STUDIO_RELATIVE_TIME.test(t);
   }
+
+  if (NON_SLIDE_CARD.test(t)) return false;
   return /件のソース/.test(t) && STUDIO_RELATIVE_TIME.test(t);
 }
 
@@ -163,11 +208,9 @@ export function isSlideGenerationInProgress(text: string): boolean {
     return true;
   }
   if (!/\bsync\b/i.test(t)) return false;
-  const kind = studioKindFromIcon(t.split(" ")[0]);
-  if (kind === "slides" && !/chevron_forward|chevron_right/i.test(t)) {
-    return true;
-  }
-  return isSlideDeckCardText(t.replace(/\bsync\b/gi, " "));
+  const withoutSync = t.replace(/\bsync\b/gi, " ").replace(/\s+/g, " ").trim();
+  if (/chevron_forward/.test(withoutSync) && !/件のソース/.test(withoutSync)) return false;
+  return isSlideDeckCardText(withoutSync) || (detectStudioCardKind(withoutSync) === "slides" && !NON_SLIDE_CARD.test(withoutSync));
 }
 
 /** 動画出力カードが生成中か。生成タイルだけの場合は真にしない */

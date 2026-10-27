@@ -2536,7 +2536,7 @@ export async function collectReadyStudio(
           log("既存の単語帳を開きます（再生成しません）");
           try {
             if (!(await openStudioCardMatching(page, "flashcards"))) {
-              await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
+              await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /単語カード/, /Flashcard/i, /開く/]);
             }
             await page.waitForTimeout(1500);
             await saveStudioArtifactCsv(page, dest, "flashcards");
@@ -2708,7 +2708,7 @@ export async function runStudioParallel(
     } else {
       await kick(
         "nlm-flashcards",
-        [/フラッシュ/, /フラッシュカード/, /単語帳/, /Flashcard/i, /Flash cards/i],
+        [/フラッシュ/, /フラッシュカード/, /単語帳/, /単語カード/, /Flashcard/i, /Flash cards/i],
         QUIZ_MS,
       );
     }
