@@ -48,7 +48,8 @@ function shouldSkipSciSpacePaste(paste: string, filename: string): boolean {
   return /\b(?:a\.\s*einstein|albert einstein)\b/i.test(paste);
 }
 
-function usableEduShareTitle(state: PaperState): string {
+export function usableEduShareTitle(state: PaperState): string {
+  if (state.sciTitleRejected) return "";
   let t = state.title.trim();
   if (
     !state.sciTitleRejected &&
@@ -62,12 +63,13 @@ function usableEduShareTitle(state: PaperState): string {
   return t.slice(0, 200);
 }
 
-function usableEduShareVenue(state: PaperState): string {
+export function usableEduShareVenue(state: PaperState): string {
+  const card = extractSciSpaceCardMeta(state.filesPaste, state.filename);
   let v = state.venue.trim();
-  if (!v || isDummySciSpacePaste(v) || /^(null|undefined)$/i.test(v) || venueLooksLikeBadSciSpaceCapture(v)) {
-    v = extractSciSpaceCardMeta(state.filesPaste, state.filename).venue.trim();
+  if (!v || isDummySciSpacePaste(v) || /^(null|undefined)$/i.test(v) || venueLooksLikeBadSciSpaceCapture(v, card.authors)) {
+    v = card.venue.trim();
   }
-  if (!v || isDummySciSpacePaste(v) || /^(null|undefined)$/i.test(v) || venueLooksLikeBadSciSpaceCapture(v)) {
+  if (!v || isDummySciSpacePaste(v) || /^(null|undefined)$/i.test(v) || venueLooksLikeBadSciSpaceCapture(v, card.authors)) {
     return "";
   }
   return v.slice(0, 400);
@@ -381,6 +383,7 @@ export async function runEduShareUpload(
       ? ""
       : eduShareSciSpaceMetadataPaste(state.filesPaste, state.filename, {
           currentTitle: state.title,
+          currentVenue: state.venue,
           sciTitleRejected: state.sciTitleRejected,
         });
     if (paste) {
@@ -674,6 +677,7 @@ export async function applySciSpaceMetaToPaperPage(
     ? ""
     : eduShareSciSpaceMetadataPaste(state.filesPaste, state.filename, {
         currentTitle: state.title,
+        currentVenue: state.venue,
         sciTitleRejected: state.sciTitleRejected,
       });
   const rawTldr = state.tldr.trim();

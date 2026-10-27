@@ -137,3 +137,100 @@ test("TL;DR 行探索も語中改行の PDF 名を同じ比較関数で認識す
   } as unknown as import("playwright").Page;
   assert.equal(await readFilesColumnTldr(page, "phase2_3_0_1.pdf"), summary);
 });
+
+const agrosShort = "AgROS: A Robot Operating System Based Emulation";
+const agrosTitle = `${agrosShort} Tool for Agricultural Robotics`;
+const agrosPdf = `Agronomy\nArticle\n${agrosShort}\nTool for Agricultural Robotics\nNaoum Tsolakis, Dimitrios Bechtsis and Dionysis Bochtis\nAbstract\n${"Agricultural robotics and emulation. ".repeat(12)}\ndoi:10.3390/agronomy9070403`;
+const agrosWork = { title: agrosTitle, authors: ["Naoum Tsolakis"], year: "2019", venue: "Agronomy", doi: "10.3390/agronomy9070403" };
+
+function agrosState() {
+  const state = emptyState({ filename: "agronomy-09-00403.pdf", inboxPdfPath: "/tmp/input.pdf", paperDir: "/tmp" });
+  state.filesPaste = `${state.filename}\n${agrosShort}\n2019⋅DOI\njournal`;
+  return state;
+}
+
+test("AgROS: original DOI plus official title completes a wrapped title without changing raw paste", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta, eduShareSciSpaceMetadataPaste } = await import("../scispace-card.ts");
+  const state = agrosState();
+  const raw = state.filesPaste;
+  applyExtractedCard(state, state.filename, extractSciSpaceCardMeta(raw, state.filename), [], agrosPdf);
+  await verifySciSpaceBibliography(state, state.filename, agrosPdf, async doi => {
+    assert.equal(doi, agrosWork.doi);
+    return agrosWork;
+  });
+  assert.equal(state.title, agrosTitle);
+  assert.equal(state.venue, "Agronomy");
+  assert.equal(state.doi, agrosWork.doi);
+  assert.equal(state.sciTitleRejected, false);
+  assert.equal(state.filesPaste, raw);
+  const paste = eduShareSciSpaceMetadataPaste(raw, state.filename, { currentTitle: state.title, currentVenue: state.venue });
+  assert.match(paste, /Tool for Agricultural Robotics/);
+  assert.doesNotMatch(paste, /2019⋅DOI|\njournal/);
+});
+
+test("AgROS: unavailable or wrong-DOI official metadata cannot authorize a cropped title", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  for (const lookup of [async () => null, async () => ({ ...agrosWork, doi: "10.1234/other" }), async () => ({ ...agrosWork, title: `${agrosShort} Completely Different Study` }), async () => { throw new Error("offline fixture"); }]) {
+    const state = agrosState();
+    state.title = agrosShort;
+    state.venue = "Agronomy";
+    await verifySciSpaceBibliography(state, state.filename, agrosPdf, lookup);
+    assert.equal(state.title, agrosShort);
+    assert.equal(state.venue, "Agronomy");
+    assert.equal(state.sciTitleRejected, true);
+    assert.equal(usableEduShareTitle(state), "");
+  }
+});
+
+test("AgROS: uncertain card cannot overwrite a complete title, known venue or DOI", async () => {
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const state = agrosState();
+  state.title = agrosTitle;
+  state.venue = "Agronomy";
+  state.doi = agrosWork.doi;
+  const card = extractSciSpaceCardMeta(`${state.filename}\n${agrosShort}\n2019⋅DOI\njournal\n10.1234/unrelated`, state.filename);
+  applyExtractedCard(state, state.filename, card, [], agrosPdf);
+  await verifySciSpaceBibliography(state, state.filename, agrosPdf, async () => null);
+  assert.equal(state.title, agrosTitle);
+  assert.equal(state.venue, "Agronomy");
+  assert.equal(state.doi, agrosWork.doi);
+});
+
+test("outgoing venue cannot use a saved author name or UI label", async () => {
+  const { usableEduShareVenue } = await import("./edushare.ts");
+  const state = agrosState();
+  state.filesPaste = `${state.filename}\n${agrosTitle}\n2019⋅Naoum Tsolakis\nAgronomy`;
+  state.venue = "Naoum Tsolakis";
+  assert.equal(usableEduShareVenue(state), "Agronomy");
+  state.venue = "journal";
+  assert.equal(usableEduShareVenue(state), "Agronomy");
+});
+
+
+test("PDF extraction unavailable: preserve existing metadata without a network lookup", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const state = agrosState();
+  state.title = agrosTitle;
+  state.venue = "Agronomy";
+  await verifySciSpaceBibliography(state, state.filename, undefined, async () => { throw new Error("must not be called"); });
+  assert.equal(state.title, agrosTitle);
+  assert.equal(state.venue, "Agronomy");
+});
+
+test("complete title followed by affiliations or authors remains usable without Crossref", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  for (const next of ["Department of Computer Science, University of Tokyo", "Institute for Agricultural Robotics", "John Smith, Jane Doe", "Consortium for Agricultural Robotics"]) {
+    const state = agrosState();
+    state.title = agrosTitle;
+    const pdf = `${agrosTitle}\n${next}\nAbstract\n${"Robotics emulation study. ".repeat(20)}`;
+    await verifySciSpaceBibliography(state, state.filename, pdf, async () => { throw new Error("must not be called without DOI"); });
+    assert.equal(state.sciTitleRejected, false, next);
+    assert.equal(usableEduShareTitle(state), agrosTitle, next);
+    await verifySciSpaceBibliography(state, state.filename, `${pdf}\ndoi:${agrosWork.doi}`, async () => null);
+    assert.equal(usableEduShareTitle(state), agrosTitle, next);
+  }
+});
