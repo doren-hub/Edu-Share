@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
-import { hasReadyStudioArtifact, hasStudioArtifact, openStudioArtifact, studioArtifactCards } from "./studio-artifact-cards.ts";
+import {
+  hasBusyStudioArtifact,
+  hasInProgressStudioArtifact,
+  hasReadyStudioArtifact,
+  hasStudioArtifact,
+  openStudioArtifact,
+  studioArtifactCards,
+} from "./studio-artifact-cards.ts";
 
 test("Studio artifact fixture: kinds, ready state and covered title buttons", async t => {
   const browser = await chromium.launch().catch(async e => {
@@ -50,6 +57,10 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
       assert.equal(await hasReadyStudioArtifact(page, "flashcards"), false);
       assert.equal(await openStudioArtifact(page, "quiz"), false);
       assert.equal(await openStudioArtifact(page, "flashcards"), false);
+      assert.equal(await hasBusyStudioArtifact(page, "quiz"), true);
+      assert.equal(await hasInProgressStudioArtifact(page, "quiz"), true);
+      assert.equal(await hasInProgressStudioArtifact(page, "flashcards"), true);
+      assert.equal(await hasInProgressStudioArtifact(page, "slides"), false);
     });
     await t.test("creation tiles and sources outside artifact items are ignored completely", async () => {
       await page.setContent(`<button>quiz 確認テスト 1 件のソース · 7 日前</button>

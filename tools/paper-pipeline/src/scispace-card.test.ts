@@ -1051,3 +1051,58 @@ test("issue #130: 掲載誌抽出で年だけ・URL/ドメイン・著者名・�
   assert.equal(metaNpj.venue, "npj Quantum Information");
   assert.match(metaNpj.paste, /npj Quantum Information$/);
 });
+
+test("bibliography regression: DOI / journal UI labels never become authors or venue", () => {
+  for (const label of ["DOI", "journal", "Authors", "掲載誌", "DOI:"]) {
+    const raw = ["agronomy-09-00403.pdf", "AgROS: A Robot Operating System Based Emulation", `2019⋅${label}`, label].join("\n");
+    const card = extractSciSpaceCardMeta(raw, "agronomy-09-00403.pdf");
+    assert.equal(card.authors, "", label);
+    assert.equal(card.yearAuthorLine, "", label);
+    assert.equal(card.venue, "", label);
+    const paste = eduShareSciSpaceMetadataPaste(raw, "agronomy-09-00403.pdf");
+    assert.doesNotMatch(paste, /2019/);
+    assert.equal(venueLooksLikeBadSciSpaceCapture(label), true);
+  }
+});
+
+test("bibliography regression: author names cannot be reused as the venue", () => {
+  const raw = ["agronomy-09-00403.pdf", "AgROS: A Robot Operating System Based Emulation", "2019⋅Naoum Tsolakis, Dimitrios Bechtsis", "Naoum Tsolakis", "journal", "Agronomy"].join("\n");
+  assert.equal(extractSciSpaceCardMeta(raw, "agronomy-09-00403.pdf").venue, "Agronomy");
+});
+
+test("bibliography regression: preserve full saved title and venue in the actual outgoing paste", () => {
+  const short = "AgROS: A Robot Operating System Based Emulation";
+  const full = `${short} Tool for Agricultural Robotics`;
+  const raw = ["agronomy-09-00403.pdf", short, "2019⋅Naoum Tsolakis", "Other Journal"].join("\n");
+  const paste = eduShareSciSpaceMetadataPaste(raw, "agronomy-09-00403.pdf", { currentTitle: full, currentVenue: "Agronomy" });
+  assert.match(paste, /Emulation Tool for Agricultural Robotics/);
+  assert.match(paste, /Agronomy/);
+  assert.doesNotMatch(paste, /Other Journal/);
+  assert.equal(titleLooksLikeBadSciSpaceCapture(`${short}…`), true);
+  assert.doesNotMatch(eduShareSciSpaceMetadataPaste(raw.replace(short, `${short}…`), "agronomy-09-00403.pdf"), /Emulation/);
+});
+
+test("venue fallback without an author line requires an explicit venue hint", () => {
+  const title = "AgROS: A Robot Operating System Based Emulation";
+  assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${title}\nNaoum Tsolakis`, "paper.pdf").venue, "");
+  assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${title}\nJournal of Agricultural Robotics`, "paper.pdf").venue, "Journal of Agricultural Robotics");
+});
+
+test("outgoing partial metadata cannot become a wrong title or author in the real app parser", async () => {
+  // Import by URL at runtime: the application parser belongs to a separate TypeScript package.
+  const appParser = new URL("../../../src/lib/paper-metadata-paste.ts", import.meta.url).href;
+  const { parsePaperMetadataPaste } = await import(appParser) as {
+    parsePaperMetadataPaste: (text: string) => { title: string; authors: string; venue: string };
+  };
+  const raw = "paper.pdf\nTruncated Article Title…\n2023 · Alice Smith\nJournal of Software and Systems";
+  const noTitle = eduShareSciSpaceMetadataPaste(raw, "paper.pdf", { sciTitleRejected: true });
+  const parsed = parsePaperMetadataPaste(noTitle);
+  assert.equal(parsed.title, "");
+  assert.equal(parsed.authors, "Alice Smith");
+  assert.equal(parsed.venue, "Journal of Software and Systems");
+  const noAuthors = eduShareSciSpaceMetadataPaste(raw.replace("2023 · Alice Smith", "2023 · DOI"), "paper.pdf", { currentTitle: "Complete Verified Article Title", currentVenue: "Journal of Software and Systems" });
+  const absent = parsePaperMetadataPaste(noAuthors);
+  assert.equal(absent.title, "Complete Verified Article Title");
+  assert.equal(absent.authors, "");
+  assert.equal(absent.venue, "");
+});

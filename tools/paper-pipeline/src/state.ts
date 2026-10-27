@@ -157,7 +157,9 @@ export function markCompleted(state: PaperState, stage: StageId): void {
   if (!state.completed.includes(stage)) state.completed.push(stage);
   if (state.waitingFor === stage) {
     state.waitingFor = "";
-    state.generationStartedAt = "";
+    if (!waitingStudioStage(state)) {
+      state.generationStartedAt = "";
+    }
   }
   saveState(state);
 }
@@ -171,6 +173,15 @@ export function firstPendingStudioStage(
   skip: readonly StudioStageId[] = [],
 ): StudioStageId | undefined {
   return STUDIO_STAGES.find((s) => !isCompleted(state, s) && !skip.includes(s));
+}
+
+export function firstUnstartedStudioStage(
+  state: PaperState,
+  skip: readonly StudioStageId[] = [],
+): StudioStageId | undefined {
+  return STUDIO_STAGES.find(
+    (s) => !isCompleted(state, s) && !skip.includes(s) && !hasStudioStarted(state, s),
+  );
 }
 
 export function waitingStudioStage(

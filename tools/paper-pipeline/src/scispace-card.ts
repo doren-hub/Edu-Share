@@ -1,3 +1,4 @@
+import { authorsLookInvalid, isBibliographyLabel, titleLooksTruncated, venueMatchesAuthors } from "./bibliography.ts";
 import { filenameWithoutWhitespace } from "./scispace-files-view.ts";
 
 /**
@@ -50,7 +51,7 @@ const VENUE_HINT =
 
 export function looksLikeVenueLine(s: string): boolean {
   const t = s.trim();
-  if (!t || t.length > 90) return false;
+  if (!t || t.length > 90 || isBibliographyLabel(t)) return false;
   if (/^publications of the /i.test(t)) return true;
   if (/^journal of /i.test(t)) return true;
   if (/^proceedings of the /i.test(t)) return true;
@@ -291,6 +292,7 @@ export function needsSciSpaceCardRecapture(state: {
   if (isDummySciSpacePaste(paste)) return true;
   const card = extractSciSpaceCardMeta(paste, state.filename);
   if (isJunkVenueLine(card.venue)) return true;
+  if (state.venue && venueLooksLikeBadSciSpaceCapture(state.venue, card.authors)) return true;
   if (!card.yearAuthorLine) return true;
   return false;
 }
@@ -345,7 +347,7 @@ export function parseYearAuthor(line: string): { year: string; authors: string }
   const m = line.trim().match(YEAR_AUTHOR);
   if (!m) return null;
   const authors = m[2]!.replace(/^DOI\s*[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]\s*/iu, "").trim();
-  if (!authors) return null;
+  if (authorsLookInvalid(authors)) return null;
   return { year: m[1]!, authors };
 }
 
@@ -360,7 +362,8 @@ function pickTitle(lines: string[], filename: string): string {
         !looksLikeSciSpaceNav(s) &&
         !looksLikeCitationTitle(s) &&
         !looksLikeVenueLine(s) &&
-        !parseYearAuthor(s) &&
+        !YEAR_AUTHOR.test(s) &&
+        !isBibliographyLabel(s) &&
         !/^arxiv:/i.test(s) &&
         !/^(this paper|the paper|本研究|本論文)\b/i.test(s),
     ) ?? ""
@@ -450,7 +453,7 @@ export function isRejectedVenueCandidate(s: string): boolean {
 /** SciSpace 個別ページなどから誤って取れたタイトル */
 export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
   const t = title.trim();
-  if (!t) return true;
+  if (!t || isBibliographyLabel(t) || titleLooksTruncated(t)) return true;
   if (looksLikeUnansweredSciSpaceResponse(t)) return true;
   if (/\.pdf$/i.test(t)) return true;
   if (/^ISSN\s/i.test(t)) return true;
@@ -464,9 +467,9 @@ export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
 }
 
 /** SciSpace 個別ページなどから誤って取れた掲載誌 */
-export function venueLooksLikeBadSciSpaceCapture(venue: string): boolean {
+export function venueLooksLikeBadSciSpaceCapture(venue: string, authors = ""): boolean {
   const v = venue.trim();
-  if (!v) return true;
+  if (!v || isBibliographyLabel(v) || venueMatchesAuthors(v, authors)) return true;
   if (isJunkVenueLine(v)) return true;
   if (/^vol\.?\s*\d/i.test(v)) return true;
   if (/^This journal is/i.test(v)) return true;
@@ -523,7 +526,7 @@ export function reconcileMetaFromFilesPaste(
     state.title = card.title;
     changed = true;
   }
-  if (card.venue && (venueLooksLikeBadSciSpaceCapture(state.venue) || !state.venue.trim())) {
+  if (card.venue && (venueLooksLikeBadSciSpaceCapture(state.venue, card.authors) || !state.venue.trim())) {
     state.venue = card.venue;
     changed = true;
   }
@@ -541,25 +544,28 @@ function pickVenue(
   authors?: string,
   yearAuthorLine?: string,
 ): string {
+  const authorLine = lines.find((line) => parseYearAuthor(line));
+  const effectiveAuthors = authors ?? (authorLine ? parseYearAuthor(authorLine)?.authors ?? "" : "");
   const skip = new Set([filename, title].filter(Boolean));
   const stem = filename.replace(/\.pdf$/i, "").trim();
   if (stem) skip.add(stem);
-  if (authors?.trim()) skip.add(authors.trim());
+  if (effectiveAuthors.trim()) skip.add(effectiveAuthors.trim());
   if (yearAuthorLine?.trim()) skip.add(yearAuthorLine.trim());
 
   const leftover: string[] = [];
   for (const s of lines) {
     if (skip.has(s) || lineNamesThisFile(s, filename) || titleLooksLikeFilename(s, filename)) continue;
-    if (looksLikeSciSpaceNav(s) || parseYearAuthor(s)) continue;
+    if (looksLikeSciSpaceNav(s) || parseYearAuthor(s) || YEAR_AUTHOR.test(s)) continue;
+    if (isBibliographyLabel(s) || venueMatchesAuthors(s, effectiveAuthors) || /^(?:19|20)\d{2}$/.test(s)) continue;
     if (/\.pdf$/i.test(s)) continue;
     if (/^(this paper|the paper|本研究|本論文)\b/i.test(s)) continue;
     if (isRejectedVenueCandidate(s)) continue;
-    if (authors && (authors === s || authors.includes(s) || s.includes(authors))) continue;
+    if (effectiveAuthors && (effectiveAuthors === s || effectiveAuthors.includes(s) || s.includes(effectiveAuthors))) continue;
     if (s.length > 80) continue;
     if (isTldrBodyLine(s)) continue;
     if (VENUE_HINT.test(s) || looksLikeVenueLine(s)) return s;
     if (looksLikeCitationTitle(s) && s.length > 60) continue;
-    leftover.push(s);
+    if (authorLine) leftover.push(s);
   }
   const picked = leftover[0] ?? "";
   if (isRejectedVenueCandidate(picked)) return "";
@@ -583,14 +589,14 @@ export function isTldrBodyLine(s: string): boolean {
   return words.length >= 18 && /[.!?。]$/.test(t);
 }
 
-/** Edu Share メタ欄用。タイトル・年著者行・掲載を原文のまま。DOI と TL;DR は入れない */
+/** Edu Share メタ欄用。検証済みの題名・年著者・掲載だけを反映する。DOI と TL;DR は入れない */
 export function metadataPasteFromCard(
   card: Pick<SciSpaceCardMeta, "title" | "yearAuthorLine" | "venue">,
   filename: string,
-  options?: { currentTitle?: string; sciTitleRejected?: boolean },
+  options?: { currentTitle?: string; currentVenue?: string; sciTitleRejected?: boolean },
 ): string {
   let title =
-    card.title && !titleLooksLikeFilename(card.title, filename) ? card.title.trim() : "";
+    card.title && !titleLooksLikeFilename(card.title, filename) && !titleLooksLikeBadSciSpaceCapture(card.title) ? card.title.trim() : "";
   if (options?.sciTitleRejected) {
     title = "";
   } else if (
@@ -600,9 +606,21 @@ export function metadataPasteFromCard(
   ) {
     title = "";
   }
-  const venue =
-    card.venue && !isRejectedVenueCandidate(card.venue) ? card.venue.trim() : "";
-  return [title, card.yearAuthorLine, venue]
+  if (options?.currentTitle && !options.sciTitleRejected &&
+      !titleLooksLikeFilename(options.currentTitle, filename) &&
+      !titleLooksLikeBadSciSpaceCapture(options.currentTitle)) {
+    title = options.currentTitle.trim();
+  }
+  const ya = parseYearAuthor(card.yearAuthorLine);
+  const prefix = card.yearAuthorLine.match(/^((?:19|20)\d{2}\s*[·•‧∙⋅・･]\s*)/u)?.[1];
+  const authorLine = ya ? `${prefix ?? `${ya.year}⋅`}${ya.authors}` : "";
+  const currentVenue = options?.currentVenue ?? "";
+  const venue = !venueLooksLikeBadSciSpaceCapture(currentVenue, ya?.authors) ? currentVenue :
+    venueLooksLikeBadSciSpaceCapture(card.venue, ya?.authors) ? "" : card.venue;
+  // Without a title the app would promote an unlabelled venue to title; without authors it
+  // could infer a comma/"and" venue as authors. Preserve those app fields instead.
+  const venueLine = !ya ? "" : !title && venue ? `${ya.year}-${venue}` : venue;
+  return [title, authorLine, venueLine]
     .map((l) => l.trim())
     .filter(Boolean)
     .join("\n")
@@ -613,7 +631,7 @@ export function metadataPasteFromCard(
 export function eduShareSciSpaceMetadataPaste(
   paste: string,
   filename: string,
-  options?: { currentTitle?: string; sciTitleRejected?: boolean },
+  options?: { currentTitle?: string; currentVenue?: string; sciTitleRejected?: boolean },
 ): string {
   if (isDummySciSpacePaste(paste)) return "";
   const card = extractSciSpaceCardMeta(paste, filename);
