@@ -28,7 +28,7 @@ export function looksLikeCitationTitle(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
   if (/\d+,\s*\d+\s*[—\-–]\s*\d+\s*\(\d{4}\)/.test(t)) return true;
-  if (/^commun\.\s/i.test(t)) return true;
+  if (/^commun\.\s.*\d/i.test(t)) return true;
   if (/^[\s,]*\d+[—–-]\d+\s*\(\d{4}\)\s*$/.test(t)) return true;
   // 「, 9681-9702; doi:10.3390/...」のような書誌の断片
   if (/^[,;:.]/.test(t)) return true;
@@ -371,6 +371,65 @@ function isJunkVenueLine(s: string): boolean {
   return /^(null|undefined|none|n\/a|-)$/i.test(s.trim()) || looksLikeUnansweredSciSpaceResponse(s);
 }
 
+/** 年だけ（4桁西暦、(2023), [2023], 2023., 2023年, 2021-2022 等） */
+export function looksLikeYearOnly(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^[([{\s]*(?:18|19|20)\d{2}[)\]}\s.]*$/.test(t)) return true;
+  if (/^[([{\s]*(?:18|19|20)\d{2}\s*[-–—/]\s*(?:(?:18|19|20)?\d{2})[)\]}\s.]*$/.test(t)) return true;
+  if (/^(?:18|19|20)\d{2}年$/.test(t)) return true;
+  if (/^\d{4}$/.test(t)) return true;
+  return false;
+}
+
+/** 記事 URL・ドメイン名（例: journal.ntt.co.jp, http://www.mdpi.com/journal/sensors） */
+export function looksLikeUrlOrDomain(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^https?:\/\//i.test(t)) return true;
+  if (/\b(?:https?:\/\/|www\.)\S+/i.test(t)) return true;
+  if (/:\/\//.test(t)) return true;
+  // ドメイン名またはドメイン形式のパス（スペースを含まない）
+  if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)*(?:\.[a-z]{2,})(?::\d+)?(?:\/\S*)?$/i.test(t)) return true;
+  return false;
+}
+
+/** サイト文言（Open access to the Proceedings of the, Available online at 等） */
+export function looksLikeSiteBoilerplate(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^open\s+access\b/i.test(t)) return true;
+  if (/^proceedings\s+of\s+the\s*$/i.test(t)) return true;
+  if (/^available\s+(online|at)\b/i.test(t)) return true;
+  if (/^read\s+pdf\s+in\s+full\s+screen$/i.test(t)) return true;
+  if (/^download\s+pdf$/i.test(t)) return true;
+  return false;
+}
+
+/** 汎用語 Journal / journal 単体（大文字小文字問わず、The Journal 等も含む） */
+export function isGenericJournalAlone(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  return /^(?:the\s+)?journal\.?$/i.test(t);
+}
+
+/** 著者名・citekey・原稿/論文ID（例: 35_18C5-01, kan17yamagiwa, et al., +N More） */
+export function looksLikeAuthorOrPaperId(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  // BibTeX citekey (例: kan17yamagiwa)
+  if (/^[a-z]{2,}\d{2}[a-z0-9]+$/i.test(t)) return true;
+  // 論文/原稿番号・管理コード (例: 35_18C5-01, 18C5-01)
+  if (/^\d{1,4}[_-][0-9A-Za-z]+(?:[-_][0-9A-Za-z]+)*$/.test(t)) return true;
+  // 会議・論文識別コード (例: sec18-zhang_0)
+  if (/^[0-9A-Za-z]+[-_]\d{2,4}[-_][0-9A-Za-z_-]+$/i.test(t)) return true;
+  // 著者省略・著者リスト表記
+  if (/\bet\s+al\.?\b/i.test(t)) return true;
+  if (/(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i.test(t)) return true;
+  if (isFilesAuthorMoreLabel(t)) return true;
+  return false;
+}
+
 /** SciSpace 個別ページなどから誤って取れたタイトル */
 export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
   const t = title.trim();
@@ -397,6 +456,11 @@ export function venueLooksLikeBadSciSpaceCapture(venue: string): boolean {
   if (/^ISSN\s/i.test(v)) return true;
   if (looksLikeCitationTitle(v)) return true;
   if (looksLikePublisherOrPaywall(v)) return true;
+  if (looksLikeYearOnly(v)) return true;
+  if (looksLikeUrlOrDomain(v)) return true;
+  if (looksLikeSiteBoilerplate(v)) return true;
+  if (isGenericJournalAlone(v)) return true;
+  if (looksLikeAuthorOrPaperId(v)) return true;
   return false;
 }
 
@@ -457,21 +521,38 @@ export function reconcileMetaFromFilesPaste(
   return changed;
 }
 
-function pickVenue(lines: string[], filename: string, title: string): string {
+function pickVenue(
+  lines: string[],
+  filename: string,
+  title: string,
+  authors?: string,
+  yearAuthorLine?: string,
+): string {
   const skip = new Set([filename, title].filter(Boolean));
+  const stem = filename.replace(/\.pdf$/i, "").trim();
+  if (stem) skip.add(stem);
+  if (authors?.trim()) skip.add(authors.trim());
+  if (yearAuthorLine?.trim()) skip.add(yearAuthorLine.trim());
+
   const leftover: string[] = [];
   for (const s of lines) {
-    if (skip.has(s) || looksLikeSciSpaceNav(s) || parseYearAuthor(s)) continue;
+    if (skip.has(s) || lineNamesThisFile(s, filename) || titleLooksLikeFilename(s, filename)) continue;
+    if (looksLikeSciSpaceNav(s) || parseYearAuthor(s)) continue;
     if (/\.pdf$/i.test(s)) continue;
     if (/^(this paper|the paper|本研究|本論文)\b/i.test(s)) continue;
     if (isJunkVenueLine(s)) continue;
+    if (venueLooksLikeBadSciSpaceCapture(s)) continue;
+    if (authors && (authors === s || authors.includes(s) || s.includes(authors))) continue;
     if (s.length > 80) continue;
     if (isTldrBodyLine(s)) continue;
     if (VENUE_HINT.test(s) || looksLikeVenueLine(s)) return s;
+    if (/^[a-z]/.test(s) && !/^arxiv\b/i.test(s)) continue;
     if (looksLikeCitationTitle(s) && s.length > 60) continue;
     leftover.push(s);
   }
-  return leftover[0] ?? "";
+  const picked = leftover[0] ?? "";
+  if (venueLooksLikeBadSciSpaceCapture(picked)) return "";
+  return picked;
 }
 
 const TLDR_OPENER =
@@ -508,7 +589,9 @@ export function metadataPasteFromCard(
   ) {
     title = "";
   }
-  return [title, card.yearAuthorLine, card.venue]
+  const venue =
+    card.venue && !venueLooksLikeBadSciSpaceCapture(card.venue) ? card.venue.trim() : "";
+  return [title, card.yearAuthorLine, venue]
     .map((l) => l.trim())
     .filter(Boolean)
     .join("\n")
@@ -685,12 +768,13 @@ export function extractSciSpaceCardMeta(raw: string, filename: string): SciSpace
   const title = looksLikeUnansweredSciSpaceResponse(rawTitle) ? "" : rawTitle;
   const yaLine = lines.find((l) => parseYearAuthor(l)) ?? "";
   const ya = yaLine ? parseYearAuthor(yaLine) : null;
-  const venue = pickVenue(lines, filename, title);
+  const rawAuthors = ya?.authors ?? "";
+  const authors = looksLikeUnansweredSciSpaceResponse(rawAuthors) ? "" : rawAuthors;
+  const rawVenue = pickVenue(lines, filename, title, authors, yaLine);
+  const venue = venueLooksLikeBadSciSpaceCapture(rawVenue) ? "" : rawVenue;
   const rawTldr = pickAbstractSection(isolated) || pickTldr(isolated, lines, title);
   const tldr = looksLikeUnansweredSciSpaceResponse(rawTldr) ? "" : rawTldr;
   const doi = doiFromHrefOrText(isolated);
-  const rawAuthors = ya?.authors ?? "";
-  const authors = looksLikeUnansweredSciSpaceResponse(rawAuthors) ? "" : rawAuthors;
   const meta = {
     title,
     yearAuthorLine: authors ? yaLine : "",
