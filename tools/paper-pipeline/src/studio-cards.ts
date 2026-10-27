@@ -139,7 +139,7 @@ export function isSlideDeckCardText(text: string): boolean {
   if (!t) return false;
   if (/スライド資料を生成|スライドを生成中|Generating slide/i.test(t)) return false;
   if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/.test(t)) return false;
-  if (/chevron_forward/.test(t) && !/件のソース/.test(t)) return false;
+  if (/chevron_forward/.test(t)) return false;
 
   const kind = detectStudioCardKind(t);
   if (kind !== null) {

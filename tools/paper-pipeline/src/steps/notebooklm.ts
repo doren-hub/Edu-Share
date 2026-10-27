@@ -2566,6 +2566,12 @@ export async function runStudioParallel(
   opts: { outputReadyTimeoutMs?: number; kickoffConfirmMs?: number } = {},
 ): Promise<void> {
   await returnToStudioList(page);
+  if (!skipKickoff && firstUnstartedStudioStage(state, skipStudio)) {
+    const body = await notebookBody(page);
+    if (textHasZeroSources(body) || textHasEmptySourceList(body)) {
+      throw new Error("ソースが 0 件のため Studio 生成を開始できません");
+    }
+  }
   const outputsReady = await waitUntilStudioOutputsReady(page, opts.outputReadyTimeoutMs ?? 45_000);
   await logStudioCardSummaries(page);
   await unmarkStaleStudioStarts(page, state, skipKickoff);
