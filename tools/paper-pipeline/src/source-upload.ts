@@ -35,20 +35,23 @@ export async function setSourcePdf(
       await inputs.first().setInputFiles(pdfPath, { timeout: Math.max(1, searchUntil - Date.now()) });
       return "input";
     }
-    for (const name of UPLOAD_NAMES) {
-      const candidates = [root.getByRole("button", { name }), root.getByRole("link", { name }),
-        root.getByRole("menuitem", { name }), root.getByText(name)];
-      for (const candidatesOfKind of candidates) {
-        const count = await candidatesOfKind.count();
-        for (let i = 0; i < count; i++) {
-          const remaining = searchUntil - Date.now();
-          if (remaining <= 0) break;
-          const target = candidatesOfKind.nth(i);
-          if (!(await target.isVisible()) || !(await target.isEnabled())) continue;
-          const clickMs = Math.max(1, Math.min(options.clickTimeoutMs ?? 5_000, remaining));
-          await chooseSourceFile(page, target, pdfPath, clickMs, options.chooserTimeoutMs ?? 15_000);
-          return "chooser";
-        }
+    // Prefer every named control before text fallback, so help text cannot beat a later button.
+    const candidates = (["button", "link", "menuitem"] as const).flatMap(role =>
+      UPLOAD_NAMES.map(name => root.getByRole(role, { name })),
+    );
+    candidates.push(...UPLOAD_NAMES.map(name =>
+      root.locator("label, [onclick], [tabindex]").filter({ hasText: name }),
+    ));
+    for (const candidatesOfKind of candidates) {
+      const count = await candidatesOfKind.count();
+      for (let i = 0; i < count; i++) {
+        const remaining = searchUntil - Date.now();
+        if (remaining <= 0) break;
+        const target = candidatesOfKind.nth(i);
+        if (!(await target.isVisible()) || !(await target.isEnabled())) continue;
+        const clickMs = Math.max(1, Math.min(options.clickTimeoutMs ?? 5_000, remaining));
+        await chooseSourceFile(page, target, pdfPath, clickMs, options.chooserTimeoutMs ?? 15_000);
+        return "chooser";
       }
     }
     const remaining = searchUntil - Date.now();
