@@ -2229,15 +2229,17 @@ async function unmarkStaleStudioStarts(
     log("Studio 出力カードが長時間無いので開始記録を捨ててやり直します");
   }
   if (hasStudioStarted(state, "nlm-slides") && !isCompleted(state, "nlm-slides")) {
-    const stamps = page.getByText(STUDIO_RELATIVE_TIME);
-    const n = Math.min(await stamps.count().catch(() => 0), 16);
-    let hasSlideCard = false;
-    for (let i = 0; i < n; i++) {
-      const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
-      const text = await card.innerText({ timeout: 2_000 }).catch(() => "");
-      if (isSlideDeckCardText(text)) {
-        hasSlideCard = true;
-        break;
+    let hasSlideCard = await studioHasCardMatching(page, "slides");
+    if (!hasSlideCard) {
+      const stamps = page.getByText(STUDIO_RELATIVE_TIME);
+      const n = Math.min(await stamps.count().catch(() => 0), 16);
+      for (let i = 0; i < n; i++) {
+        const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
+        const text = await card.innerText({ timeout: 2_000 }).catch(() => "");
+        if (isSlideDeckCardText(text)) {
+          hasSlideCard = true;
+          break;
+        }
       }
     }
     if (!hasSlideCard) {
@@ -2397,7 +2399,7 @@ async function collectReadyStudio(
       } else if (await studioHasReadyCardMatching(page, "flashcards")) {
         log("既存の単語帳を開きます（再生成しません）");
         if (!(await openStudioCardMatching(page, "flashcards"))) {
-          await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /Flashcard/i, /開く/]);
+          await clickFirstByName(page, [/単語帳/, /フラッシュカード/, /単語カード/, /Flashcard/i, /開く/]);
         }
         await page.waitForTimeout(1500);
         await saveStudioArtifactCsv(page, dest, "flashcards");
@@ -2469,8 +2471,12 @@ async function runStudioParallel(
 
   if (want("nlm-slides") && !isCompleted(state, "nlm-slides")) {
     const slideCards = await studioCardTexts(page);
-    if (!shouldKickoffSlides(slideCards) || (await studioHasSlideDeckOutput(page))) {
-      if (!shouldKickoffSlides(slideCards)) {
+    if (
+      (await studioHasCardMatching(page, "slides")) ||
+      !shouldKickoffSlides(slideCards) ||
+      (await studioHasSlideDeckOutput(page))
+    ) {
+      if (!shouldKickoffSlides(slideCards) || (await studioHasCardMatching(page, "slides"))) {
         log("既存のスライドがあるので再生成しません");
       }
       markStudioStarted(state, "nlm-slides");
@@ -2525,7 +2531,7 @@ async function runStudioParallel(
     } else {
       await kick(
         "nlm-flashcards",
-        [/フラッシュ/, /フラッシュカード/, /単語帳/, /Flashcard/i, /Flash cards/i],
+        [/フラッシュ/, /フラッシュカード/, /単語帳/, /単語カード/, /Flashcard/i, /Flash cards/i],
         QUIZ_MS,
       );
     }
