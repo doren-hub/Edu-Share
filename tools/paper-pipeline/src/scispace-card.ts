@@ -316,8 +316,18 @@ export function stripTruncatedMore(text: string): string {
 
 /** SciSpace カードの "...+N More" は著者が省略されている */
 export function filesRowHasTruncatedAuthors(paste: string): boolean {
-  const authorParts = linesOf(normalizeFilesRowText(paste))
-    .map((line) => line.split(/\bTL;?DR\s*:?/i)[0]!.trim().match(YEAR_AUTHOR)?.[2])
+  const lines = linesOf(normalizeFilesRowText(paste));
+  const authorParts = lines
+    .map((line, index) => {
+      const part = line.split(/\bTL;?DR\s*:?/i)[0]!.trim().match(YEAR_AUTHOR)?.[2];
+      if (!part) return undefined;
+      // innerText may put a separate author chip on the next line. Do not
+      // cross a TL;DR boundary or skip intervening venue/body text.
+      const next = lines[index + 1] ?? "";
+      return !/\bTL;?DR\s*:?/i.test(line) && isFilesAuthorMoreLabel(next)
+        ? `${part} ${next}`
+        : part;
+    })
     .filter((part): part is string => Boolean(part));
   if (authorParts.some((part) => /Show\s*Less/i.test(part))) return false;
   return authorParts.some((part) => /(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i.test(part));
@@ -363,6 +373,13 @@ export function replaceYearAuthorLine(paste: string, yearAuthorLine: string): st
   const lines = paste.replace(/\r\n/g, "\n").split("\n");
   const idx = lines.findIndex((l) => Boolean(parseYearAuthor(l)) || filesRowHasTruncatedAuthors(l));
   if (idx >= 0) {
+    // The replacement contains the complete author list; discard only the
+    // immediately adjacent old author chip, preserving unrelated body chips.
+    let next = idx + 1;
+    while (next < lines.length && !lines[next]!.trim()) next++;
+    if (!/\bTL;?DR\s*:?/i.test(lines[idx]!) && isFilesAuthorMoreLabel(lines[next] ?? "")) {
+      lines.splice(next, 1);
+    }
     lines[idx] = line;
     return lines.join("\n");
   }
