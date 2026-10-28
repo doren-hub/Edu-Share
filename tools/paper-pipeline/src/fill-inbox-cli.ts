@@ -35,7 +35,7 @@ function help(): string {
   npm run fill-inbox -- --source "/path/to/papers"
   npm run fill-inbox -- --source "/path/to/papers" --count 3
 
-inbox または作業フォルダに同じ PDF 名があるものは処理済みとして飛ばします。
+inbox、作業フォルダ、または duplicates 配下に同じ PDF 名があるものは処理済みとして飛ばします。
 変更日が古い順に --count 件（省略時は 3）を inbox 直下へコピーします。元のファイルは残します。
 ソースは --source または PAPER_SOURCE_DIR。inbox と作業フォルダは .env の PAPER_INBOX_DIR / PAPER_WORK_DIR。
 `;

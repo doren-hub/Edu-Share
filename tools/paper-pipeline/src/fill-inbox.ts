@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import { listExistingWorkPapers, listInboxPdfs } from "./inbox.ts";
@@ -141,14 +141,68 @@ export function listLibraryPdfs(root: string): SourcePdf[] {
   return out;
 }
 
-/** inbox または作業フォルダに同じ PDF 名があるものを処理済みとみなす */
-export function processedPdfNames(inboxDir: string, workDir: string): Set<string> {
+/**
+ * duplicates/<残した論文>/<重複>/state.json の filename（無ければ重複フォルダ名）を処理済み名として集める
+ */
+export function listDuplicatePdfNames(duplicatesDir: string): Set<string> {
+  const names = new Set<string>();
+  let keptEntries: Dirent[];
+  try {
+    keptEntries = readdirSync(duplicatesDir, { withFileTypes: true });
+  } catch {
+    return names;
+  }
+  for (const kept of keptEntries) {
+    if (kept.name.startsWith(".")) continue;
+    if (!kept.isDirectory()) continue;
+    const keptPath = join(duplicatesDir, kept.name);
+    let dupEntries: Dirent[];
+    try {
+      dupEntries = readdirSync(keptPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const dup of dupEntries) {
+      if (dup.name.startsWith(".")) continue;
+      if (!dup.isDirectory()) continue;
+      const dupPath = join(keptPath, dup.name);
+      let filename = "";
+      const stateFile = join(dupPath, "state.json");
+      try {
+        if (existsSync(stateFile)) {
+          const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as { filename?: unknown };
+          if (typeof parsed?.filename === "string" && parsed.filename.trim()) {
+            filename = parsed.filename.trim();
+          }
+        }
+      } catch {
+        /* state.json が読めない・壊れているときはフォールバック */
+      }
+      const raw = filename || dup.name;
+      const normalized = normalizePdfFilename(raw);
+      if (normalized) {
+        names.add(normalized);
+      }
+    }
+  }
+  return names;
+}
+
+/** inbox または作業フォルダ、重複フォルダに同じ PDF 名があるものを処理済みとみなす */
+export function processedPdfNames(
+  inboxDir: string,
+  workDir: string,
+  duplicatesDir = join(workDir, "..", "duplicates"),
+): Set<string> {
   const names = new Set<string>();
   for (const item of listInboxPdfs(inboxDir, workDir)) {
     names.add(normalizePdfFilename(item.filename));
   }
   for (const paper of listExistingWorkPapers(workDir)) {
     if (paper.filename) names.add(normalizePdfFilename(paper.filename));
+  }
+  for (const name of listDuplicatePdfNames(duplicatesDir)) {
+    names.add(name);
   }
   return names;
 }

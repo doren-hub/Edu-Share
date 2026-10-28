@@ -41,6 +41,8 @@ npm run repair-meta -- --headed
 npm run fill-inbox -- --source "/path/to/papers" --count 3
 ```
 
+`npm run fill-inbox` は、ライブラリから未処理の論文 PDF を変更日が古い順に inbox 直下へコピーします（既定 3 件。元のファイルは残します）。inbox、作業フォルダ（`work/`）、および重複として退避したフォルダ（`work` の兄弟ディレクトリ `duplicates/*/*/` の `state.json` の `filename`、無ければフォルダ名）に同じ PDF 名があるものは処理済みとしてスキップします。
+
 初回やログイン切れのときは Chrome が開くので、Google（NotebookLM）、SciSpace、Edu Share にログインしてください。`--headless` では通常ウィンドウを出さず、ログインや追加確認のときだけ画面を出して、終わったらヘッドレスに戻します。同じプロファイルを画面付きと同時には開かないでください。
 
 ```bash
