@@ -41,7 +41,7 @@ flowchart LR
   N --> S[Supabase Auth / Postgres + pgvector]
   U -->|署名付き PUT：スライド・動画| R[Cloudflare R2]
   N -->|PDF・教材の保存と取得| R
-  R -->|PDF 本文抽出| N
+  R -->|PDF 取得・Next.js 側で本文抽出| N
   N -->|本文チャンクから問題生成・記述採点| L[Claude または Gemini]
   L -->|設問・採点結果| N
   N -->|任意：本文の埋め込み| O[OpenAI Embeddings]
