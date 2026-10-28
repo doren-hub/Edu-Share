@@ -52,6 +52,7 @@ import {
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
   isSlideDeckCardText,
+  hasSlideDeckInStudioText,
   isPresenterSlideFormatText,
   textLooksLikeGenerating,
   type VideoKickoffScan,
@@ -748,6 +749,7 @@ async function studioHasSlideDeckOutput(page: Page): Promise<boolean> {
     return true;
   }
   if (await hasReadyStudioArtifact(page, "slides")) return true;
+  if (hasSlideDeckInStudioText(body)) return true;
   if (
     isSlideReadyNotificationText(body) &&
     (await hasStudioArtifact(page, "slides")) &&

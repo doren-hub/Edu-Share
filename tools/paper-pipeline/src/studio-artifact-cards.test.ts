@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
+import { hasSlideDeckInStudioText, shouldKickoffSlides } from "./studio-cards.ts";
 import {
   hasBusyStudioArtifact,
   hasInProgressStudioArtifact,
@@ -30,6 +31,27 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
           <button class="artifact-more-button" onclick="document.body.dataset.opened='menu'">more_vert</button>
         </div>
       </artifact-library-item>`;
+    await t.test("Issue #137: unknown Studio markup distinguishes creation tiles from completed slides", async () => {
+      const tiles = `<h2>Studio</h2><button>tablet スライド資料 chevron_forward</button>
+        <button>subscriptions 動画解説 chevron_forward</button><button>quiz クイズ chevron_forward</button>`;
+      const slide = `<section class="future-output"><span>tablet</span><h3>クイズを使った学習</h3>
+        <p>1 件のソース · 2 分前</p><button>more_vert</button></section>`;
+      const quiz = `<section class="future-output">quiz スライド資料の理解 <p>1 件のソース · 2 分前</p><button>more_vert</button></section>`;
+      for (const [html, expected] of [
+        [tiles, false], [tiles + quiz, false], [tiles + slide, true], [tiles + quiz + slide, true],
+        [tiles + slide.replace("1 件のソース · 2 分前", "sync"), false],
+        ["<aside>tablet ソース 1 件のソース · 2 分前</aside>" + tiles, false],
+      ] as const) {
+        await page.setContent(html);
+        assert.equal((await studioArtifactCards(page)).length, 0);
+        const body = await page.locator("body").innerText();
+        assert.equal(hasSlideDeckInStudioText(body), expected, body);
+        assert.equal(shouldKickoffSlides([body]), !expected, body);
+        assert.equal(hasSlideDeckInStudioText(body.replace(/\s+/g, " ")), expected, body);
+      }
+      await page.setContent(tiles + slide.replace("2 分前", "2 分前 sync"));
+      assert.equal(hasSlideDeckInStudioText(await page.locator("body").innerText()), false);
+    });
     await t.test("arbitrary titles and misleading other-kind titles use the icon", async () => {
       await page.setContent(`<button>quiz クイズ</button><aside>copy 記憶カード 1 件のソース · 7 日前</aside>
         ${row("slide", "tablet", "クイズと暗記カードの作り方")}
