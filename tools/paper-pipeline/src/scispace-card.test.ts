@@ -1289,3 +1289,43 @@ test("Issue #143: 著者省略判定は年著者行だけを見る", () => {
   assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith +2 More\nTL;DR: Show Less"), true);
   assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith Show Less\nTL;DR: +2 More"), false);
 });
+
+
+test("Issue #145: 年著者行直後の独立した著者チップを検出する", () => {
+  for (const chip of ["+2 More", "...+4 More", "… + 3 more", " +1\u00a0More "]) {
+    for (const separator of ["\n", "\r\n", "\n\n"]) {
+      const row = ["paper.pdf", "A sufficiently long paper title", "2025 · Alice Smith, Bob Jones", chip, "arXiv"].join(separator);
+      assert.equal(filesRowHasTruncatedAuthors(row), true, row);
+      const filled = replaceYearAuthorLine(row, "2025 · Alice Smith, Bob Jones, Carol White");
+      assert.equal(filesRowHasTruncatedAuthors(filled), false, filled);
+      assert.doesNotMatch(filled, /\+\s*\d+\s*More/i);
+      assert.match(filled, /Carol White/);
+    }
+  }
+  assert.equal(filesRowHasTruncatedAuthors("2025⋅DOI⋅Alice Smith\n+2 More"), true);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith Show Less\n+2 More"), false);
+});
+
+test("Issue #145: 本文・掲載誌を挟むチップや単なる部分一致は著者省略にしない", () => {
+  for (const tail of [
+    "arXiv\n+2 More",
+    "TL;DR:\n+2 More",
+    "The paper compares methods.\n+2 More",
+    "PDF UPLOAD\n+2 More",
+    "next.pdf\n+2 More",
+    "+2 More methods",
+    "Text +2 More",
+  ]) {
+    const row = `2025 · Alice Smith\n${tail}`;
+    assert.equal(filesRowHasTruncatedAuthors(row), false, row);
+    assert.match(replaceYearAuthorLine(row, "2025 · Alice Smith, Bob Jones"), /\+2 More/, row);
+  }
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith TL;DR:\n+2 More"), false);
+  assert.equal(filesRowHasTruncatedAuthors("+2 More\n2025 · Alice Smith"), false);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith\n+2 More\nTL;DR: Show Less"), true);
+  const row = "2025 · Alice Smith\n+2 More\narXiv\nTL;DR:\n+3 More";
+  const filled = replaceYearAuthorLine(row, "2025 · Alice Smith, Bob Jones");
+  assert.equal(filesRowHasTruncatedAuthors(filled), false);
+  assert.doesNotMatch(filled, /\+2 More/);
+  assert.match(filled, /TL;DR:\n\+3 More/);
+});
