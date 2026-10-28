@@ -42,7 +42,7 @@ export function titleHasPdfContinuation(candidate: string, pdfText: string): boo
     // evidence of an unlabelled abstract; stop before explicit section headings.
     const context = [text, ...following].join(" ").split(/\b(?:abstract|keywords|introduction)\b/i)[0]!;
     if (/^on\s+the\s+basis\b/i.test(text) &&
-        /\b(?:we|i|this\s+(?:study|paper))\s+(?:present|propose|compare|evaluate|examine|discuss|investigate|show|aim|have|analy[sz]e)\b/i.test(context)) return false;
+        /\b(?:we|i|this\s+(?:study|paper))\s+(?:(?:present|propose|compare|evaluate|examine|investigate|show|aim|analy[sz]e)s?|discuss(?:es)?|has|have)\b/i.test(context)) return false;
     return !/^in\s+this\b/i.test(text) &&
       /^(?:(?:for|of|with|based|using|and|in|on)\b|(?:a\s+)?(?:tool|framework|approach|method|model|system)\s+(?:for|of|with|to)\b)/i.test(text) &&
       !/abstract|keywords|doi|@|\d|\b(?:department|university|institute|school|faculty|laboratory|centre|center|hospital|consortium|association)\b/i.test(text);

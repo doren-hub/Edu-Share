@@ -311,7 +311,12 @@ test("Issue #147: real unlabelled basis abstract remains usable across wrapping 
   const { basisAbstract: fixture } = await import("../fixtures/basis-context.ts");
   const { verifySciSpaceBibliography } = await import("./scispace.ts");
   const { usableEduShareTitle } = await import("./edushare.ts");
-  for (const opening of [fixture.opening, fixture.opening.toUpperCase(), fixture.opening.replace(", we", ",\nwe"), fixture.opening.replace("basis of", "basis\nof")]) {
+  const openings = [fixture.opening, fixture.opening.toUpperCase(), fixture.opening.replace(", we", ",\nwe"), fixture.opening.replace("basis of", "basis\nof")];
+  // Synthetic grammar variants supplement the real first-person opening.
+  for (const clause of ["this paper presents", "this study examines", "this paper shows", "this study aims", "this paper discusses", "this study has", "we discuss", "we have"]) {
+    openings.push(fixture.opening.replace("we propose", `${clause} a synthetic result.`));
+  }
+  for (const opening of openings) {
     for (const separator of ["\n", " "]) {
       for (const doi of ["", `\ndoi:${fixture.doi}`]) {
         for (const lookup of [async () => null, async () => { throw new Error("offline fixture"); }]) {
