@@ -151,6 +151,18 @@ export function isSlideDeckCardText(text: string): boolean {
   return /件のソース/.test(t) && STUDIO_RELATIVE_TIME.test(t);
 }
 
+/** Unknown DOM layouts: inspect individual icon-delimited outputs, never the entire Studio body as a card. */
+export function hasSlideDeckInStudioText(text: string): boolean {
+  const studio = /\bStudio\b/i.exec(text);
+  if (!studio) return false;
+  const body = text.slice(studio.index);
+  const blocks = body.split(/\b(?=tablet|quiz|copy|cards_star|flashcards|videocam|subscriptions|audio_spark|flowchart|stacked_bar_chart|format_list_bulleted|auto_tab_group|sticky_note|add_2|more_vert|chevron_forward|chevron_right)\b/i);
+  return blocks.some((block, index) => /^tablet\b/i.test(block) &&
+    !/\bsync\b/i.test(block) && !/\bsync\s*$/i.test(blocks[index - 1] ?? "") &&
+    /\d+\s*件のソース/.test(block) && STUDIO_RELATIVE_TIME.test(block) &&
+    isSlideDeckCardText(block));
+}
+
 /** カスタマイズの「プレゼンターのスライド」。詳細カードや両方を含む親は除外 */
 export function isPresenterSlideFormatText(text: string): boolean {
   const t = text.replace(/\s+/g, " ").trim();
@@ -242,7 +254,7 @@ export function shouldKickoffSlides(texts: string[]): boolean {
   if (nonViewer.some((t) => isSlideGenerationInProgress(t) || isSlideReadyNotificationText(t))) {
     return false;
   }
-  return !nonViewer.some((t) => isSlideDeckCardText(t));
+  return !nonViewer.some((t) => isSlideDeckCardText(t) || hasSlideDeckInStudioText(t));
 }
 
 export function formatVideoScan(scan: VideoKickoffScan): string {
