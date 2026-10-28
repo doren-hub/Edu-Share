@@ -72,6 +72,10 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
         [source + "<h2>Studio</h2>", false],
         ["<h2>Studio</h2>" + source, false],
         ["<h2>Studio</h2>" + slide + source, true],
+        [tiles.replace("Studio</h2>", "Studio <button>dock_to_left</button></h2>") + slide + source, true],
+        [source.replace("Studio research.pdf", "Studio dock_to_left") + tiles + slide, false],
+        [tiles + source.replace("ソース</h2>", "ソース <button>collapse_content</button></h2>"), false],
+        [tiles + chat.replace("チャット</h2>", "Chat <button>dock_to_right</button></h2>"), false],
       ] as const) {
         await page.setContent(html);
         assert.equal((await studioArtifactCards(page)).length, 0);

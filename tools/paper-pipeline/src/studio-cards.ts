@@ -151,14 +151,20 @@ export function isSlideDeckCardText(text: string): boolean {
   return /件のソース/.test(t) && STUDIO_RELATIVE_TIME.test(t);
 }
 
+const PANEL_HEADING_SUFFIX = String.raw`(?:[^\S\n]+(?:collapse_content|expand_content|dock_to_left|dock_to_right))*[^\S\n]*(?=\n|$)`;
+
+function panelHeadingPattern(names: string, flags = "i"): RegExp {
+  return new RegExp(String.raw`(?:^|\n)[^\S\n]*(?:${names})${PANEL_HEADING_SUFFIX}`, flags);
+}
+
 /** Text fallback needs line boundaries from innerText; flattened text has no reliable panel boundaries. */
 function studioPanelText(text: string): string {
-  const headings = [...text.matchAll(/(?:^|\n)[^\S\n]*Studio[^\S\n]*(?=\n|$)/gi)];
+  const headings = [...text.matchAll(panelHeadingPattern("Studio", "gi"))];
   // Multiple headings may include a source titled exactly "Studio". Do not guess.
   if (headings.length !== 1) return "";
   const heading = headings[0];
   const rest = text.slice(heading.index! + heading[0].length);
-  const end = rest.search(/(?:^|\n)[^\S\n]*(?:ソース|Sources|チャット|Chat)(?:[^\S\n]+(?:collapse_content|expand_content|dock_to_left|dock_to_right))*[^\S\n]*(?=\n|$)/i);
+  const end = rest.search(panelHeadingPattern("ソース|Sources|チャット|Chat"));
   return end < 0 ? rest : rest.slice(0, end);
 }
 
@@ -267,7 +273,7 @@ export function shouldKickoffSlides(texts: string[]): boolean {
   }
   return !nonViewer.some((t) => {
     // A notebook body must never pass the looser single-card predicate.
-    const panelText = /(?:^|\n)\s*(?:Studio|ソース|Sources|チャット|Chat)\s*(?=\n|$)/i.test(t);
+    const panelText = panelHeadingPattern("Studio|ソース|Sources|チャット|Chat").test(t);
     return panelText ? hasSlideDeckInStudioText(t) : isSlideDeckCardText(t);
   });
 }
