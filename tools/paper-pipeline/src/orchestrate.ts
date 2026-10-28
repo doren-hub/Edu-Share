@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { join } from "node:path";
+import {
+  filterDuplicateInboxPdfs,
+  loadExistingMatchTargets,
+  type MatchTarget,
+} from "./content-match.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts";
 import { PACKAGE_ROOT } from "./env.ts";
 import { addUnregisteredInboxPdfs, hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, type InboxPdf } from "./inbox.ts";
@@ -175,9 +180,17 @@ async function main(): Promise<void> {
 
   const repairMeta = argv.includes("--repair-meta");
   const retryGivenUp = argv.includes("--retry-given-up");
-  const items = repairMeta
+  const rawItems = repairMeta
     ? listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename)
     : listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
+
+  const matchTargets: MatchTarget[] = repairMeta
+    ? []
+    : await loadExistingMatchTargets(cfg.workDir, cfg.duplicatesDir);
+  const items = repairMeta
+    ? rawItems
+    : await filterDuplicateInboxPdfs(rawItems, matchTargets, cfg.holdDir);
+
   if (cfg.onlyFilename && items.length === 0) {
     log(
       repairMeta
@@ -214,9 +227,11 @@ async function main(): Promise<void> {
     log(`オーケストレータ: worker 対象を追加 → ${item.filename}`);
   });
   addItems(items);
-  const refreshInbox = () => {
+  const refreshInbox = async () => {
     if (repairMeta || cfg.onlyFilename) return 0;
-    return addItems(listInboxPdfs(cfg.inboxDir, cfg.workDir));
+    const current = listInboxPdfs(cfg.inboxDir, cfg.workDir);
+    const valid = await filterDuplicateInboxPdfs(current, matchTargets, cfg.holdDir);
+    return addItems(valid);
   };
 
   const processed: string[] = [];
@@ -224,12 +239,12 @@ async function main(): Promise<void> {
   const failed: string[] = [];
 
   while (true) {
-    refreshInbox();
+    await refreshInbox();
     const pause = await currentNotebookQuotaPause(cfg);
     const generationBlocked = pause != null;
     const pick = pickNextJob(jobs, Date.now(), { generationBlocked });
     if (pick.kind === "done") {
-      if (refreshInbox() > 0) continue;
+      if ((await refreshInbox()) > 0) continue;
       break;
     }
     if (pick.kind === "idle") {
