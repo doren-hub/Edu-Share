@@ -38,6 +38,8 @@ export function titleHasPdfContinuation(candidate: string, pdfText: string): boo
   if (key.length < 12) return false;
   const lines = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const continuation = (text: string) =>
+    // These sentence openings introduce an unlabelled abstract, not a subtitle.
+    !/^(?:in\s+this\b|on\s+the\s+basis\b)/i.test(text) &&
     /^(?:(?:for|of|with|based|using|and|in|on)\b|(?:a\s+)?(?:tool|framework|approach|method|model|system)\s+(?:for|of|with|to)\b)/i.test(text) &&
     !/abstract|keywords|doi|@|\d|\b(?:department|university|institute|school|faculty|laboratory|centre|center|hospital|consortium|association)\b/i.test(text);
   return lines.some((line, index) => {
