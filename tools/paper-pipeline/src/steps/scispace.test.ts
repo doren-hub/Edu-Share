@@ -234,3 +234,38 @@ test("complete title followed by affiliations or authors remains usable without 
     assert.equal(usableEduShareTitle(state), agrosTitle, next);
   }
 });
+
+
+test("Issue #140: complete title followed by an unlabelled abstract remains usable", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  for (const abstract of [
+    "In this study, we evaluate emulation techniques for agricultural robotics.",
+    "In this paper we present a robot emulation framework and evaluate its performance.",
+    "On the basis of field experiments, we compare several agricultural robot systems.",
+  ]) {
+    for (const separator of ["\n", " "]) {
+      for (const lookup of [async () => null, async () => { throw new Error("offline fixture"); }]) {
+        for (const doi of ["", `\ndoi:${agrosWork.doi}`]) {
+          const state = agrosState();
+          state.title = agrosTitle;
+          state.venue = "Agronomy";
+          state.doi = agrosWork.doi;
+          const pdf = `${agrosTitle}${separator}${abstract}\n${"Agricultural robotics emulation results. ".repeat(20)}${doi}`;
+          await verifySciSpaceBibliography(state, state.filename, pdf, lookup);
+          assert.equal(state.sciTitleRejected, false, abstract);
+          assert.equal(usableEduShareTitle(state), agrosTitle, abstract);
+          assert.equal(state.venue, "Agronomy");
+          assert.equal(state.doi, agrosWork.doi);
+        }
+      }
+    }
+  }
+});
+
+test("Issue #140: genuine prepositional title continuations still require verification", async () => {
+  const { titleHasPdfContinuation } = await import("../bibliography.ts");
+  for (const ending of ["In Agricultural Robotics", "On Field Emulation", "Tool for Agricultural Robotics"]) {
+    assert.equal(titleHasPdfContinuation(agrosShort, `${agrosShort}\n${ending}\nAbstract`), true);
+  }
+});
