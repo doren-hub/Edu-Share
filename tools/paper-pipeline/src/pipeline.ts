@@ -591,22 +591,24 @@ export async function processOnePaper(
     }
   }
 
-  const matchTargets = await loadExistingMatchTargets(cfg.workDir, cfg.duplicatesDir, item.paperDir);
-  let contentKey: PaperContentKey;
-  try {
-    contentKey = await extractPaperContentKeyFromPdf(item.absPath);
-  } catch {
-    contentKey = {};
-  }
-  const dupMatch = findContentDuplicateMatch(contentKey, matchTargets);
-  if (dupMatch.matched && dupMatch.target) {
-    const dest = movePdfToHold(item.absPath, cfg.holdDir);
-    log(
-      `同一論文が既に存在するため inbox から hold/ へ移動します: ${item.filename} → ${dest} (一致先: ${dupMatch.target.label}, 理由: ${dupMatch.reason})`,
-    );
-    state.skippedAlreadyUploaded = true;
-    saveState(state);
-    return "skipped";
+  if (state.completed.length === 0 && !state.eduShareTestId) {
+    const matchTargets = await loadExistingMatchTargets(cfg.workDir, cfg.duplicatesDir, item.paperDir);
+    let contentKey: PaperContentKey;
+    try {
+      contentKey = await extractPaperContentKeyFromPdf(item.absPath);
+    } catch {
+      contentKey = {};
+    }
+    const dupMatch = findContentDuplicateMatch(contentKey, matchTargets, item.stem);
+    if (dupMatch.matched && dupMatch.target) {
+      const dest = movePdfToHold(item.absPath, cfg.holdDir);
+      log(
+        `同一論文が既に存在するため inbox から hold/ へ移動します: ${item.filename} → ${dest} (一致先: ${dupMatch.target.label}, 理由: ${dupMatch.reason})`,
+      );
+      state.skippedAlreadyUploaded = true;
+      saveState(state);
+      return "skipped";
+    }
   }
 
   applyFromStage(state, cfg.fromStage && cfg.onlyFilename ? cfg.fromStage : null);

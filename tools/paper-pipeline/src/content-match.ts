@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { type InboxPdf } from "./inbox.ts";
 import { firstLine, log, warn } from "./log.ts";
 import { normalizeDoi, normalizeKey, titlesLikelySame, titleUsableForExistingMatch } from "./match.ts";
@@ -17,6 +17,7 @@ export type MatchTarget = {
   label: string;
   filename?: string;
   path?: string;
+  keptPaper?: string;
 };
 
 export type ContentMatchResult = {
@@ -29,7 +30,7 @@ export type ContentMatchResult = {
  * arXiv ID を正規化（小文字化、版番号 v1, v2 等は無視）
  * 新形式: 0709.2257, 2301.00123
  * 旧形式: physics/9905030, math.GT/0309136
- * 単独7桁: 9905030
+ * ファイル名または明示プレフィックス付きの単独7桁: 9905030v1.pdf -> 9905030
  */
 export function normalizeArxivId(raw: string): string {
   if (!raw) return "";
@@ -40,23 +41,36 @@ export function normalizeArxivId(raw: string): string {
   if (m?.[1]) {
     return m[1].toLowerCase();
   }
-  const m7 = s.match(/\b(\d{7})(?:v\d+)?(?:\.pdf)?\b/i);
-  if (m7?.[1]) {
-    return m7[1].toLowerCase();
+  // ファイル名または明示的な arXiv プレフィックス付きの 7 桁のみ許可（無関係な 7 桁数字の誤認を防止）
+  const mFilename = s.match(/^(?:arxiv[:\-_])?(\d{7})(?:v\d+)?(?:\.pdf)?$/i);
+  if (mFilename?.[1]) {
+    return mFilename[1].toLowerCase();
   }
   return "";
 }
 
 /**
  * arXiv ID の一致判定（版番号無視）
- * physics/9905030 と 9905030 の突き合わせも許容
+ * 両方にカテゴリがある場合: カテゴリも含め一致（physics/9905030 と hep-th/9905030 は不一致）
+ * 片方が 7 桁のみの場合: 7 桁の ID が一致すれば許容
  */
 export function arxivIdsMatch(a: string, b: string): boolean {
   if (!a || !b) return false;
   const na = a.toLowerCase();
   const nb = b.toLowerCase();
   if (na === nb) return true;
-  if (na.endsWith(`/${nb}`) || nb.endsWith(`/${na}`)) return true;
+
+  const aHasCat = na.includes("/");
+  const bHasCat = nb.includes("/");
+  if (aHasCat && bHasCat) {
+    return false;
+  }
+
+  const idA = na.split("/").pop();
+  const idB = nb.split("/").pop();
+  if (idA && idB && idA === idB && /^\d{7}$/.test(idA)) {
+    return true;
+  }
   return false;
 }
 
@@ -233,7 +247,7 @@ export async function extractPaperContentKeyFromPdf(
 
     if (parsedFirstPage.author) {
       key.firstAuthor = parsedFirstPage.author;
-    } else if (infoAuthor && !/^unknown|user|admin$/i.test(infoAuthor)) {
+    } else if (infoAuthor && !/^(?:unknown|user|admin)$/i.test(infoAuthor)) {
       key.firstAuthor = infoAuthor;
     }
 
@@ -349,16 +363,21 @@ export function matchPaperContent(
 
 /**
  * 照合先一覧から一致する論文を探す
+ * candidateStem が渡された場合、自身を正本とする duplicates 配下（target.keptPaper === candidateStem）は照合から除外する
  */
 export function findContentDuplicateMatch(
   candidateKey: PaperContentKey,
   targets: readonly MatchTarget[],
+  candidateStem?: string,
 ): ContentMatchResult {
   if (!candidateKey.doi && !candidateKey.arxivId && (!candidateKey.title || !candidateKey.firstAuthor)) {
     return { matched: false };
   }
 
   for (const target of targets) {
+    if (candidateStem && target.keptPaper && target.keptPaper === candidateStem) {
+      continue;
+    }
     const res = matchPaperContent(candidateKey, target.key);
     if (res.matched) {
       return {
@@ -373,20 +392,18 @@ export function findContentDuplicateMatch(
 }
 
 /**
- * 一致した PDF を hold/ フォルダへ移動
+ * 一致した PDF を hold/ フォルダへ移動（同名があっても上書き・削除せず連番を付ける）
  */
 export function movePdfToHold(inboxPdfPath: string, holdDir: string): string {
   mkdirSync(holdDir, { recursive: true });
-  const dest = join(holdDir, basename(inboxPdfPath));
-  if (existsSync(dest)) {
-    if (inboxPdfPath !== dest && existsSync(inboxPdfPath)) {
-      try {
-        unlinkSync(inboxPdfPath);
-      } catch {
-        /* 入力側が残っても続行 */
-      }
-    }
-    return dest;
+  const originalName = basename(inboxPdfPath);
+  const ext = extname(originalName);
+  const stem = ext ? originalName.slice(0, -ext.length) : originalName;
+  let dest = join(holdDir, originalName);
+  let counter = 2;
+  while (existsSync(dest)) {
+    dest = join(holdDir, `${stem} (${counter})${ext}`);
+    counter++;
   }
   try {
     renameSync(inboxPdfPath, dest);
@@ -429,21 +446,6 @@ export async function loadExistingMatchTargets(
     });
     const state = loadState(paperDir, fallback);
     const key = extractPaperContentKeyFromState(state);
-    if (!key.doi && !key.arxivId && (!key.title || !key.firstAuthor)) {
-      try {
-        const files = readdirSync(paperDir);
-        const pdfFile = files.find((f) => f.toLowerCase().endsWith(".pdf") && !f.startsWith("."));
-        if (pdfFile) {
-          const pdfKey = await extractPaperContentKeyFromPdf(join(paperDir, pdfFile));
-          if (pdfKey.doi) key.doi = pdfKey.doi;
-          if (pdfKey.arxivId) key.arxivId = pdfKey.arxivId;
-          if (pdfKey.title && !key.title) key.title = pdfKey.title;
-          if (pdfKey.firstAuthor && !key.firstAuthor) key.firstAuthor = pdfKey.firstAuthor;
-        }
-      } catch {
-        /* ignore */
-      }
-    }
     const label = `work/${name}`;
     if (!seenLabels.has(label)) {
       seenLabels.add(label);
@@ -481,21 +483,6 @@ export async function loadExistingMatchTargets(
         });
         const state = loadState(dupPath, fallback);
         const key = extractPaperContentKeyFromState(state);
-        if (!key.doi && !key.arxivId && (!key.title || !key.firstAuthor)) {
-          try {
-            const files = readdirSync(dupPath);
-            const pdfFile = files.find((f) => f.toLowerCase().endsWith(".pdf") && !f.startsWith("."));
-            if (pdfFile) {
-              const pdfKey = await extractPaperContentKeyFromPdf(join(dupPath, pdfFile));
-              if (pdfKey.doi) key.doi = pdfKey.doi;
-              if (pdfKey.arxivId) key.arxivId = pdfKey.arxivId;
-              if (pdfKey.title && !key.title) key.title = pdfKey.title;
-              if (pdfKey.firstAuthor && !key.firstAuthor) key.firstAuthor = pdfKey.firstAuthor;
-            }
-          } catch {
-            /* ignore */
-          }
-        }
         const label = `duplicates/${kept}/${dup}`;
         if (!seenLabels.has(label)) {
           seenLabels.add(label);
@@ -504,6 +491,7 @@ export async function loadExistingMatchTargets(
             label,
             filename: state.filename || `${dup}.pdf`,
             path: dupPath,
+            keptPaper: kept,
           });
         }
       }
@@ -517,6 +505,8 @@ export async function loadExistingMatchTargets(
 
 /**
  * inbox の PDF リストから同一論文を検出し、hold/ へ移動して除外
+ * 既に作業中の論文（completed がある、または eduShareTestId がある）や
+ * 自分自身の作業フォルダ・自分の duplicates は照合から外す
  */
 export async function filterDuplicateInboxPdfs(
   items: readonly InboxPdf[],
@@ -529,13 +519,33 @@ export async function filterDuplicateInboxPdfs(
   const kept: InboxPdf[] = [];
   for (const item of items) {
     if (!existsSync(item.absPath)) continue;
+
+    // 既に作業開始済みの論文は除外対象にしない
+    const state = loadState(
+      item.paperDir,
+      emptyState({
+        filename: item.filename,
+        inboxPdfPath: item.absPath,
+        paperDir: item.paperDir,
+      }),
+    );
+    if (state.completed.length > 0 || state.eduShareTestId) {
+      kept.push(item);
+      continue;
+    }
+
+    // 自分自身の work フォルダおよび自分を正本とする duplicates は除外して照合
+    const relevantTargets = targets.filter(
+      (t) => t.path !== item.paperDir && (!t.keptPaper || t.keptPaper !== item.stem),
+    );
+
     let key: PaperContentKey;
     try {
       key = await deps.extractKey(item.absPath);
     } catch {
       key = {};
     }
-    const match = findContentDuplicateMatch(key, targets);
+    const match = findContentDuplicateMatch(key, relevantTargets, item.stem);
     if (match.matched && match.target) {
       const dest = movePdfToHold(item.absPath, holdDir);
       log(
