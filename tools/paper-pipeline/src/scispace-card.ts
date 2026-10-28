@@ -316,9 +316,11 @@ export function stripTruncatedMore(text: string): string {
 
 /** SciSpace カードの "...+N More" は著者が省略されている */
 export function filesRowHasTruncatedAuthors(paste: string): boolean {
-  const t = paste.replace(/\s+/g, " ");
-  if (/Show\s*Less/i.test(t)) return false;
-  return /(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i.test(t);
+  const authorParts = linesOf(normalizeFilesRowText(paste))
+    .map((line) => line.split(/\bTL;?DR\s*:?/i)[0]!.trim().match(YEAR_AUTHOR)?.[2])
+    .filter((part): part is string => Boolean(part));
+  if (authorParts.some((part) => /Show\s*Less/i.test(part))) return false;
+  return authorParts.some((part) => /(?:\.{2,3}|\u2026)?\s*\+\s*\d+\s*More\b/i.test(part));
 }
 
 /** Files の "+N More" チップそのもの。年著者セル全体ではない */
