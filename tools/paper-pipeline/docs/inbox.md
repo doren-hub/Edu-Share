@@ -89,7 +89,7 @@ npm run fill-inbox -- --source "/path/to/papers"
 npm run fill-inbox -- --source "/path/to/papers" --count 3
 ```
 
-inbox または作業フォルダに同じ PDF 名があるものは処理済みとして飛ばします。ソースは `PAPER_SOURCE_DIR` でも指定できます。書類フォルダをプロセスから読めないときは、Finder 経由で一覧とコピーをします。
+inbox、作業フォルダ、または重複フォルダ（work の兄弟ディレクトリ duplicates/*/*/）に同じ PDF 名があるものは処理済みとして飛ばします。ソースは `PAPER_SOURCE_DIR` でも指定できます。書類フォルダをプロセスから読めないときは、Finder 経由で一覧とコピーをします。
 
 ## 6. 終わりの見分け
 
