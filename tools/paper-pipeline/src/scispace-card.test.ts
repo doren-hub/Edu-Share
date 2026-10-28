@@ -1276,3 +1276,16 @@ test("Issue #132: extractSciSpaceCardMeta は card.authors に Show Less も +N 
   const metaOnlyMore = extractSciSpaceCardMeta(rowOnlyMore, "2505.06120v1.pdf");
   assert.equal(metaOnlyMore.authors, "");
 });
+
+
+test("Issue #143: 著者省略判定は年著者行だけを見る", () => {
+  for (const body of ["The paper compares +2 more methods.", "TL;DR: +2 More", "A title +2 More"]) {
+    assert.equal(filesRowHasTruncatedAuthors(`paper.pdf\n${body}\n2025 · Alice Smith\n${body}`), false);
+  }
+  assert.equal(filesRowHasTruncatedAuthors("+2 More"), false);
+  assert.equal(filesRowHasTruncatedAuthors("paper.pdf Title 2025 · Alice Smith +2 More arXiv The paper compares methods."), true);
+  assert.equal(filesRowHasTruncatedAuthors("paper.pdf Title 2025 · Alice Smith arXiv The paper compares +2 more methods."), false);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith TL;DR: +2 More"), false);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith +2 More\nTL;DR: Show Less"), true);
+  assert.equal(filesRowHasTruncatedAuthors("2025 · Alice Smith Show Less\nTL;DR: +2 More"), false);
+});
