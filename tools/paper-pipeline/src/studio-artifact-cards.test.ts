@@ -47,10 +47,43 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
         const body = await page.locator("body").innerText();
         assert.equal(hasSlideDeckInStudioText(body), expected, body);
         assert.equal(shouldKickoffSlides([body]), !expected, body);
-        assert.equal(hasSlideDeckInStudioText(body.replace(/\s+/g, " ")), expected, body);
+        // Flattening destroys heading boundaries; fail closed rather than scanning sources.
+        assert.equal(hasSlideDeckInStudioText(body.replace(/\s+/g, " ")), false, body);
       }
       await page.setContent(tiles + slide.replace("2 分前", "2 分前 sync"));
       assert.equal(hasSlideDeckInStudioText(await page.locator("body").innerText()), false);
+    });
+    await t.test("Issue #149: source names and reordered panels cannot leak into Studio fallback", async () => {
+      const tiles = `<h2>Studio</h2><button>tablet スライド資料 chevron_forward</button>`;
+      const source = `<h2>ソース</h2><aside>Studio research.pdf
+        <div>tablet ソースの表示</div><p>1 件のソース · 2 分前</p></aside>`;
+      const chat = `<h2>チャット</h2><p>tablet 回答 1 件のソース · 2 分前</p>`;
+      const slide = `<section><div>tablet</div><h3>完成スライド</h3>
+        <p>1 件のソース · 2 分前</p><button>more_vert</button></section>`;
+      for (const [html, expected] of [
+        [source + tiles, false], [tiles + source, false],
+        [tiles + chat + source, false], [source + chat + tiles, false],
+        [source + tiles + slide + chat, true], [tiles + slide + source + chat, true],
+        [chat + tiles + slide + source, true],
+        [source.replace("Studio research.pdf", "Studio") + tiles, false],
+        [source.replace("Studio research.pdf", "Studio") + tiles + slide, false],
+        [source.replace("ソース", "Sources") + tiles + slide + chat.replace("チャット", "Chat"), true],
+        [tiles + source.replace("ソース", "Sources"), false],
+        [source + "<h2>Studio</h2>", false],
+        ["<h2>Studio</h2>" + source, false],
+        ["<h2>Studio</h2>" + slide + source, true],
+        [tiles.replace("Studio</h2>", "Studio <button>dock_to_left</button></h2>") + slide + source, true],
+        [source.replace("Studio research.pdf", "Studio dock_to_left") + tiles + slide, false],
+        [tiles + source.replace("ソース</h2>", "ソース <button>collapse_content</button></h2>"), false],
+        [tiles + chat.replace("チャット</h2>", "Chat <button>dock_to_right</button></h2>"), false],
+      ] as const) {
+        await page.setContent(html);
+        assert.equal((await studioArtifactCards(page)).length, 0);
+        const body = await page.locator("body").innerText();
+        assert.equal(hasSlideDeckInStudioText(body), expected, body);
+        assert.equal(shouldKickoffSlides([body]), !expected, body);
+        assert.equal(hasSlideDeckInStudioText(body.replace(/\s+/g, " ")), false, body);
+      }
     });
     await t.test("Issue #135: the leading icon wins over later control icons", async () => {
       for (const [leading, later, expected] of [

@@ -1309,7 +1309,8 @@ async function studioCardTexts(page: Page): Promise<string[]> {
     add(await durations.nth(i).innerText({ timeout: 1_000 }).catch(() => ""));
   }
   const body = await notebookBody(page);
-  if (!isStudioArtifactViewerText(body)) add(body);
+  // Bypass add's whitespace normalization to preserve panel boundaries for the fallback.
+  if (!isStudioArtifactViewerText(body) && body.trim()) rows.push(body);
   return rows;
 }
 

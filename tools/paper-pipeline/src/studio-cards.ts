@@ -151,11 +151,27 @@ export function isSlideDeckCardText(text: string): boolean {
   return /件のソース/.test(t) && STUDIO_RELATIVE_TIME.test(t);
 }
 
-/** Unknown DOM layouts: inspect individual icon-delimited outputs, never the entire Studio body as a card. */
+const PANEL_HEADING_SUFFIX = String.raw`(?:[^\S\n]+(?:collapse_content|expand_content|dock_to_left|dock_to_right))*[^\S\n]*(?=\n|$)`;
+
+function panelHeadingPattern(names: string, flags = "i"): RegExp {
+  return new RegExp(String.raw`(?:^|\n)[^\S\n]*(?:${names})${PANEL_HEADING_SUFFIX}`, flags);
+}
+
+/** Text fallback needs line boundaries from innerText; flattened text has no reliable panel boundaries. */
+function studioPanelText(text: string): string {
+  const headings = [...text.matchAll(panelHeadingPattern("Studio", "gi"))];
+  // Multiple headings may include a source titled exactly "Studio". Do not guess.
+  if (headings.length !== 1) return "";
+  const heading = headings[0];
+  const rest = text.slice(heading.index! + heading[0].length);
+  const end = rest.search(panelHeadingPattern("ソース|Sources|チャット|Chat"));
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+/** Unknown DOM layouts: inspect individual outputs only inside the bounded Studio panel. */
 export function hasSlideDeckInStudioText(text: string): boolean {
-  const studio = /\bStudio\b/i.exec(text);
-  if (!studio) return false;
-  const body = text.slice(studio.index);
+  const body = studioPanelText(text);
+  if (!body) return false;
   const blocks = body.split(/\b(?=tablet|quiz|copy|cards_star|flashcards|videocam|subscriptions|audio_spark|flowchart|stacked_bar_chart|format_list_bulleted|auto_tab_group|sticky_note|add_2|more_vert|chevron_forward|chevron_right)\b/i);
   return blocks.some((block, index) => /^tablet\b/i.test(block) &&
     !/\bsync\b/i.test(block) && !/\bsync\s*$/i.test(blocks[index - 1] ?? "") &&
@@ -248,13 +264,18 @@ export function isVideoGenerationInProgress(text: string): boolean {
 
 /** 既存スライドや生成中・完了通知があれば、もう一枚作らない。ビューア表示中も未生成扱いしない */
 export function shouldKickoffSlides(texts: string[]): boolean {
-  const nonEmpty = texts.map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
+  // Keep innerText line boundaries for the whole-panel fallback below.
+  const nonEmpty = texts.map((t) => t.trim()).filter(Boolean);
   const nonViewer = nonEmpty.filter((t) => !isStudioArtifactViewerText(t));
   if (nonViewer.length === 0 && nonEmpty.length > 0) return false;
   if (nonViewer.some((t) => isSlideGenerationInProgress(t) || isSlideReadyNotificationText(t))) {
     return false;
   }
-  return !nonViewer.some((t) => isSlideDeckCardText(t) || hasSlideDeckInStudioText(t));
+  return !nonViewer.some((t) => {
+    // A notebook body must never pass the looser single-card predicate.
+    const panelText = panelHeadingPattern("Studio|ソース|Sources|チャット|Chat").test(t);
+    return panelText ? hasSlideDeckInStudioText(t) : isSlideDeckCardText(t);
+  });
 }
 
 export function formatVideoScan(scan: VideoKickoffScan): string {
