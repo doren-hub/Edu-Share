@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; connect-src 'none'">
+<title>Edu Share — 架空データの静的デモ</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f4f5;color:#18181b;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif}header{background:#fff;border-bottom:1px solid #e4e4e7;padding:22px 38px;display:flex;justify-content:space-between;align-items:center}header strong{font-size:23px}header span,.muted{color:#71717a;font-size:13px}main{padding:30px 38px 38px}h1{font-size:25px;margin:0 0 6px}h2{font-size:20px;margin:0 0 6px}h3{font-size:15px;margin:0 0 14px}p{margin:8px 0}.intro{margin-bottom:25px;color:#52525b}.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px}.step{color:#71717a;font-size:12px;letter-spacing:2px;margin-bottom:8px}.card{background:white;border:1px solid #e4e4e7;border-radius:16px;padding:22px;margin-top:18px}.badge{background:#f4f4f5;padding:4px 10px;border-radius:20px;font-size:12px}.option{border:1px solid #e4e4e7;border-radius:8px;padding:9px 12px;margin:9px 0;font-size:14px}.selected{border-color:#52525b;background:#f4f4f5}.answer{border:1px solid #d4d4d8;border-radius:8px;padding:12px;color:#52525b;font-size:14px}.button{background:#18181b;color:white;text-align:center;border-radius:8px;padding:10px;margin-top:20px;font-size:14px}.pdf{border:1px solid #d4d4d8;padding:25px 20px;min-height:300px;box-shadow:0 3px 10px #00000008;font-size:14px}.pdf h3{text-align:center;font-size:17px}.pdf p{line-height:2.2}mark{background:#fde68a;padding:3px 0}.quote{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;font-size:14px}.scores{display:flex;gap:8px;margin-top:20px}.score{flex:1;background:#fff;border:1px solid #e4e4e7;border-radius:12px;padding:12px}.score b{display:block;font-size:27px}.ok{color:#166534;font-size:14px}footer{margin-top:26px;color:#71717a;font-size:12px}@media(max-width:850px){.grid{grid-template-columns:1fr}}
+</style>
+<header><strong>Edu Share</strong><span>説明用デモ / 架空データ / 外部通信なし</span></header>
+<main>
+<h1>読む → 解く → 出典に戻る</h1>
+<p class="intro">架空教材「学習と休憩のメモ」で見る、受験から振り返りまでの流れ</p>
+<div class="grid">
+<section><div class="step">01 / ANSWER</div><h2>テスト</h2><p class="muted">選択式と記述式で理解を確認</p>
+<div class="card"><h3>問1 <span class="badge">選択式</span></h3><p>教材で勧めている学習方法は？</p><div class="option">○ 休憩を取らずに学ぶ</div><div class="option selected">● 短い休憩を挟んで学ぶ</div><div class="option">○ 復習を行わない</div></div>
+<div class="card"><h3>問2 <span class="badge">記述式</span></h3><p>休憩を挟む目的を説明してください。</p><div class="answer">集中を保ちながら学習を続けるため。</div></div><div class="button">提出して採点（表示例）</div></section>
+<section><div class="step">02 / SOURCE</div><h2>教材 PDF</h2><p class="muted">出題根拠をハイライトで確認</p><div class="card"><div class="pdf"><h3>学習と休憩のメモ</h3><p class="muted">デモのために作成した架空の教材</p><p>学習の進め方を考えます。<br><mark>短い休憩を挟むことで、<br>集中を保ちながら学べます。</mark><br>学習後は自分の言葉で説明し、<br>理解できた点を確認します。</p><p class="muted" style="text-align:center;margin-top:32px">1</p></div><p class="muted">根拠のおおよその PDF 位置：p.1</p></div></section>
+<section><div class="step">03 / REVIEW</div><h2>採点結果</h2><p class="muted">架空の回答・スコアの表示例</p><div class="scores"><div class="score"><span class="muted">総合</span><b>90</b></div><div class="score"><span class="muted">選択式</span><b>100</b></div><div class="score"><span class="muted">記述式</span><b>80</b></div></div><div class="card"><h3>問題と解答</h3><p class="ok">問1：正解</p><p class="muted">出題根拠（元文）</p><div class="quote">短い休憩を挟むことで、集中を保ちながら学べます。</div><p class="muted">p.1</p><hr style="border:0;border-top:1px solid #e4e4e7;margin:20px 0"><h3>問2：記述へのフィードバック</h3><p style="font-size:14px">目的を説明できています。学習後の確認方法にも触れると、理解がより明確になります。</p></div></section>
+</div><footer>静的な画面再現のスクリーンショット用。実サービスの画面キャプチャではありません。実在の論文・個人情報・受験履歴・API キーは含みません。</footer>
+</main>
+</html>
