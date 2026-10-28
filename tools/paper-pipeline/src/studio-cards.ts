@@ -52,7 +52,7 @@ export function detectStudioCardKind(text: string): StudioCardKind {
     if (kind !== null) return kind;
   }
 
-  if (isExplainerVideoCardText(t) || /\b(動画解説|Video overview|ビデオ概要)\b/i.test(t)) {
+  if (isExplainerVideoCardText(t) || /(?:動画解説|ビデオ概要|\bVideo overview\b)/i.test(t)) {
     return "video";
   }
   if (/クイズ|\bQuiz\b/i.test(t)) {

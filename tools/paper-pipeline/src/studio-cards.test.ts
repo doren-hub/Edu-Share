@@ -308,3 +308,12 @@ test("Issue #129: Material アイコン名による種類判定と未読付き�
   assert.equal(isSlideDeckCardText("quiz クイズ"), false);
   assert.equal(isSlideDeckCardText("subscriptions 動画解説 chevron_forward"), false);
 });
+
+
+test("Issue #135: iconless Japanese video keywords do not need ASCII word boundaries", () => {
+  for (const text of ["動画解説", "ビデオ概要", "新しい動画解説です", "ビデオ概要：研究紹介", "Video overview", "A Video overview of the study"]) {
+    assert.equal(detectStudioCardKind(text), "video", text);
+  }
+  assert.equal(detectStudioCardKind("Video overviewing"), null);
+  assert.equal(detectStudioCardKind("tablet 動画解説を作る方法"), "slides");
+});
