@@ -188,11 +188,29 @@ export function listDuplicatePdfNames(duplicatesDir: string): Set<string> {
   return names;
 }
 
-/** inbox または作業フォルダ、重複フォルダに同じ PDF 名があるものを処理済みとみなす */
+/** hold/ に退避した PDF 名を処理済み名として集める */
+export function listHoldPdfNames(holdDir: string): Set<string> {
+  const names = new Set<string>();
+  try {
+    const entries = readdirSync(holdDir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (ent.name.startsWith(".")) continue;
+      if (!ent.name.toLowerCase().endsWith(".pdf")) continue;
+      const normalized = normalizePdfFilename(ent.name);
+      if (normalized) names.add(normalized);
+    }
+  } catch {
+    /* hold ディレクトリが無いときは無視 */
+  }
+  return names;
+}
+
+/** inbox または作業フォルダ、重複フォルダ、hold フォルダに同じ PDF 名があるものを処理済みとみなす */
 export function processedPdfNames(
   inboxDir: string,
   workDir: string,
   duplicatesDir = join(workDir, "..", "duplicates"),
+  holdDir = join(inboxDir, "..", "hold"),
 ): Set<string> {
   const names = new Set<string>();
   for (const item of listInboxPdfs(inboxDir, workDir)) {
@@ -202,6 +220,9 @@ export function processedPdfNames(
     if (paper.filename) names.add(normalizePdfFilename(paper.filename));
   }
   for (const name of listDuplicatePdfNames(duplicatesDir)) {
+    names.add(name);
+  }
+  for (const name of listHoldPdfNames(holdDir)) {
     names.add(name);
   }
   return names;

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { PACKAGE_ROOT, loadDotEnv, resolvePathMaybe } from "./env.ts";
 import {
   DEFAULT_SHORT_STOP_PERCENT,
@@ -16,6 +17,8 @@ import {
 export type AppConfig = {
   inboxDir: string;
   workDir: string;
+  holdDir: string;
+  duplicatesDir: string;
   eduShareBaseUrl: string;
   scispaceFolderUrl: string;
   notebooklmUrl: string;
@@ -43,6 +46,8 @@ export type AppConfig = {
 export type CliOverrides = {
   inbox?: string;
   work?: string;
+  hold?: string;
+  duplicates?: string;
   stopOnError?: boolean;
   headed?: boolean;
   onlyFilename?: string;
@@ -66,6 +71,8 @@ export function parseArgv(argv: string[]): CliOverrides {
     const next = () => argv[++i] ?? "";
     if (a === "--inbox") out.inbox = next();
     else if (a === "--work") out.work = next();
+    else if (a === "--hold") out.hold = next();
+    else if (a === "--duplicates") out.duplicates = next();
     else if (a === "--only") out.onlyFilename = next();
     else if (a === "--from") out.fromStage = next();
     else if (a === "--stop-on-error") out.stopOnError = true;
@@ -146,6 +153,14 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
   return {
     inboxDir: resolvePathMaybe(inbox.trim(), cwd),
     workDir: resolvePathMaybe(work.trim(), cwd),
+    holdDir: resolvePathMaybe(
+      (overrides.hold || process.env.PAPER_HOLD_DIR || join(inbox.trim(), "..", "hold")).trim(),
+      cwd,
+    ),
+    duplicatesDir: resolvePathMaybe(
+      (overrides.duplicates || process.env.PAPER_DUPLICATES_DIR || join(work.trim(), "..", "duplicates")).trim(),
+      cwd,
+    ),
     eduShareBaseUrl: stripTrailingSlash(
       (process.env.EDU_SHARE_BASE_URL ?? "http://localhost:3000").trim(),
     ),

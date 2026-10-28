@@ -2,6 +2,13 @@ import { readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import type { AppConfig } from "./config.ts";
+import {
+  extractPaperContentKeyFromPdf,
+  findContentDuplicateMatch,
+  loadExistingMatchTargets,
+  movePdfToHold,
+  type PaperContentKey,
+} from "./content-match.ts";
 import { assertPageAlive, isTargetClosedError, isTargetClosedMessage, recoverStuckPage } from "./browser.ts";
 import {
   ensurePaperDir,
@@ -582,6 +589,24 @@ export async function processOnePaper(
       saveState(state);
       return "skipped";
     }
+  }
+
+  const matchTargets = await loadExistingMatchTargets(cfg.workDir, cfg.duplicatesDir, item.paperDir);
+  let contentKey: PaperContentKey;
+  try {
+    contentKey = await extractPaperContentKeyFromPdf(item.absPath);
+  } catch {
+    contentKey = {};
+  }
+  const dupMatch = findContentDuplicateMatch(contentKey, matchTargets);
+  if (dupMatch.matched && dupMatch.target) {
+    const dest = movePdfToHold(item.absPath, cfg.holdDir);
+    log(
+      `同一論文が既に存在するため inbox から hold/ へ移動します: ${item.filename} → ${dest} (一致先: ${dupMatch.target.label}, 理由: ${dupMatch.reason})`,
+    );
+    state.skippedAlreadyUploaded = true;
+    saveState(state);
+    return "skipped";
   }
 
   applyFromStage(state, cfg.fromStage && cfg.onlyFilename ? cfg.fromStage : null);

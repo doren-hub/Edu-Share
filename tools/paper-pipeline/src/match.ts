@@ -1,5 +1,6 @@
 /** タイトル・ファイル名・DOI の突き合わせ、業界候補の最長一致 */
 
+export * from "./content-match.ts";
 import { isDummySciSpacePaste, looksLikeCitationTitle, looksLikeVenueLine, tldrUsable } from "./scispace-card.ts";
 
 export function normalizeKey(s: string): string {

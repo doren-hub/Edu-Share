@@ -11,7 +11,9 @@ SciSpace のカードメタは PDF 掲載から遅れて出る。そのため **
 ```mermaid
 flowchart TD
   inbox[inbox PDF mtime 古い順] --> orch[orchestrate.ts]
-  orch -->|spawn 1本| worker[cli.ts]
+  orch --> dup{同じ論文?}
+  dup -->|はい| hold[hold へ移動・生成しない]
+  dup -->|いいえ| worker[cli.ts]
   worker --> chrome[永続 Chrome]
   chrome --> sciUp[sci-upload: Files に PDF]
   sciUp --> quota{Notebook 短期>上限 または 週枠100%?}
@@ -35,13 +37,17 @@ flowchart TD
 
 Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短期枠)` / `(週枠)`）を読む。短期枠の利用量が上限（既定 85%、`--notebook-short-stop-percent`）を超えているあいだは Studio 生成を止める。週枠が 100% なら `reset_at` まで待つ。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める。収集・Edu Share はキックオフ済みなら続ける。Chrome をもう一つ開いて Cookie を取り直すことはしない。
 
+同一論文の判定: 処理を始める前（SciSpace 掲載・NotebookLM ノート作成より前）に、PDF の中身から同一論文を判定する（強い順に DOI、arXiv ID、1ページ目題名＋筆頭著者の一致。題名だけでは一致にしない）。照合先は `work/` の既存論文、`duplicates/`、および同じ実行中に inbox にある他の PDF。一致した場合は Studio 生成も Edu Share 登録も行わず、inbox から外して `hold/` へ移動しログを残す（消さない）。キーが一つも取れない PDF は誤って止めず通常どおり処理する。
+
 ## 1 論文の段階
 
 `state.json` の `completed[]` がチェックポイント。順序は `STAGES`。
 
 ```mermaid
 flowchart TD
-  start[PDF 1件] --> exist{work に同じ PDF 名?}
+  start[PDF 1件] --> dup{同じ論文?}
+  dup -->|中身が一致| hold[hold へ移動・生成しない]
+  dup -->|不一致またはキーなし| exist{work に同じ PDF 名?}
   exist -->|work の PDF名が同じ| adopt[既存 /tests/uuid につなぐ]
   exist -->|判定不能| skip[skippedAlreadyUploaded]
   exist -->|なし| sciUp
