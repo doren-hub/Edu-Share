@@ -52,6 +52,25 @@ test("Studio artifact fixture: kinds, ready state and covered title buttons", as
       await page.setContent(tiles + slide.replace("2 分前", "2 分前 sync"));
       assert.equal(hasSlideDeckInStudioText(await page.locator("body").innerText()), false);
     });
+    await t.test("Issue #135: the leading icon wins over later control icons", async () => {
+      for (const [leading, later, expected] of [
+        ["audio_spark", "tablet", "other"], ["future_icon", "quiz", "other"],
+        ["quiz", "tablet", "quiz"], ["tablet", "copy", "slides"],
+        ["subscriptions", "quiz", "video"],
+      ] as const) {
+        for (const tag of ["mat-icon", "span class='google-symbols'", "span class='material-symbols-outlined'"]) {
+          const close = tag.split(" ")[0];
+          await page.setContent(`<artifact-library-item style="display:block">
+            <${tag}>${leading}</${close}><span>任意の題名</span>
+            <span>1 件のソース · 2 分前</span><button class="artifact-stretched-button">開く</button>
+            <button><span class="artifact-icon">${later}</span></button>
+          </artifact-library-item>`);
+          const cards = await studioArtifactCards(page);
+          assert.equal(cards.length, 1);
+          assert.equal(cards[0]!.kind, expected, `${leading} before ${later}`);
+        }
+      }
+    });
     await t.test("arbitrary titles and misleading other-kind titles use the icon", async () => {
       await page.setContent(`<button>quiz クイズ</button><aside>copy 記憶カード 1 件のソース · 7 日前</aside>
         ${row("slide", "tablet", "クイズと暗記カードの作り方")}

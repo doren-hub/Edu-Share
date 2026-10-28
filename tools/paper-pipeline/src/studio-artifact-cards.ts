@@ -37,29 +37,14 @@ export async function studioArtifactCards(page: Page): Promise<StudioArtifactCar
     const raw = (await row.innerText({ timeout: 2_000 }).catch(() => "")).replace(/\s+/g, " ").trim();
     if (!raw) continue;
 
-    // 1. Check specific .artifact-icon (used by fixtures and some modern layouts)
-    const iconNode = row.locator(".artifact-icon");
-    const iconCount = await iconNode.count().catch(() => 0);
-    const specificIcon = iconCount > 0 ? ((await iconNode.first().textContent({ timeout: 1_000 }).catch(() => ""))?.trim() ?? "") : "";
+    // The first icon identifies the artifact. Later icons belong to controls;
+    // even an unknown leading icon must not inherit their artifact kind.
+    const iconTexts = await row.locator(".artifact-icon, mat-icon, .google-symbols, .material-symbols-outlined")
+      .allTextContents().catch(() => []);
+    let icon = iconTexts.map(value => value.trim().toLowerCase()).find(Boolean) ?? "";
+    let kind: StudioCardKind = icon ? (studioKindFromIcon(icon) ?? "other") : null;
 
-    let icon = specificIcon;
-    let kind: StudioCardKind = specificIcon ? (studioKindFromIcon(specificIcon) ?? "other") : null;
-
-    // 2. If not determined from .artifact-icon, check general icon elements (mat-icon, google-symbols)
-    if (kind === null) {
-      const generalIcons = await row.locator("mat-icon, .google-symbols, .material-symbols-outlined").allTextContents().catch(() => []);
-      for (const gi of generalIcons) {
-        const clean = gi.trim().toLowerCase();
-        const k = studioKindFromIcon(clean);
-        if (k === "quiz" || k === "flashcards" || k === "slides" || k === "video") {
-          icon = clean;
-          kind = k;
-          break;
-        }
-      }
-    }
-
-    // 3. If still not determined, extract leading icon from card text (e.g. "copy 未読 ...", "未読 copy ...")
+    // If still not determined, extract leading icon from card text (e.g. "copy 未読 ...", "未読 copy ...")
     if (kind === null) {
       const textIcon = extractStudioIcon(raw);
       if (textIcon) {
@@ -68,7 +53,7 @@ export async function studioArtifactCards(page: Page): Promise<StudioArtifactCar
       }
     }
 
-    // 4. In modern artifact items without recognizable icon, mark as other so arbitrary titles aren't misidentified
+    // In modern artifact items without recognizable icon, mark as other so arbitrary titles aren't misidentified
     if (kind === null && isModern) {
       kind = "other";
     }
