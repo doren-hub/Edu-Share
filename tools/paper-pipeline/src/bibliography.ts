@@ -37,15 +37,20 @@ export function titleHasPdfContinuation(candidate: string, pdfText: string): boo
   const key = titleKey(candidate);
   if (key.length < 12) return false;
   const lines = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const continuation = (text: string) =>
-    // These sentence openings introduce an unlabelled abstract, not a subtitle.
-    !/^(?:in\s+this\b|on\s+the\s+basis\b)/i.test(text) &&
-    /^(?:(?:for|of|with|based|using|and|in|on)\b|(?:a\s+)?(?:tool|framework|approach|method|model|system)\s+(?:for|of|with|to)\b)/i.test(text) &&
-    !/abstract|keywords|doi|@|\d|\b(?:department|university|institute|school|faculty|laboratory|centre|center|hospital|consortium|association)\b/i.test(text);
+  const continuation = (text: string, following: string[]) => {
+    // A basis phrase alone is ambiguous. Only a nearby narrative clause supplies
+    // evidence of an unlabelled abstract; stop before explicit section headings.
+    const context = [text, ...following].join(" ").split(/\b(?:abstract|keywords|introduction)\b/i)[0]!;
+    if (/^on\s+the\s+basis\b/i.test(text) &&
+        /\b(?:we|i|this\s+(?:study|paper))\s+(?:present|propose|compare|evaluate|examine|discuss|investigate|show|aim|have|analy[sz]e)\b/i.test(context)) return false;
+    return !/^in\s+this\b/i.test(text) &&
+      /^(?:(?:for|of|with|based|using|and|in|on)\b|(?:a\s+)?(?:tool|framework|approach|method|model|system)\s+(?:for|of|with|to)\b)/i.test(text) &&
+      !/abstract|keywords|doi|@|\d|\b(?:department|university|institute|school|faculty|laboratory|centre|center|hospital|consortium|association)\b/i.test(text);
+  };
   return lines.some((line, index) => {
     const text = titleKey(line);
-    if (text.startsWith(`${key} `)) return continuation(text.slice(key.length + 1));
-    return text === key && continuation(lines[index + 1] ?? "");
+    if (text.startsWith(`${key} `)) return continuation(text.slice(key.length + 1), lines.slice(index + 1, index + 3));
+    return text === key && continuation(lines[index + 1] ?? "", lines.slice(index + 2, index + 4));
   });
 }
 

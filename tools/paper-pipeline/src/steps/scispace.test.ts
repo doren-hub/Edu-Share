@@ -269,3 +269,60 @@ test("Issue #140: genuine prepositional title continuations still require verifi
     assert.equal(titleHasPdfContinuation(agrosShort, `${agrosShort}\n${ending}\nAbstract`), true);
   }
 });
+
+test("Issue #147: real basis subtitle is withheld until the original DOI verifies it", async () => {
+  const { basisSubtitle: fixture } = await import("../fixtures/basis-context.ts");
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  const full = `${fixture.prefix} ${fixture.subtitle}`;
+  const work = { title: full, authors: ["Yoshitaka MORIFUJI"], year: "1994", venue: "Bulletin of Society of Japan Science Teaching", doi: fixture.doi };
+  for (const subtitle of [fixture.subtitle, "On the Basis of Conceptual Ecology", fixture.subtitle.toLowerCase()]) {
+    for (const separator of ["\n", " "]) {
+      // Prose after Abstract must not be mistaken for subtitle context.
+      const pdf = `${fixture.prefix}${separator}${subtitle}\nAbstract\nWe examine conceptual ecology. ${"Synthetic body padding. ".repeat(30)}\ndoi:${fixture.doi}`;
+      for (const lookup of [async () => null, async () => { throw new Error("offline fixture"); }, async () => ({ ...work, doi: "10.1234/wrong" }), async () => ({ ...work, title: `${fixture.prefix} Unrelated Subtitle` })]) {
+        const state = agrosState();
+        state.title = fixture.prefix;
+        state.filesPaste = `${state.filename}\n${fixture.prefix}\n1994 · Yoshitaka MORIFUJI`;
+        state.venue = work.venue;
+        state.doi = fixture.doi;
+        const raw = state.filesPaste;
+        await verifySciSpaceBibliography(state, state.filename, pdf, lookup);
+        assert.equal(state.sciTitleRejected, true);
+        assert.equal(usableEduShareTitle(state), "");
+        assert.equal(state.title, fixture.prefix);
+        assert.equal(state.venue, work.venue);
+        assert.equal(state.doi, fixture.doi);
+        assert.equal(state.filesPaste, raw);
+        await verifySciSpaceBibliography(state, state.filename, pdf, async () => work);
+        assert.equal(state.sciTitleRejected, false);
+        assert.equal(usableEduShareTitle(state), full);
+        assert.equal(state.filesPaste, raw);
+      }
+      const state = agrosState();
+      state.title = fixture.prefix;
+      await verifySciSpaceBibliography(state, state.filename, pdf.replace(`doi:${fixture.doi}`, ""), async () => { throw new Error("must not look up without original DOI"); });
+      assert.equal(usableEduShareTitle(state), "");
+    }
+  }
+});
+
+test("Issue #147: real unlabelled basis abstract remains usable across wrapping and case", async () => {
+  const { basisAbstract: fixture } = await import("../fixtures/basis-context.ts");
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  for (const opening of [fixture.opening, fixture.opening.toUpperCase(), fixture.opening.replace(", we", ",\nwe"), fixture.opening.replace("basis of", "basis\nof")]) {
+    for (const separator of ["\n", " "]) {
+      for (const doi of ["", `\ndoi:${fixture.doi}`]) {
+        for (const lookup of [async () => null, async () => { throw new Error("offline fixture"); }]) {
+          const state = agrosState();
+          state.title = fixture.title;
+          const pdf = `${fixture.title}${separator}${opening}\n${"Synthetic body padding. ".repeat(30)}${doi}`;
+          await verifySciSpaceBibliography(state, state.filename, pdf, lookup);
+          assert.equal(state.sciTitleRejected, false, opening);
+          assert.equal(usableEduShareTitle(state), fixture.title);
+        }
+      }
+    }
+  }
+});
