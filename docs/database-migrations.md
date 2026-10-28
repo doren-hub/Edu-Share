@@ -109,3 +109,36 @@ GitHub Actions（`.github/workflows/ci.yml`）で `npm run db:check-apply-all` �
   - さらに `029`（`industries text[]`）や `031`（処理失敗テストの閲覧許可ポリシー）も順番どおり確実に適用されます。
 - **今後の推奨確認:**
   新しい Supabase プロジェクト作成時やステージング環境構築時に、空 DB で `apply_all_migrations.sql` を実行し、本番 DB との `pg_dump --schema-only` 差分比較を実施することを推奨します。
+
+
+## processing_error の列権限（035 / #75）
+
+`035_protect_processing_error.sql` は anon と PUBLIC のテーブル全体の SELECT、
+および `processing_error` の列 SELECT を取り消し、公開可能な既存列だけを anon に付与します。
+既存の ready / failed の行ポリシー、authenticated の SELECT、service_role の権限は維持します。
+データの更新・削除やエラー列の移動は行いません。
+
+- **今後の公開列追加時:** 新しい列は anon に自動公開されません。公開する列だけに列 SELECT を付与するマイグレーションを追加してください。
+  `GRANT SELECT ON public.tests TO anon` は保護を解除するので使わないでください。
+- **アプリ:** 未ログインの一覧・最近追加・詳細は `processing_error` を SELECT しません。
+  ready のテキスト未抽出注意書きも含めて、未ログインには非公開とします。
+  ログイン済みは従来どおり詳細の失敗理由・注意書き、一覧の ready 注意バッジを表示します。
+- **書き込み経路の確認:** PDF取込失敗（upload、PDF差し替え）は `sanitizeProcessingError` を利用しています。
+  `ingest-pdf.ts` の本文未抽出は固定の注意文、正常完了と NotebookLM CSV 登録・差し替えは null を書き込みます。
+  生例外を直接 `processing_error` に渡す経路はありません。列権限による保護はこれらのサニタイズに依存しません。
+- **オフライン検証:** `npm test` の `processing-error-access.test.ts` が PGlite（インメモリ PostgreSQL）で実際の列定義・行ポリシー・035を使います。
+  anon の列取得・SELECT *・行全体JSON化・エラーによる絞り込み/ソートを拒否し、公開列、件数取得、authenticated / service_role の取得、再適用、将来列の非公開を確認します。
+  Docker、外部DB、認証情報は不要です。
+
+### 所有者による適用・確認
+
+AIは本番に接続せず、035は未適用です。先に本PRのアプリ変更をデプロイし、所有者が既存環境に
+**035の個別SQLだけ**を適用してください。既存環境に `apply_all_migrations.sql` を流し直さないでください。
+PostgRESTのスキーマリロード通知も035に含みます。
+
+適用後は所有者が未ログインのAPIリクエスト
+`GET /rest/v1/tests?select=title,processing_status,processing_error&processing_status=eq.failed`
+を確認し、権限エラー（42501）で理由を取得できないこと、同じリクエストがログイン済みでは成功することを確認してください。
+`select=title,processing_status` に変更した未ログインリクエストは ready / failed とも成功し、pending は非公開です。
+画面の未ログイン一覧・詳細、ログイン後の失敗理由・ready注意書きも確認してください。
+本番のPostgRESTリクエスト・画面の検証は、オフラインテストだけでは代替できません。

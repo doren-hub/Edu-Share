@@ -1,7 +1,7 @@
 /** 詳細ページ: マイグレーション未適用の列は外して再取得する */
 
 export const TEST_DETAIL_BASE_SELECT =
-  "id,title,description,source_name,processing_status,processing_error,created_at,document_type,exam_department,exam_subject,exam_period,industry,industries,publication_year,paper_doi,paper_venue,paper_authors,uploaded_by,quiz_source,notebooklm_questions_json,notebooklm_vocab_questions_json";
+  "id,title,description,source_name,processing_status,created_at,document_type,exam_department,exam_subject,exam_period,industry,industries,publication_year,paper_doi,paper_venue,paper_authors,uploaded_by,quiz_source,notebooklm_questions_json,notebooklm_vocab_questions_json";
 
 /** pdf_filename が無い DB でも Notebook / SciSpace URL は落とさない。先頭は現行スキーマで成功する列順 */
 export const TEST_DETAIL_SELECT_VARIANTS = [
@@ -11,6 +11,11 @@ export const TEST_DETAIL_SELECT_VARIANTS = [
   `${TEST_DETAIL_BASE_SELECT},notebooklm_notebook_url,scispace_project_url`,
   TEST_DETAIL_BASE_SELECT,
 ] as const;
+
+/** Authentication is established before choosing columns; anon never requests the protected column. */
+export function testDetailSelectVariants(authenticated = false): string[] {
+  return TEST_DETAIL_SELECT_VARIANTS.map(columns => authenticated ? `${columns},processing_error` : columns);
+}
 
 export const TEST_DETAIL_LINK_COLUMNS =
   "notebooklm_notebook_url,scispace_project_url";
@@ -38,6 +43,7 @@ export function looksLikeMissingColumnError(message: string): boolean {
 export function withOptionalMaterialFields(row: Record<string, unknown>) {
   return {
     ...row,
+    processing_error: row.processing_error ?? null,
     notebooklm_slide_pdf_storage_path: row.notebooklm_slide_pdf_storage_path ?? null,
     notebooklm_video_mp4_storage_path: row.notebooklm_video_mp4_storage_path ?? null,
     notebooklm_notebook_url: row.notebooklm_notebook_url ?? null,

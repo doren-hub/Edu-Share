@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowseClient";
 import type { TestRow } from "@/components/TestList";
 import { sanitizeBrowseTestRows } from "@/lib/sanitize-browse-test-row";
-import { TEST_BROWSE_COLUMNS } from "@/lib/test-browse-select";
+import { testBrowseColumns } from "@/lib/test-browse-select";
 
 export const metadata: Metadata = {
   title: "過去問（学校）｜EduShare",
@@ -14,6 +14,7 @@ export const metadata: Metadata = {
 
 export default async function PastExamTestsPage() {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
   const pastCountQuery = supabase
     .from("tests")
@@ -27,7 +28,7 @@ export default async function PastExamTestsPage() {
 
   const listQuery = supabase
     .from("tests")
-    .select(TEST_BROWSE_COLUMNS)
+    .select(testBrowseColumns(Boolean(user)))
     .or("document_type.eq.past_exam,document_type.is.null")
     .order("created_at", { ascending: false });
 
@@ -39,7 +40,7 @@ export default async function PastExamTestsPage() {
       loadBookmarkMarks(supabase),
     ]);
 
-  const list = sanitizeBrowseTestRows((tests ?? []) as TestRow[]);
+  const list = sanitizeBrowseTestRows((tests ?? []) as unknown as TestRow[]);
   const globalEmpty = (pastCount ?? 0) + (paperCount ?? 0) === 0;
 
   return (

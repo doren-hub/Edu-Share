@@ -69,7 +69,7 @@ import {
 import { normalizePaperDoiDisplay, paperDoiHref } from "@/lib/paper-doi";
 import {
   TEST_DETAIL_LINK_COLUMNS,
-  TEST_DETAIL_SELECT_VARIANTS,
+  testDetailSelectVariants,
   looksLikeMissingColumnError,
   mergeLinkColumns,
   withOptionalMaterialFields,
@@ -109,9 +109,10 @@ async function overlayLinkColumns(row: Record<string, unknown>, id: string) {
 async function loadTestDetailRow(
   supabase: Awaited<ReturnType<typeof createClient>>,
   id: string,
+  authenticated: boolean,
 ): Promise<Record<string, unknown> | null> {
   let row: Record<string, unknown> | null = null;
-  for (const cols of TEST_DETAIL_SELECT_VARIANTS) {
+  for (const cols of testDetailSelectVariants(authenticated)) {
     const res = await supabase.from("tests").select(cols).eq("id", id).single();
     if (res.data) {
       row = res.data as unknown as Record<string, unknown>;
@@ -188,16 +189,15 @@ export default async function TestDetailPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
-  const [loaded, authRes, bookmarkMarks, studyStatusLoad] = await Promise.all([
-    loadTestDetailRow(supabase, id),
-    supabase.auth.getUser(),
+  const { data: { user } } = await supabase.auth.getUser();
+  const [loaded, bookmarkMarks, studyStatusLoad] = await Promise.all([
+    loadTestDetailRow(supabase, id, Boolean(user)),
     loadBookmarkMarks(supabase),
     loadPaperStudyStatusForTest(supabase, id),
   ]);
 
   if (!loaded) notFound();
   const testRaw = loaded as TestDetailRow;
-  const user = authRes.data.user;
   const test: TestDetailRow = {
     ...testRaw,
     processing_error: user ? testRaw.processing_error : null,

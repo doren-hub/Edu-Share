@@ -9,8 +9,8 @@ import {
 } from "@/components/TestList";
 import { toPaperBrowseListRow } from "@/lib/paper-notebooklm-materials";
 import {
-  TEST_BROWSE_COLUMNS,
-  TEST_BROWSE_PAPER_LIST_COLUMNS,
+  testBrowseColumns,
+  testBrowsePaperListColumns,
 } from "@/lib/test-browse-select";
 import { sanitizeBrowseTestRows } from "@/lib/sanitize-browse-test-row";
 
@@ -26,6 +26,7 @@ const sectionShell =
 
 export default async function Home() {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
   const pastCountQuery = supabase
     .from("tests")
@@ -39,14 +40,14 @@ export default async function Home() {
 
   const recentPastQuery = supabase
     .from("tests")
-    .select(TEST_BROWSE_COLUMNS)
+    .select(testBrowseColumns(Boolean(user)))
     .or("document_type.eq.past_exam,document_type.is.null")
     .order("created_at", { ascending: false })
     .limit(RECENT_TESTS_LIMIT);
 
   const recentPaperQuery = supabase
     .from("tests")
-    .select(TEST_BROWSE_PAPER_LIST_COLUMNS)
+    .select(testBrowsePaperListColumns(Boolean(user)))
     .eq("document_type", "paper")
     .order("created_at", { ascending: false })
     .limit(RECENT_TESTS_LIMIT);
@@ -68,7 +69,7 @@ export default async function Home() {
   const paperRows = (listedPapers.data ?? []) as unknown as Record<string, unknown>[];
 
   const list: TestRow[] = sanitizeBrowseTestRows([
-    ...((recentPast ?? []) as TestRow[]),
+    ...((recentPast ?? []) as unknown as TestRow[]),
     ...(paperRows.map((row) => toPaperBrowseListRow(row)) as TestRow[]),
   ]);
 
