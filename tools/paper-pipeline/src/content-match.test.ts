@@ -446,3 +446,44 @@ test("filterDuplicateInboxPdfs: 同じ実行中の inbox 同士の重複を検�
 
   rmSync(testDir, { recursive: true, force: true });
 });
+
+test("filterDuplicateInboxPdfs: 同じ targets で複数回 filterDuplicateInboxPdfs を呼んでも自分自身と一致して退避されない", async () => {
+  const testDir = join(tmpdir(), `pp-filter-rescan-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const inboxDir = join(testDir, "inbox");
+  const holdDir = join(testDir, "hold");
+  mkdirSync(inboxDir, { recursive: true });
+
+  const file = join(inboxDir, "pending-paper.pdf");
+  writeFileSync(file, "content", "utf8");
+
+  const inboxItems = [
+    {
+      filename: "pending-paper.pdf",
+      absPath: file,
+      stem: "pending-paper",
+      paperDir: join(testDir, "work", "pending-paper"),
+    },
+  ];
+
+  const targets: MatchTarget[] = [];
+  const fakeKey = { arxivId: "2401.99999", title: "Pending Paper", firstAuthor: "Author" };
+
+  // 1回目のスキャン
+  const kept1 = await filterDuplicateInboxPdfs(inboxItems, targets, holdDir, {
+    extractKey: async () => fakeKey,
+  });
+  assert.equal(kept1.length, 1);
+  assert.equal(kept1[0]?.filename, "pending-paper.pdf");
+  assert.equal(targets.length, 1);
+
+  // 2回目の再スキャン (refreshInbox)
+  const kept2 = await filterDuplicateInboxPdfs(inboxItems, targets, holdDir, {
+    extractKey: async () => fakeKey,
+  });
+  assert.equal(kept2.length, 1);
+  assert.equal(kept2[0]?.filename, "pending-paper.pdf");
+  assert.equal(targets.length, 1, "ターゲット配列に重複追加されないこと");
+  assert.equal(existsSync(file), true, "ファイルが hold へ移動されず残ること");
+
+  rmSync(testDir, { recursive: true, force: true });
+});
