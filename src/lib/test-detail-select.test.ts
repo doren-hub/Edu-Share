@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   TEST_DETAIL_SELECT_VARIANTS,
+  testDetailSelectVariants,
   looksLikeMissingColumnError,
   mergeLinkColumns,
   withOptionalMaterialFields,
@@ -37,4 +38,12 @@ test("withOptionalMaterialFields: 無い列は null", () => {
   const row = withOptionalMaterialFields({ id: "1", title: "t" });
   assert.equal(row.notebooklm_notebook_url, null);
   assert.equal(row.scispace_project_url, null);
+});
+
+
+test("detail column variants exclude errors for anon and include them for authenticated users", () => {
+  for (const columns of testDetailSelectVariants()) assert.doesNotMatch(columns, /\bprocessing_error\b/);
+  for (const columns of testDetailSelectVariants(true)) assert.match(columns, /\bprocessing_error\b/);
+  assert.equal(withOptionalMaterialFields({ id: "1" }).processing_error, null);
+  assert.equal(withOptionalMaterialFields({ processing_error: "safe failure" }).processing_error, "safe failure");
 });

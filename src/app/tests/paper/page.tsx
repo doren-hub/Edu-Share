@@ -8,7 +8,7 @@ import { TestsBrowseClient, TestsBrowseFallback } from "@/components/TestsBrowse
 import type { TestRow } from "@/components/TestList";
 import { toPaperBrowseListRow } from "@/lib/paper-notebooklm-materials";
 import { sanitizeBrowseTestRows } from "@/lib/sanitize-browse-test-row";
-import { TEST_BROWSE_PAPER_LIST_COLUMNS } from "@/lib/test-browse-select";
+import { testBrowsePaperListColumns } from "@/lib/test-browse-select";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +19,7 @@ export const metadata: Metadata = {
 
 export default async function PaperTestsPage() {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
   const pastCountQuery = supabase
     .from("tests")
@@ -32,7 +33,7 @@ export default async function PaperTestsPage() {
 
   const listQuery = supabase
     .from("tests")
-    .select(TEST_BROWSE_PAPER_LIST_COLUMNS)
+    .select(testBrowsePaperListColumns(Boolean(user)))
     .eq("document_type", "paper")
     .order("created_at", { ascending: false });
 
