@@ -1,0 +1,10 @@
+{
+  "sourceHead": "a38f2f4cd8e9051dee4d4f5bb655cf46d9c03e8c",
+  "generator": "src/lib/claude-quiz.ts:generateQuizFromContext",
+  "systemSha256": "5e1b9923042835f4d58be475e40e94888ca7066bcd382f0f9a2099cf096e43df",
+  "model": "claude-opus-5-5",
+  "transport": "Claude Code print (tools disabled)",
+  "temperature": "CLI default (not app temperature 0.9)",
+  "maxTokens": "CLI default (not app maxTokens 8192)",
+  "nonce": "issue-89-baseline-v1"
+}

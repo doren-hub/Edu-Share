@@ -1,0 +1,6 @@
+{
+  "startedAt": "2026-10-28T20:42:07.573600+00:00",
+  "durationSeconds": 11.836,
+  "exitCode": 0,
+  "command": "claude --print --model claude-opus-5-5 --effort low --tools \"\" --strict-mcp-config --mcp-config {\"mcpServers\":{}} --disable-slash-commands --no-session-persistence --system-prompt <system-prompt.txt contents> --output-format json < <case>.input.txt"
+}
