@@ -124,3 +124,17 @@ test("start, quiz, bookmark and UUID schemas reject wrong field types", () => {
   for (const value of ["00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff", id.toUpperCase()]) assert.equal(uuidSchema.safeParse(value).success, true);
   assert.deepEqual(paperAskSchema.parse({ question: " q ", history: [{ role: "user", content: " text " }] }), { question: "q", history: [{ role: "user", content: "text" }] });
 });
+
+test("quiz answers enforce count, key and essay boundaries before visiting oversized records", () => {
+  const answers = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`q${i}`, "x".repeat(2000)]));
+  assert.equal(quizSubmitSchema.safeParse({ answers }).success, true);
+  Object.defineProperty(answers, "overflow", {
+    enumerable: true, get() { throw new Error("oversized record values must not be visited"); },
+  });
+  const result = quizSubmitSchema.safeParse({ answers });
+  assert.equal(result.success, false);
+  if (!result.success) assert.equal(result.error.issues.length, 1);
+  assert.equal(quizSubmitSchema.safeParse({ answers: { q: "x".repeat(2001) } }).success, false);
+  assert.equal(quizSubmitSchema.safeParse({ answers: { ["k".repeat(128)]: "" } }).success, true);
+  assert.equal(quizSubmitSchema.safeParse({ answers: { ["k".repeat(129)]: 0 } }).success, false);
+});

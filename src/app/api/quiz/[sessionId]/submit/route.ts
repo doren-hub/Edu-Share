@@ -1,3 +1,4 @@
+import { readBoundedJson, API_BODY_LIMITS } from "@/lib/request-json";
 import { NextResponse } from "next/server";
 import { quizSubmitSchema as bodySchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -22,8 +23,9 @@ export async function POST(
     return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
   }
 
-  const json = await req.json().catch(() => null);
-  const parsed = bodySchema.safeParse(json);
+  const body = await readBoundedJson(req, API_BODY_LIMITS.quizSubmit);
+  if (!body.ok) return body.response;
+  const parsed = bodySchema.safeParse(body.data);
   if (!parsed.success) {
     return NextResponse.json({ error: "入力が不正です" }, { status: 400 });
   }

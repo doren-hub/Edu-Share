@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_QUIZ_ANSWERS, MAX_QUIZ_ANSWER_LENGTH, MAX_QUIZ_ANSWER_KEY_LENGTH } from "./quiz-input-limits.ts";
 import { MAX_INDUSTRIES } from "./paper-industries.ts";
 import {
   isExamMetaPicklistCategory,
@@ -143,7 +144,16 @@ export const picklistPostSchema = z
   });
 
 export const quizSubmitSchema = z.object({
-  answers: z.record(z.string(), z.union([z.number(), z.string()])),
+  // Gate the record before visiting values, so oversized records cannot create
+  // an issue per element. HTTP byte limits also bound key enumeration itself.
+  answers: z.custom<Record<string, unknown>>(
+    (value) => typeof value === "object" && value !== null && !Array.isArray(value)
+      && Object.keys(value).length <= MAX_QUIZ_ANSWERS,
+    { message: `回答は ${MAX_QUIZ_ANSWERS} 件以内のオブジェクトで指定してください` },
+  ).pipe(z.record(
+    z.string().max(MAX_QUIZ_ANSWER_KEY_LENGTH),
+    z.union([z.number(), z.string().max(MAX_QUIZ_ANSWER_LENGTH)]),
+  )),
 });
 
 export const bookmarkItemSchema = z.object({

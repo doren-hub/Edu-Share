@@ -1,3 +1,4 @@
+import { readBoundedJson, API_BODY_LIMITS } from "@/lib/request-json";
 import { NextResponse } from "next/server";
 import { testPatchSchema as patchSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -35,14 +36,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "JSON ボディが必要です" }, { status: 400 });
-  }
-
-  const parsed = patchSchema.safeParse(body);
+  const body = await readBoundedJson(req, API_BODY_LIMITS.testPatch);
+  if (!body.ok) return body.response;
+  const parsed = patchSchema.safeParse(body.data);
   if (!parsed.success) {
     return NextResponse.json(
       { error: "入力が不正です", details: parsed.error.flatten() },

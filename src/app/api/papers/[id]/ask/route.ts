@@ -1,3 +1,4 @@
+import { readBoundedJson, API_BODY_LIMITS } from "@/lib/request-json";
 import { NextResponse } from "next/server";
 import { paperAskSchema as bodySchema, uuidSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -20,8 +21,9 @@ export async function POST(req: Request, context: RouteContext) {
     return NextResponse.json({ error: "id が不正です" }, { status: 400 });
   }
 
-  const json = await req.json().catch(() => null);
-  const parsed = bodySchema.safeParse(json);
+  const body = await readBoundedJson(req, API_BODY_LIMITS.paperAsk);
+  if (!body.ok) return body.response;
+  const parsed = bodySchema.safeParse(body.data);
   if (!parsed.success) {
     const issue = parsed.error.issues[0]?.message ?? "入力が不正です";
     return NextResponse.json({ error: issue }, { status: 400 });
