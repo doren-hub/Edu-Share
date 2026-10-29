@@ -6,7 +6,7 @@ import { MAX_QUIZ_ANSWERS, MAX_QUIZ_ANSWER_LENGTH } from "./quiz-input-limits.ts
 
 function request(body: string | Uint8Array | ReadableStream<Uint8Array>, length?: string) {
   return new Request("http://localhost/input", {
-    method: "POST", body,
+    method: "POST", body: body instanceof Uint8Array ? new Uint8Array(body) : body,
     headers: length === undefined ? {} : { "content-length": length },
     // Node's Request requires duplex for streamed bodies.
     ...{ duplex: "half" },
