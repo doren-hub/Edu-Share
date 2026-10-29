@@ -151,7 +151,7 @@ export async function POST(req: Request, context: RouteContext) {
           matchedChunks = (
             rpcRows as { content?: string; similarity?: number }[]
           )
-            .map((row) => {
+            .map((row): PaperAskChunk | null => {
               const rawContent = String(row.content ?? "").trim();
               const original = chunkByContent.get(rawContent);
               if (!original) return null;

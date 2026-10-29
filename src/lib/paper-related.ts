@@ -494,7 +494,7 @@ export type RpcCaller = {
   rpc: (
     fnName: string,
     args: Record<string, unknown>,
-  ) => Promise<{ data: unknown; error: unknown }>;
+  ) => PromiseLike<{ data: unknown; error: unknown }>;
 };
 
 /**
