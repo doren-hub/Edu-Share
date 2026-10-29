@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { MAX_QUIZ_ANSWER_LENGTH } from "@/lib/quiz-input-limits";
 import type { ClientQuestion } from "@/lib/types";
 
 export default function TakeQuiz({
@@ -302,12 +303,13 @@ export default function TakeQuiz({
               </div>
             ) : (
               <textarea
+                maxLength={MAX_QUIZ_ANSWER_LENGTH}
                 className="mt-4 min-h-[120px] w-full rounded-md border border-zinc-200 px-3 py-2 text-sm"
                 value={typeof answers[q.id] === "string" ? (answers[q.id] as string) : ""}
                 onChange={(e) =>
                   setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
                 }
-                placeholder="回答を入力"
+                placeholder={`回答を入力（${MAX_QUIZ_ANSWER_LENGTH}文字以内）`}
               />
             )}
           </li>
