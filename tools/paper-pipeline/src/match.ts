@@ -118,41 +118,19 @@ export function pickBestOption(options: string[], haystackRaw: string): string {
 }
 
 const INDUSTRY_KEYWORDS: Record<string, string[]> = {
-  "IT・通信": [
-    "software",
-    "computer",
-    "network",
-    "internet",
-    "telecom",
-    "通信",
-    "情報工学",
-    "machinelearning",
-    "neuralnetwork",
-  ],
-  "医療・ヘルスケア": ["medical", "health", "clinical", "patient", "医療", "臨床", "ヘルスケア"],
-  "金融・保険": ["finance", "bank", "insurance", "金融", "保険"],
-  "教育・研究": [
-    "arxiv",
-    "research",
-    "survey",
-    "physics",
-    "relativity",
-    "einstein",
-    "schwarzschild",
-    "theory",
-    "academic",
-    "university",
-    "論文",
-    "研究",
-    "教育",
-    "gravitation",
-    "generalrelativity",
-  ],
-  "製造業": ["manufactur", "factory", "製造"],
-  "エネルギー・インフラ": ["energy", "power grid", "エネルギー", "インフラ"],
-  "小売・流通": ["retail", "commerce", "小売", "流通"],
-  "メディア・エンタメ": ["media", "entertainment", "メディア", "エンタメ"],
-  "公共・非営利": ["government", "nonprofit", "public policy", "公共", "非営利"],
+  "AI・データ": ["AI", "artificial intelligence", "machine learning", "neural network", "deep learning", "data science", "人工知能", "機械学習", "深層学習", "データ分析"],
+  "IT・通信": ["software", "computer", "network", "internet", "telecom", "通信", "情報工学"],
+  "半導体・電子デバイス": ["semiconductor", "photonic", "display", "electronic device", "半導体", "光電融合", "電子デバイス", "電子ペーパー"],
+  "エネルギー・資源": ["energy", "power grid", "renewable", "エネルギー", "資源", "電力"],
+  "宇宙・天文": ["astronom", "cosmolog", "galaxy", "universe", "spacecraft", "宇宙", "天文", "銀河"],
+  // theory / academic / 論文 / 研究 など、分野を特定しない語は含めない。
+  "基礎科学（物理・数学）": ["physics", "mathematic", "relativity", "einstein", "schwarzschild", "gravitation", "quantum", "物理", "数学", "相対論", "量子"],
+  "医療・ライフサイエンス": ["medical", "health", "clinical", "patient", "biolog", "genom", "医療", "臨床", "生命科学", "生物", "遺伝子"],
+  "農業・食品": ["agricultur", "crop", "farm", "food", "農業", "作物", "圃場", "食品"],
+  "ロボティクス": ["robot", "ROS", "path tracking", "pure pursuit", "kinematics", "SLAM", "localization", "ロボット"],
+  "建設・インフラ": ["construction", "civil engineering", "infrastructure", "建設", "土木", "インフラ"],
+  "経済・金融": ["econom", "finance", "financial", "bank", "insurance", "経済", "金融", "保険"],
+  "言語・教育": ["linguistic", "language", "education", "teaching", "言語", "教育", "授業"],
 };
 
 export function isOtherIndustryValue(v: string): boolean {
@@ -160,9 +138,9 @@ export function isOtherIndustryValue(v: string): boolean {
   return !t || t === "その他" || t.startsWith("その他");
 }
 
-/** 論文メタから業界を選ぶ。その他は使わず、学術論文は教育・研究を既定にする */
+/** 新しい選択肢から最も一致する業界を選ぶ。分野の根拠がなければ未選択にする。 */
 export function pickPaperIndustry(options: string[], haystackRaw: string): string {
-  const usable = options.map((o) => o.trim()).filter((o) => o && !isOtherIndustryValue(o));
+  const usable = options.map((o) => o.trim()).filter((o) => Object.hasOwn(INDUSTRY_KEYWORDS, o));
   const hay = normalizeKey(haystackRaw);
   let best = "";
   let bestScore = 0;
@@ -171,7 +149,11 @@ export function pickPaperIndustry(options: string[], haystackRaw: string): strin
     let score = 0;
     for (const k of keys) {
       const nk = normalizeKey(k);
-      if (nk && hay.includes(nk)) score += nk.length;
+      // 短い英字略語が cross / mail などの単語の一部に一致するのを避ける。
+      const matches = ["AI", "ROS", "SLAM"].includes(k)
+        ? new RegExp(`\\b${k}\\b`, "i").test(haystackRaw)
+        : nk && hay.includes(nk);
+      if (matches) score += nk.length;
     }
     if (hay.includes(normalizeKey(opt))) score += normalizeKey(opt).length + 10;
     if (score > bestScore) {
@@ -180,6 +162,5 @@ export function pickPaperIndustry(options: string[], haystackRaw: string): strin
     }
   }
   if (best) return best;
-  if (usable.includes("教育・研究")) return "教育・研究";
-  return usable[0] ?? "";
+  return "";
 }
