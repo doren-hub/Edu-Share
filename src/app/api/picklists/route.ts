@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
+import { picklistPostSchema as postSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import {
   isExamMetaPicklistCategory,
@@ -75,71 +75,6 @@ function humanizePicklistConstraintError(message: string): string {
   return "";
 }
 
-const postSchema = z
-  .object({
-    category: z.string().refine(isPicklistCategory, { message: "category が不正です" }),
-    value: z.string().trim().min(1, "値を入力してください").max(200, "200文字以内にしてください"),
-    scope_school_name: z.union([z.string(), z.null()]).optional(),
-    scope_department_value: z.union([z.string(), z.null()]).optional(),
-  })
-  .superRefine((data, ctx) => {
-    const scope =
-      data.scope_school_name === null || data.scope_school_name === undefined
-        ? ""
-        : String(data.scope_school_name).trim();
-    const dep =
-      data.scope_department_value === null || data.scope_department_value === undefined
-        ? ""
-        : String(data.scope_department_value).trim();
-
-    if (isExamMetaPicklistCategory(data.category)) {
-      if (!scope) {
-        ctx.addIssue({
-          code: "custom",
-          message:
-            "科目・テストの時期の候補は学校ごとに追加されます。学校名を選んでから追加してください。",
-          path: ["scope_school_name"],
-        });
-      }
-      if (!dep) {
-        ctx.addIssue({
-          code: "custom",
-          message:
-            "科目・テストの時期の候補は学科ごとにのみ追加できます（他学科には共有されません）。学科名を選んでから追加してください。",
-          path: ["scope_department_value"],
-        });
-      }
-      return;
-    }
-
-    if (isSchoolScopedPicklistCategory(data.category)) {
-      if (!scope) {
-        ctx.addIssue({
-          code: "custom",
-          message:
-            "学科名の候補は学校ごとのみ追加できます（他校と共有されません）。学校名を選んでから追加してください。",
-          path: ["scope_school_name"],
-        });
-      }
-      if (dep) {
-        ctx.addIssue({
-          code: "custom",
-          message: "学科名の候補に学科スコープは指定できません",
-          path: ["scope_department_value"],
-        });
-      }
-      return;
-    }
-
-    if (scope || dep) {
-      ctx.addIssue({
-        code: "custom",
-        message: "このカテゴリでは学校・学科スコープを付けられません",
-        path: ["scope_school_name"],
-      });
-    }
-  });
-
 export async function GET(req: NextRequest) {
   const raw = req.nextUrl.searchParams.get("category");
   if (!raw || !isPicklistCategory(raw)) {
@@ -194,7 +129,7 @@ export async function POST(req: NextRequest) {
       ?? flat.fieldErrors.value?.[0]
       ?? flat.fieldErrors.scope_school_name?.[0]
       ?? flat.fieldErrors.scope_department_value?.[0]
-      ?? parsed.error.errors.find((e) => e.code === "custom")?.message
+      ?? parsed.error.issues.find((e) => e.code === "custom")?.message
       ?? "入力が不正です";
     return NextResponse.json({ error: msg }, { status: 400 });
   }

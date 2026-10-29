@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { uuidSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { paperAuthorNamesForDisplay } from "@/lib/paper-authors";
@@ -11,7 +11,7 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, context: RouteContext) {
   const { id } = await context.params;
-  if (!z.string().uuid().safeParse(id).success) {
+  if (!uuidSchema.safeParse(id).success) {
     return NextResponse.json({ error: "id が不正です" }, { status: 400 });
   }
 

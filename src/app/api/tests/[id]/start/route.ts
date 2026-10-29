@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { startBodySchema as startBodySchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isPdfBodyTextUnavailableNotice } from "@/lib/document-chunks";
@@ -29,19 +29,6 @@ import {
   questionKeysEligibleForReview,
   type ReviewablePerformanceRow,
 } from "@/lib/review-mode";
-
-const startBodySchema = z.object({
-  reuseQuestionsFromSessionId: z.string().uuid().optional(),
-  /** 過去セッションの設問プールから重み付き無作為抽出（新規 LLM 生成はしない） */
-  pickRandomPastSession: z.boolean().optional(),
-  /** 誤答した設問のみ過去プールから抽出（通常／CSV は reviewMistakesScope で切替） */
-  pickReviewMistakesSession: z.boolean().optional(),
-  reviewMistakesScope: z.enum(["standard", "csv"]).optional(),
-  /** Prefer NotebookLM CSV question pool over PDF/RAG (same test may have both). */
-  useNotebookLmCsvPool: z.boolean().optional(),
-  /** クイズ CSV 列と単語帳 CSV 列のどちらから出題するか（useNotebookLmCsvPool より優先） */
-  notebookLmCsvPool: z.enum(["quiz", "vocab"]).optional(),
-});
 
 export const runtime = "nodejs";
 

@@ -1,20 +1,15 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { bookmarkItemSchema as bodySchema, uuidSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { humanizeBookmarkDbError } from "@/lib/bookmarks";
 
 export const runtime = "nodejs";
 
-const bodySchema = z.object({
-  testId: z.string().uuid(),
-  inList: z.boolean(),
-});
-
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PUT(req: Request, context: RouteContext) {
   const { id } = await context.params;
-  if (!z.string().uuid().safeParse(id).success) {
+  if (!uuidSchema.safeParse(id).success) {
     return NextResponse.json({ error: "id が不正です" }, { status: 400 });
   }
 

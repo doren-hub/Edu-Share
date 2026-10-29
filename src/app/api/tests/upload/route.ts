@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { uploadFormSchema as uploadFormSchema } from "@/lib/api-input-schemas";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -110,21 +110,6 @@ async function ensureProfileRow(
   return { ok: true };
 }
 
-const uploadFormSchema = z
-  .object({
-    title: z.string().trim().min(1).max(200),
-    description: z.string().max(2000).optional(),
-    document_type: z.enum(["past_exam", "paper"]),
-    school_name: z.string().max(200).optional(),
-    expert_name: z.string().max(200).optional(),
-    paper_venue: z.string().max(400).optional(),
-    paper_doi: z.string().max(200).optional(),
-    publication_year: z.string().max(32).optional(),
-    exam_department: z.string().max(120).optional(),
-    exam_subject: z.string().max(120).optional(),
-    exam_period: z.string().max(120).optional(),
-  });
-
 export async function POST(req: Request) {
   try {
   const supabase = await createClient();
@@ -178,7 +163,7 @@ export async function POST(req: Request) {
 
   if (!parsed.success) {
     const flat = parsed.error.flatten();
-    const custom = parsed.error.errors.find((e) => e.code === "custom");
+    const custom = parsed.error.issues.find((e) => e.code === "custom");
     const firstIssue = parsed.error.issues[0];
     const hint =
       custom?.message ??

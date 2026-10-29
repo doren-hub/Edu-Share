@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { paperAskSchema as bodySchema, uuidSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { checkUserAskRateLimit } from "@/lib/paper-ask-rate-limit";
@@ -12,28 +12,11 @@ import { embedQuery, openAiEmbeddingsEnabled } from "@/lib/embeddings";
 
 export const runtime = "nodejs";
 
-const bodySchema = z.object({
-  question: z
-    .string()
-    .trim()
-    .min(1, "質問を入力してください")
-    .max(4000, "質問が長すぎます"),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string().trim().max(4000, "やりとりのテキストが長すぎます"),
-      }),
-    )
-    .max(6, "やりとりの件数が多すぎます")
-    .optional(),
-});
-
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function POST(req: Request, context: RouteContext) {
   const { id } = await context.params;
-  if (!z.string().uuid().safeParse(id).success) {
+  if (!uuidSchema.safeParse(id).success) {
     return NextResponse.json({ error: "id が不正です" }, { status: 400 });
   }
 

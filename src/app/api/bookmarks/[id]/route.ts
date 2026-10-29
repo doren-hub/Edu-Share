@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { uuidSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { humanizeBookmarkDbError, normalizeBookmarkListName } from "@/lib/bookmarks";
 
 export const runtime = "nodejs";
 
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 
 type RouteContext = { params: Promise<{ id: string }> };
 

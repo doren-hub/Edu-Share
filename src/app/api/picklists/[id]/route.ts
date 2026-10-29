@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { uuidSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { isSchoolScopedPicklistCategory } from "@/lib/picklist-categories";
 import { createPicklistTableClient } from "@/lib/supabase/picklist-table";
@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 
 export async function DELETE(_req: Request, context: RouteContext) {
   const { id } = await context.params;

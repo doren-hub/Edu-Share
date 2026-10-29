@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { quizSubmitSchema as bodySchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { gradeWithClaude } from "@/lib/claude-quiz";
@@ -7,10 +7,6 @@ import { recordQuestionPerformanceAfterSubmit } from "@/lib/question-performance
 import type { AnswerMap, StoredQuestion } from "@/lib/types";
 
 export const runtime = "nodejs";
-
-const bodySchema = z.object({
-  answers: z.record(z.union([z.number(), z.string()])),
-});
 
 export async function POST(
   req: Request,

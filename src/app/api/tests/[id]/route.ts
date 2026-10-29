@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
+import { testPatchSchema as patchSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -11,7 +11,6 @@ import {
 import { deleteObjects } from "@/lib/object-storage";
 import { joinPaperAuthorsForSourceName } from "@/lib/paper-authors";
 import {
-  MAX_INDUSTRIES,
   normalizePaperIndustriesFromDb,
 } from "@/lib/paper-industries";
 import { assertStoredPickWithOther } from "@/lib/picklist-parse";
@@ -24,29 +23,6 @@ function asTrimmedStringArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((x) => String(x).trim()).filter((s) => s.length > 0);
 }
-
-const patchSchema = z
-  .object({
-    title: z.string().min(1).max(200).optional(),
-    description: z.string().max(2000).nullable().optional(),
-    source_name: z.string().min(1).max(200).optional(),
-    document_type: z.enum(["past_exam", "paper"]).optional(),
-    exam_department: z.string().min(1).max(120).nullable().optional(),
-    exam_subject: z.string().min(1).max(120).nullable().optional(),
-    exam_period: z.string().min(1).max(120).nullable().optional(),
-    industries: z.array(z.string().min(1).max(120)).max(MAX_INDUSTRIES).optional(),
-    publication_year: z.string().max(32).nullable().optional(),
-    paper_authors: z.array(z.string().min(1).max(200)).max(24).optional(),
-    paper_venue: z.string().max(400).nullable().optional(),
-    paper_doi: z.string().max(200).nullable().optional(),
-    /** NotebookLM のノートブック URL。空文字でクリア */
-    notebooklm_notebook_url: z.string().max(2048).nullable().optional(),
-    /** SciSpace のページ URL。空文字でクリア */
-    scispace_project_url: z.string().max(2048).nullable().optional(),
-  })
-  .refine((o) => Object.keys(o).length > 0, {
-    message: "更新する項目を1つ以上指定してください",
-  });
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id: testId } = await ctx.params;
