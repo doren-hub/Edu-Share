@@ -132,23 +132,65 @@ test("pickBestOption: 最長一致", () => {
   assert.equal(pickBestOption(["金融", "医療"], " unrelated astronomy text "), "");
 });
 
-test("pickPaperIndustry: 相対論の arXiv 論文は教育・研究", () => {
-  const opts = [
-    "IT・通信",
-    "医療・ヘルスケア",
-    "教育・研究",
-    "その他",
-  ];
-  assert.equal(
-    pickPaperIndustry(
-      opts,
-      "A comprehensive survey of Schwarzschild's original papers\narXiv\nThis paper examines general relativity",
-    ),
-    "教育・研究",
-  );
+const industries = [
+  "AI・データ", "IT・通信", "半導体・電子デバイス", "エネルギー・資源", "宇宙・天文",
+  "基礎科学（物理・数学）", "医療・ライフサイエンス", "農業・食品", "ロボティクス",
+  "建設・インフラ", "経済・金融", "言語・教育", "その他",
+];
+
+const examples: [string, string][] = [
+  ["machine learning with neural networks", "AI・データ"],
+  ["telecom software", "IT・通信"],
+  ["semiconductor photonic display 光電融合", "半導体・電子デバイス"],
+  ["renewable energy", "エネルギー・資源"],
+  ["galaxy astronomy", "宇宙・天文"],
+  ["arXiv survey of Schwarzschild and Einstein general relativity", "基礎科学（物理・数学）"],
+  ["数学の論文", "基礎科学（物理・数学）"],
+  ["clinical genomics", "医療・ライフサイエンス"],
+  ["Agricultural robot for crop monitoring on a farm", "農業・食品"],
+  ["圃場の作物と農業の研究", "農業・食品"],
+  ["Monitoring crops on farms", "農業・食品"],
+  ["Farming automation", "農業・食品"],
+  ["Mobile robot path tracking with pure pursuit and kinematics", "ロボティクス"],
+  ["civil engineering construction", "建設・インフラ"],
+  ["financial economics", "経済・金融"],
+  ["language education", "言語・教育"],
+];
+for (const [text, expected] of examples) {
+  test(`pickPaperIndustry: ${text}`, () => {
+    assert.equal(pickPaperIndustry(industries, text), expected);
+  });
+}
+
+for (const keyword of ["agricultur", "crop", "farm", "農業", "作物", "圃場"]) {
+  test(`pickPaperIndustry: 農業キーワード ${keyword}`, () => {
+    assert.equal(pickPaperIndustry(industries, keyword), "農業・食品");
+  });
+}
+for (const keyword of ["robot", "ROS", "path tracking", "pure pursuit", "kinematics", "SLAM", "localization", "ロボット"]) {
+  test(`pickPaperIndustry: ロボティクスキーワード ${keyword}`, () => {
+    assert.equal(pickPaperIndustry(industries, keyword), "ロボティクス");
+  });
+}
+
+test("pickPaperIndustry: 汎用的な学術語や未知の分野を既定分類へ寄せない", () => {
+  for (const text of ["theory academic 論文 研究 arXiv research survey university", "hello world", "cross mail", ""]) {
+    assert.equal(pickPaperIndustry(industries, text), "");
+  }
 });
 
-test("pickPaperIndustry: その他は選ばない", () => {
+test("pickPaperIndustry: 旧選択肢・自由入力値・その他を返さない", () => {
+  const obsolete = ["医療・ヘルスケア", "金融・保険", "教育・研究", "製造業", "エネルギー・インフラ", "小売・流通", "メディア・エンタメ", "公共・非営利", "AI", "宇宙", "数学", "生命科学", "電子ペーパー"];
+  for (const option of obsolete) {
+    assert.equal(pickPaperIndustry([option, "その他"], option), "");
+  }
   assert.equal(isOtherIndustryValue("その他（Home）"), true);
-  assert.equal(pickPaperIndustry(["その他", "教育・研究"], "hello world"), "教育・研究");
+  assert.equal(pickPaperIndustry([], "robot"), "");
+  assert.equal(pickPaperIndustry(["教育・研究", "ロボティクス"], "robot research"), "ロボティクス");
+});
+
+test("pickPaperIndustry: microprocessor / microphone 内の crop を農業と誤判定しない", () => {
+  for (const text of ["A low-power microprocessor design", "microphone design"]) {
+    assert.equal(pickPaperIndustry(industries, text), "");
+  }
 });
