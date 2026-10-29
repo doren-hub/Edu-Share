@@ -133,6 +133,14 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
   "言語・教育": ["linguistic", "language", "education", "teaching", "言語", "教育", "授業"],
 };
 
+const INDUSTRY_WORD_PATTERNS: Record<string, RegExp> = {
+  AI: /\bAI\b/i,
+  ROS: /\bROS\b/i,
+  SLAM: /\bSLAM\b/i,
+  crop: /\bcrops?\b/i,
+  farm: /\bfarm\w*\b/i,
+};
+
 export function isOtherIndustryValue(v: string): boolean {
   const t = v.trim();
   return !t || t === "その他" || t.startsWith("その他");
@@ -149,10 +157,9 @@ export function pickPaperIndustry(options: string[], haystackRaw: string): strin
     let score = 0;
     for (const k of keys) {
       const nk = normalizeKey(k);
-      // 短い英字略語が cross / mail などの単語の一部に一致するのを避ける。
-      const matches = ["AI", "ROS", "SLAM"].includes(k)
-        ? new RegExp(`\\b${k}\\b`, "i").test(haystackRaw)
-        : nk && hay.includes(nk);
+      // 略語や crop が cross / mail / microprocessor の一部に一致するのを避ける。
+      const wordPattern = INDUSTRY_WORD_PATTERNS[k];
+      const matches = wordPattern ? wordPattern.test(haystackRaw) : nk && hay.includes(nk);
       if (matches) score += nk.length;
     }
     if (hay.includes(normalizeKey(opt))) score += normalizeKey(opt).length + 10;

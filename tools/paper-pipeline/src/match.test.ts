@@ -150,6 +150,7 @@ const examples: [string, string][] = [
   ["Agricultural robot for crop monitoring on a farm", "農業・食品"],
   ["圃場の作物と農業の研究", "農業・食品"],
   ["Monitoring crops on farms", "農業・食品"],
+  ["Farming automation", "農業・食品"],
   ["Mobile robot path tracking with pure pursuit and kinematics", "ロボティクス"],
   ["civil engineering construction", "建設・インフラ"],
   ["financial economics", "経済・金融"],
@@ -186,4 +187,10 @@ test("pickPaperIndustry: 旧選択肢・自由入力値・その他を返さな�
   assert.equal(isOtherIndustryValue("その他（Home）"), true);
   assert.equal(pickPaperIndustry([], "robot"), "");
   assert.equal(pickPaperIndustry(["教育・研究", "ロボティクス"], "robot research"), "ロボティクス");
+});
+
+test("pickPaperIndustry: microprocessor / microphone 内の crop を農業と誤判定しない", () => {
+  for (const text of ["A low-power microprocessor design", "microphone design"]) {
+    assert.equal(pickPaperIndustry(industries, text), "");
+  }
 });
