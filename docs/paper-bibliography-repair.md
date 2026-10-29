@@ -34,3 +34,11 @@ SQL、DB / R2 の直接操作、一括変更、原本・添付の削除、マイ
 回帰テストはネットワーク不要の原本テキストと公式応答の fixture を使います。実 NotebookLM / SciSpace / Edu Share や本番 DB / R2 には接続しません。`tools/paper-pipeline` 内で `node --import tsx --test src/scispace-card.test.ts src/steps/scispace.test.ts src/crossref.test.ts` と `npm run typecheck` を実行できます。
 
 見出しなしの Abstract が `In this paper ...` 等で題名直後に始まる場合の継続誤判定は、独立レビューでの非ブロッキング改善として Issue #140 に分離しました。保留時に既存の題名を別項目で上書きしないことは、実アプリのパーサーを使って回帰検証しています。
+
+## 副題と見出しなし本文の境界（Issue #161）
+
+`titleHasPdfContinuation` は題名先頭の継続を検出して原本照合を要求する補助判定です。`On the basis ...` の後の現在形の `We` / `I` / `This study` / `This paper` 節は見出しなし Abstract の根拠にしますが、別行の非本文テキストを越えて探しません。著者らしい綴りや大文字、名前辞書で著者を推定することはありません。副題→著者行→`We compare ...` は副題として保留し、著者行の代わりに所属や未知のメタデータがあっても同様です。
+
+直後の本文開始行、および `On the basis` の直後の `of ...` への改行だけを、従来の最大2行の範囲内で接続します。`Abstract` / `Keywords` / `Introduction` 以降の本文は同一行・別行とも根拠にしません。AgROS 型の `Tool for ...` や、`In ...` の副題は引き続き照合が必要です。#156 の合成真偽表の「副題→著者行→見出しなし We 本文」は、この境界に合わせて false から true（継続の疑いあり）へ更新しました。
+
+限界: 副題・著者・本文がすべて同一行の場合、行の境界がなく安全に区別できません。既存の同一行の本文判定を維持します。また非本文行が入った本物の Abstract や、未対応の折り返し・過去形は、保守的に題名照合へ回ることがあります。PDF・ネットワーク・本番サービスは使わず、合成テキストによる改行・大小文字・見出しの組合せで検証します。

@@ -331,3 +331,22 @@ test("Issue #147: real unlabelled basis abstract remains usable across wrapping 
     }
   }
 });
+
+test("Issue #161: author boundary withholds a subtitle prefix but direct abstract remains usable", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  const title = "Synthetic Robot Emulation Study";
+  for (const separator of ["\n", " "]) {
+    for (const withAuthors of [false, true]) {
+      const state = emptyState({ filename: "synthetic.pdf", inboxPdfPath: "/tmp/synthetic.pdf", paperDir: "/tmp" });
+      state.title = title;
+      const pdf = `${title}${separator}On the basis of synthetic field trials\n${withAuthors ? "Alice Example, Bob Sample\n" : ""}We compare synthetic robot systems.`;
+      await verifySciSpaceBibliography(state, state.filename, pdf, async () => {
+        assert.fail("Synthetic text has no DOI; no lookup is permitted");
+      });
+      assert.equal(Boolean(state.sciTitleRejected), withAuthors);
+      assert.equal(usableEduShareTitle(state), withAuthors ? "" : title);
+      assert.equal(state.title, title);
+    }
+  }
+});

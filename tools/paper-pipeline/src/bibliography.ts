@@ -38,9 +38,17 @@ export function titleHasPdfContinuation(candidate: string, pdfText: string): boo
   if (key.length < 12) return false;
   const lines = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const continuation = (text: string, following: string[]) => {
-    // A basis phrase alone is ambiguous. Only a nearby narrative clause supplies
-    // evidence of an unlabelled abstract; stop before explicit section headings.
-    const context = [text, ...following].join(" ").split(/\b(?:abstract|keywords|introduction)\b/i)[0]!;
+    // Do not search through a non-narrative line (e.g. authors) for prose.
+    // No names are inferred. Only an immediate narrative line or "On the basis"
+    // wrapped before "of ..." can extend the abstract evidence window.
+    const narrativeStart = /^(?:we|i|this\s+(?:study|paper))\s+/i;
+    const contextLines = [text];
+    for (const line of following) {
+      if (!narrativeStart.test(line) &&
+          !(/^on\s+the\s+basis$/i.test(contextLines.join(" ")) && /^of\b/i.test(line))) break;
+      contextLines.push(line);
+    }
+    const context = contextLines.join(" ").split(/\b(?:abstract|keywords|introduction)\b/i)[0]!;
     if (/^on\s+the\s+basis\b/i.test(text) &&
         /\b(?:we|i|this\s+(?:study|paper))\s+(?:(?:present|propose|compare|evaluate|examine|investigate|show|aim|analy[sz]e)s?|discuss(?:es)?|has|have)\b/i.test(context)) return false;
     return !/^in\s+this\b/i.test(text) &&

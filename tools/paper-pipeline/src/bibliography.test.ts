@@ -20,9 +20,17 @@ const cases = [
   { name: "unlabelled basis abstract on one line", suffix: `On the basis of synthetic trials, ${narrative}`, expected: false },
   { name: "unlabelled basis abstract wrapped before We", suffix: `On the basis of synthetic trials,\n${narrative}`, expected: false },
   { name: "unlabelled basis abstract wrapped within phrase", suffix: `On the basis\nof synthetic trials, ${narrative}`, expected: false },
-  // Characterize the current two-following-line heuristic: an author line is
-  // not a section boundary, so nearby present-tense prose still supplies context.
-  { name: "basis subtitle then author then unlabelled We prose", suffix: `${subtitle}\n${author}\n${narrative}`, expected: false },
+  // #161: non-narrative lines stop the evidence window without guessing names.
+  { name: "basis subtitle then author then unlabelled We prose", suffix: `${subtitle}\n${author}\n${narrative}`, expected: true },
+  { name: "basis subtitle then arbitrary metadata then prose", suffix: `${subtitle}\nSynthetic Editorial Collective\n${narrative}`, expected: true },
+  { name: "basis subtitle then initials then prose", suffix: `${subtitle}\nA. Example; B. Sample\n${narrative}`, expected: true },
+  { name: "basis subtitle then affiliation then prose", suffix: `${subtitle}\nInstitute for Synthetic Robotics\n${narrative}`, expected: true },
+  { name: "basis subtitle then non-Latin authors then prose", suffix: `${subtitle}\n架空 著者・合成 太郎\n${narrative}`, expected: true },
+  { name: "wrapped basis subtitle then author then prose", suffix: `On the basis\nof synthetic field trials\n${author}\n${narrative}`, expected: true },
+  { name: "unlabelled basis abstract wrapped phrase then We", suffix: `On the basis\nof synthetic trials,\n${narrative}`, expected: false },
+  // No physical boundary exists here; retain the same-line narrative rule.
+  { name: "same-line authors and prose remain ambiguous", suffix: `${subtitle} ${author} ${narrative}`, expected: false },
+  { name: "tool subtitle then author then prose", suffix: `Tool for Synthetic Robotics\n${author}\n${narrative}`, expected: true },
   // Optional tense expansion in #156 remains deferred. Ambiguous past-tense
   // openings are conservatively held for title verification today.
   { name: "past-tense we proposed", suffix: "On the basis of synthetic trials, we proposed a model.", expected: true },
