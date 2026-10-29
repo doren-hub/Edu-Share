@@ -369,6 +369,35 @@ test("isSignatureMismatchError: correctly identifies signature mismatch errors",
   assert.equal(isSignatureMismatchError(null), false);
 });
 
+test("fetchSimilarCandidatesForPaper: accepts a thenable without Promise methods", async () => {
+  const caller: RpcCaller = {
+    rpc() {
+      const response = Promise.resolve({
+        data: [
+          { id: "p1", similarity: 1 },
+          { id: "p2", similarity: 0.87654 },
+          { id: "outside", similarity: 0.99 },
+        ],
+        error: null,
+      });
+      return { then: response.then.bind(response) };
+    },
+  };
+
+  const result = await fetchSimilarCandidatesForPaper(
+    caller,
+    "p1",
+    5,
+    ["p2"],
+    new Set(["p1", "p2"]),
+  );
+
+  assert.deepEqual(result, {
+    candidates: [{ id: "p2", similarity: 0.877 }],
+    hasError: false,
+  });
+});
+
 test("fetchSimilarCandidatesForPaper: calls RPC with candidateIds, and falls back on signature mismatch", async () => {
   const calls: Array<{ fnName: string; args: Record<string, unknown> }> = [];
 
