@@ -4,13 +4,13 @@
 
 ## 生成の来歴と適用範囲
 
-`generation.json` の `sourceHead` 時点の `generateQuizFromContext` からsystem文字列をそのまま抽出したものが `system-prompt.txt`。各 `*.input.txt` は同関数のuser文字列と同じ組み立てで、`sources.json` の1資料を1チャンクとした。nonceは `issue-89-baseline-v1`。目標と想定難易度は採点用であり、アプリと同様、生成入力には追加していない。
+`generation.json` の `sourceHead` 時点の `generateQuizFromContext` からsystem文字列をそのまま抽出したものが `system-prompt.txt`。各 `*.input.txt` は `sources.json` の1資料を1チャンクとした入力の保存用ファイルで、末尾に保存用のLF（`\n`）を1個追加している。実行時にCLIへ渡した文字列にはこの最後のLFはなく、アプリのuser文字列にもない。したがって保存ファイル全文と実行入力は完全一致しない。`verify.mjs` は最後の1文字だけを除いてCLI入力を再構成し、アプリのuser文字列と同じテンプレートで組み立てた文字列との完全一致を検査する（`trimEnd()` で他の空白まで除去しない）。これは保存資料からの再構成の検証であり、当時CLIが受信したバイト列の独立した記録ではない。nonceは `issue-89-baseline-v1`。目標と想定難易度は採点用であり、アプリと同様、生成入力には追加していない。
 
-実行は Claude Code `--print --model claude-opus-5-5 --effort low --tools ""`。完全な引数、UTC開始時刻、所要秒数、終了コードは各 `*.execution.json` にある。`*.response.json` はCLIの未加工JSON応答で、`result` が生成された問題配列の文字列。`modelUsage` の生成モデルは `claude-opus-5-5`（CLI内部利用のhaikuも記録される）。全3実行は終了コード0、`is_error=false`。
+実行は Claude Code `--print --model claude-opus-5-5 --effort low --tools ""`。引数、UTC開始時刻、所要秒数、終了コードは各 `*.execution.json` にある。ただし同ファイルの `command` は入力元を ` < <case>.input.txt` と略記した来歴メモで、末尾LFを除いた実際の受け渡しを表していない。再実行時は下記の手順で最後のLFだけを除く。`*.response.json` はCLIの未加工JSON応答で、`result` が生成された問題配列の文字列。`modelUsage` の生成モデルは `claude-opus-5-5`（CLI内部利用のhaikuも記録される）。全3実行は終了コード0、`is_error=false`。
 
 **これは本番モデルの実測基準線ではない。** アプリ用APIキーは実行環境に未設定であり、`.env.local` を参照せず既存のClaude CLI認証経路で現行プロンプトを評価した。アプリ既定のAnthropicモデル指定は `claude-3-5-sonnet-20241022`、Gemini既定は `gemini-2.5-flash`。CLIではアプリの温度0.9・maxTokens8192を指定できず、CLI既定値（未取得）を使った。CLI固有の実行文脈もあり、APIと同一条件ではない。この系列は「現行プロンプト × CLI Opus 5.5」として保存し、APIモデル変更の効果を示す比較には用いない。アプリ経由の基準線を追加するときは別系列にし、モデル・温度等を合わせて全資料を再生成する。
 
-アプリのAPIルート、DB保存、過去問補填、PDFマーク付与は実行していない。原文21問について、実装の `excerptAppearsInJoined` を直接呼び、全引用が16文字以上かつ入力に存在することを確認した。したがって引用条件で脱落する問題は0、引用条件通過後も21問。アプリの全後処理を通した実測値ではない。
+アプリのAPIルート、DB保存、過去問補填、PDFマーク付与は実行していない。原文21問について、実装の `excerptAppearsInJoined` を直接呼び、全引用が16文字以上かつ入力に存在することを確認した。オフラインの照合先はタグなしの `source.content`。アプリの `joinedForValidate` はPDFページ付きタグ（例: `--- 抜粋 1 (PDF p.1) ---`）を除去しないため、そのタグも照合先に含む。今回の本文のみの照合はアプリより厳しく、タグを含む引用やタグと本文の境界をまたぐ引用は許容しない。本文はアプリの照合先にもそのまま含まれるため、本文照合を通過した21問はアプリの照合でも通過する。したがって今回の引用条件で脱落する問題は0、引用条件通過後も21問。アプリの全後処理を通した実測値ではない。
 
 ## 固定資料
 
@@ -70,6 +70,6 @@
 
 ## オフラインでの照合
 
-リポジトリルートで `node --experimental-strip-types docs/question-quality/verify.mjs` を実行する。保存済み応答から問題を読み、実際の引用検証関数・形式条件・評点の範囲・入力との対応を検査し、全体率を再計算する。モデルの再呼出しや意味内容の自動採点は行わない。Nodeのモジュール形式に関する警告が出る場合があるが、終了コードで成否を確認できる。
+リポジトリルートで `node --experimental-strip-types docs/question-quality/verify.mjs` を実行する。保存済み応答から問題を読み、実際の引用検証関数・形式条件・評点の範囲・入力との対応を検査し、全体率と資料別・全体の重大欠陥数（SまたはUが1以下の問を1件として数える）を再計算する。重大欠陥数は上の保存済み集計表および全体の「重大欠陥はN/M問」と照合し、不一致なら終了コード非0にする。モデルの再呼出しや意味内容の自動採点は行わない。Nodeのモジュール形式に関する警告が出る場合があるが、終了コードで成否を確認できる。
 
-CLI系列を再生成する場合は、既存結果を上書きしない別の出力先で、`*.execution.json` にあるコマンドの `--system-prompt` に `system-prompt.txt` 全文を1引数として渡し、対応する `*.input.txt` 全文を標準入力に渡す。3資料を個別に実行し、JSON応答・日時・モデル識別子・成否を保存する。温度など未取得のCLI条件をAPIの値と同一だったと記録してはならない。
+CLI系列を再生成する場合は、既存結果を上書きしない別の出力先で、`*.execution.json` にあるコマンドの `--system-prompt` に `system-prompt.txt` 全文を1引数として渡し、対応する `*.input.txt` の最後のLFを1個だけ除いて標準入力に渡す。例えば `node -e 'const fs = require("node:fs"); const s = fs.readFileSync(process.argv[1], "utf8"); if (!s.endsWith("\n")) throw new Error("missing archive LF"); process.stdout.write(s.slice(0, -1));' docs/question-quality/comparison.input.txt` の出力をCLIへパイプする（`cat` によるファイル全文のリダイレクトでは末尾LFも渡る）。3資料を個別に実行し、JSON応答・日時・モデル識別子・成否を保存する。温度など未取得のCLI条件をAPIの値と同一だったと記録してはならない。
