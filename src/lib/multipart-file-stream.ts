@@ -1,6 +1,7 @@
 import busboy from "busboy";
 import { Readable } from "node:stream";
 import { isPayloadTooLargeError } from "./object-storage.ts";
+import { sanitizeProcessingError } from "./sanitize-processing-error.ts";
 
 export type ProcessMultipartFileOptions = {
   maxBytes: number;
@@ -20,7 +21,8 @@ export async function processMultipartFileUpload(
   uploadFile: (fileStream: Readable, fileInfo: { filename: string; mimeType: string }) => Promise<void>,
 ): Promise<ProcessMultipartFileResult> {
   const declaredLength = Number(req.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes) {
+  const MARGIN_BYTES = 64 * 1024;
+  if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes + MARGIN_BYTES) {
     return {
       ok: false,
       status: 413,
@@ -110,7 +112,7 @@ export async function processMultipartFileUpload(
           ok: false,
           status: 500,
           error: "R2へのアップロードに失敗しました",
-          details: err instanceof Error ? err.message : String(err),
+          details: sanitizeProcessingError(err),
         });
       }
     });

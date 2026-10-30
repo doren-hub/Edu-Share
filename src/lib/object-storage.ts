@@ -5,6 +5,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "node:stream";
 
@@ -136,54 +137,73 @@ export async function putObject(
     throw new PayloadTooLargeError(maxBytes, contentLength);
   }
 
-  let bodyToSend: Uint8Array | Readable;
-
   if (body instanceof Uint8Array) {
     if (maxBytes != null && body.byteLength > maxBytes) {
       throw new PayloadTooLargeError(maxBytes, body.byteLength);
     }
-    bodyToSend = body;
-    contentLength = contentLength ?? body.byteLength;
-  } else {
-    const rawStream: AsyncIterable<Uint8Array> =
-      typeof Blob !== "undefined" && body instanceof Blob
-        ? (body.stream() as unknown as AsyncIterable<Uint8Array>)
-        : (body as AsyncIterable<Uint8Array>);
+    await cfg.client.send(
+      new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: assertObjectKey(key),
+        Body: body,
+        ContentType: contentType,
+        CacheControl: "public, max-age=300",
+        ContentLength: contentLength ?? body.byteLength,
+      }),
+    );
+    return;
+  }
 
-    if (maxBytes != null) {
-      let bytesRead = 0;
-      async function* limitGenerator() {
-        for await (const chunk of rawStream) {
-          const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
-          bytesRead += u8.byteLength;
-          if (bytesRead > maxBytes) {
-            throw new PayloadTooLargeError(maxBytes, bytesRead);
-          }
-          yield u8;
+  const rawStream: AsyncIterable<Uint8Array> =
+    typeof Blob !== "undefined" && body instanceof Blob
+      ? (body.stream() as unknown as AsyncIterable<Uint8Array>)
+      : (body as AsyncIterable<Uint8Array>);
+
+  let streamToSend: Readable;
+  if (maxBytes != null) {
+    let bytesRead = 0;
+    async function* limitGenerator() {
+      for await (const chunk of rawStream) {
+        const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        bytesRead += u8.byteLength;
+        if (bytesRead > maxBytes) {
+          throw new PayloadTooLargeError(maxBytes, bytesRead);
         }
+        yield u8;
       }
-      bodyToSend = Readable.from(limitGenerator());
+    }
+    streamToSend = Readable.from(limitGenerator());
+  } else {
+    if (typeof (rawStream as ReadableStream).getReader === "function") {
+      streamToSend = Readable.fromWeb(rawStream as import("node:stream/web").ReadableStream);
     } else {
-      if (
-        typeof (rawStream as ReadableStream).getReader === "function"
-      ) {
-        bodyToSend = Readable.fromWeb(rawStream as import("node:stream/web").ReadableStream);
-      } else {
-        bodyToSend = rawStream as Readable;
-      }
+      streamToSend = rawStream as Readable;
     }
   }
 
-  await cfg.client.send(
-    new PutObjectCommand({
+  const upload = new Upload({
+    client: cfg.client,
+    params: {
       Bucket: cfg.bucket,
       Key: assertObjectKey(key),
-      Body: bodyToSend,
+      Body: streamToSend,
       ContentType: contentType,
       CacheControl: "public, max-age=300",
-      ...(contentLength != null ? { ContentLength: contentLength } : {}),
-    }),
-  );
+    },
+    partSize: 5 * 1024 * 1024,
+    queueSize: 1,
+  });
+
+  try {
+    await upload.done();
+  } catch (err) {
+    try {
+      await upload.abort();
+    } catch {
+      // ignore abort cleanup failure
+    }
+    throw err;
+  }
 }
 
 export async function getObjectBytes(key: string): Promise<Uint8Array> {
