@@ -11,11 +11,36 @@ const scores = json('scores.json');
 const baseline = read('baseline.md');
 const summary = baseline.split('## 集計\n')[1]?.split('\n## ')[0];
 assert.ok(summary, 'saved summary section');
+
+const parseCells = (line) =>
+  line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim());
+
+const tableLines = summary.split('\n').filter((line) => line.trim().startsWith('|'));
+assert.ok(tableLines.length >= 2, 'saved summary table exists');
+const headerCells = parseCells(tableLines[0]);
+const majorDefectIndices = headerCells
+  .map((col, idx) => (col === '重大欠陥' ? idx : -1))
+  .filter((idx) => idx !== -1);
+if (majorDefectIndices.length === 0) {
+  assert.fail('saved summary table is missing "重大欠陥" header');
+}
+if (majorDefectIndices.length > 1) {
+  assert.fail('saved summary table has duplicate "重大欠陥" header');
+}
+const majorDefectsColIndex = majorDefectIndices[0];
+const sourceColIndex = headerCells.findIndex((col) => col === '資料' || col === '資料ID');
+
 let total = 0;
 let candidates = 0;
 let totalRate = 0;
 let majorDefects = 0;
-for (const source of json('sources.json')) {
+const sources = json('sources.json');
+for (const source of sources) {
   // The archive adds exactly one LF; the CLI input and app user string do not.
   const expectedInput = `document_type: ${source.documentType}\nsession_entropy: ${meta.nonce}\n\n抜粋:\n--- 抜粋 1 (PDF p.${source.pdfPage}) ---\n${source.content}`;
   const savedInput = read(`${source.id}.input.txt`);
@@ -60,14 +85,33 @@ for (const source of json('sources.json')) {
   }
   totalRate += rate / questions.length;
   majorDefects += sourceMajorDefects;
-  const summaryRows = summary.split('\n').filter(line => line.startsWith(`| ${source.id} |`));
+  const summaryRows = tableLines.slice(2).filter((line) => {
+    const cells = parseCells(line);
+    if (sourceColIndex !== -1 && cells.length > sourceColIndex) {
+      return cells[sourceColIndex] === source.id;
+    }
+    return cells[0] === source.id;
+  });
   assert.equal(summaryRows.length, 1, `${source.id}: saved summary row`);
-  const savedMajorDefects = summaryRows[0].split('|')[6].trim();
+  const rowCells = parseCells(summaryRows[0]);
+  assert.ok(rowCells.length > majorDefectsColIndex, `${source.id}: saved summary row missing "重大欠陥" cell`);
+  const savedMajorDefects = rowCells[majorDefectsColIndex];
   assert.equal(String(sourceMajorDefects), savedMajorDefects, `${source.id}: saved major defects`);
   console.log(`${source.id}: ${questions.length} questions; mean ${(rate / questions.length).toFixed(2)}%; major defects ${sourceMajorDefects}`);
 }
-const savedTotal = summary.match(/重大欠陥は(\d+)\/(\d+)問/);
+const savedTotal = summary.match(/重大欠陥は\s*(\d+)\/(\d+)\s*問/);
 assert.ok(savedTotal, 'saved total major defects');
 assert.equal(majorDefects, Number(savedTotal[1]), 'total saved major defects');
 assert.equal(total, Number(savedTotal[2]), 'total saved questions');
-console.log(`Total ${total}; major defects ${majorDefects}; candidates ${candidates}; equal-source mean ${(totalRate / json('sources.json').length).toFixed(2)}%`);
+
+const savedCandidates = summary.match(/採用候補は\s*(\d+)\/(\d+)\s*問/);
+assert.ok(savedCandidates, 'saved total candidates');
+assert.equal(candidates, Number(savedCandidates[1]), 'total saved candidates');
+assert.equal(total, Number(savedCandidates[2]), 'total saved questions for candidates');
+
+const savedRate = summary.match(/全体率は\s*\*{0,2}(\d+(?:\.\d+)?)%\*{0,2}/);
+assert.ok(savedRate, 'saved overall rate');
+const calculatedRate = (totalRate / sources.length).toFixed(2);
+assert.equal(calculatedRate, savedRate[1], 'total saved overall rate');
+
+console.log(`Total ${total}; major defects ${majorDefects}; candidates ${candidates}; equal-source mean ${calculatedRate}%`);

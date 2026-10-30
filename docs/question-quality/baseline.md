@@ -70,6 +70,6 @@
 
 ## オフラインでの照合
 
-リポジトリルートで `node --experimental-strip-types docs/question-quality/verify.mjs` を実行する。保存済み応答から問題を読み、実際の引用検証関数・形式条件・評点の範囲・入力との対応を検査し、全体率と資料別・全体の重大欠陥数（SまたはUが1以下の問を1件として数える）を再計算する。重大欠陥数は上の保存済み集計表および全体の「重大欠陥はN/M問」と照合し、不一致なら終了コード非0にする。モデルの再呼出しや意味内容の自動採点は行わない。Nodeのモジュール形式に関する警告が出る場合があるが、終了コードで成否を確認できる。
+リポジトリルートで `node --experimental-strip-types docs/question-quality/verify.mjs` を実行する。保存済み応答から問題を読み、実際の引用検証関数・形式条件・評点の範囲・入力との対応を検査し、全体率と資料別・全体の重大欠陥数（SまたはUが1以下の問を1件として数える）および採用候補数を再計算する。集計表の照合は見出し「重大欠陥」から列を特定し、見出し不足・重複や不一致をエラーにする。全体の重大欠陥数（「重大欠陥はN/M問」）、採用候補数（「採用候補はN/M問」）、全体率（「全体率は **X%**」）も再計算値と照合し、不一致なら終了コード非0にする。モデルの再呼出しや意味内容の自動採点は行わない。Nodeのモジュール形式に関する警告が出る場合があるが、終了コードで成否を確認できる。
 
 CLI系列を再生成する場合は、既存結果を上書きしない別の出力先で、`*.execution.json` にあるコマンドの `--system-prompt` に `system-prompt.txt` 全文を1引数として渡し、対応する `*.input.txt` の最後のLFを1個だけ除いて標準入力に渡す。例えば `node -e 'const fs = require("node:fs"); const s = fs.readFileSync(process.argv[1], "utf8"); if (!s.endsWith("\n")) throw new Error("missing archive LF"); process.stdout.write(s.slice(0, -1));' docs/question-quality/comparison.input.txt` の出力をCLIへパイプする（`cat` によるファイル全文のリダイレクトでは末尾LFも渡る）。3資料を個別に実行し、JSON応答・日時・モデル識別子・成否を保存する。温度など未取得のCLI条件をAPIの値と同一だったと記録してはならない。
