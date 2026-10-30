@@ -146,8 +146,19 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
     "SmartNIC",
     "browser",
     "datacenter",
+    "programming language",
+    "programming languages",
+    "programming",
+    "software localization",
+    "software localisation",
+    "software internationalization",
+    "software translation",
     "通信",
     "情報工学",
+    "プログラミング言語",
+    "プログラミング",
+    "ソフトウェアローカライゼーション",
+    "ソフトウェア翻訳",
   ],
   "半導体・電子デバイス": [
     "semiconductor",
@@ -210,13 +221,96 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
   ],
   "医療・ライフサイエンス": ["medical", "health", "clinical", "patient", "biolog", "genom", "医療", "臨床", "生命科学", "生物", "遺伝子"],
   "農業・食品": ["agricultur", "crop", "farm", "food", "農業", "作物", "圃場", "食品"],
-  "ロボティクス": ["robot", "ROS", "path tracking", "pure pursuit", "kinematics", "SLAM", "localization", "ロボット"],
+  "ロボティクス": [
+    "robot",
+    "ROS",
+    "path tracking",
+    "pure pursuit",
+    "kinematics",
+    "SLAM",
+    "localization",
+    "robot localization",
+    "self-localization",
+    "ロボット",
+    "自己位置推定",
+  ],
   "建設・インフラ": ["construction", "civil engineering", "infrastructure", "建設", "土木", "インフラ"],
   "経済・金融": ["econom", "finance", "financial", "bank", "insurance", "経済", "金融", "保険"],
-  "言語・教育": ["linguistic", "language", "education", "teaching", "言語", "教育", "授業"],
+  "言語・教育": [
+    "linguistic",
+    "language",
+    "education",
+    "teaching",
+    "natural language",
+    "natural languages",
+    "言語",
+    "教育",
+    "授業",
+    "自然言語",
+  ],
 };
 
-const INDUSTRY_WORD_PATTERNS: Record<string, RegExp> = {
+/**
+ * ロボティクス分野の localization（自己位置推定・環境推定）をソフトウェア翻訳（l10n）から区別する。
+ */
+export function matchesRoboticsLocalization(haystackRaw: string): boolean {
+  if (!/\blocali[sz]ations?\b/i.test(haystackRaw)) return false;
+
+  const isSoftwareContext =
+    /\bsoftware\s+(?:[a-z-]+\s+){0,5}locali[sz]ations?\b/i.test(haystackRaw) ||
+    /\blocali[sz]ations?\s+(?:of|in|for)\s+(?:[a-z-]+\s+){0,5}software\b/i.test(haystackRaw) ||
+    /\b(?:ui|web|apps?|applications?|game|systems?)\s+(?:[a-z-]+\s+){0,5}locali[sz]ations?\b/i.test(haystackRaw) ||
+    /\blocali[sz]ations?\s+(?:of|in|for)\s+(?:[a-z-]+\s+){0,5}(?:ui|web|apps?|applications?|user interfaces?)\b/i.test(haystackRaw) ||
+    /(?:ソフトウェア|アプリ|web|ui|ユーザーインターフェース).*(?:ローカライズ|ローカライゼーション|翻訳)/i.test(haystackRaw) ||
+    /(?:ローカライズ|ローカライゼーション|翻訳).*(?:ソフトウェア|アプリ|web|ui)/i.test(haystackRaw);
+
+  if (!isSoftwareContext) {
+    return true;
+  }
+
+  // ソフトウェアが併記されていても、ロボットやSLAM・自律移動等のロボティクス文脈があれば自己位置推定として扱う
+  const isRoboticsContext =
+    /\b(?:robots?|robotic|slam|odometry|kinematics|autonomous vehicle|self-locali[sz]ations?|indoor locali[sz]ations?|mobile robot)\b/i.test(haystackRaw) ||
+    /(?:ロボット|自己位置推定|自律移動)/i.test(haystackRaw);
+
+  return isRoboticsContext;
+}
+
+/**
+ * 自然言語・教育分野の language をプログラミング言語から区別する。
+ */
+export function matchesEducationLanguage(haystackRaw: string): boolean {
+  if (!/\blanguages?\b/i.test(haystackRaw)) return false;
+
+  // プログラミング・計算機言語の表現を取り除いた上で、自然言語・語学・教育の文脈としての language が残るか判定
+  const stripped = haystackRaw
+    .replace(
+      /\b(?:programming|program|scripting|assembly|machine|markup|query|domain-specific|specification|hardware description)\s+(?:[a-z-]+\s+){0,3}languages?\b/gi,
+      " ",
+    )
+    .replace(/\blanguages?\s+(?:for|in)\s+(?:programming|software|coding)\b/gi, " ")
+    .replace(
+      /\b(?:functional|object-oriented|imperative|declarative|typed|concurrent)\s+(?:[a-z-]+\s+){0,3}languages?\b/gi,
+      " ",
+    )
+    .replace(/(?:プログラミング|プログラム|スクリプト|機械|問い合わせ)\s*言語/gu, " ");
+
+  return /\blanguages?\b/i.test(stripped);
+}
+
+/**
+ * 日本語の「言語」について、プログラミング言語を除外して自然言語・教育文脈か判定する。
+ */
+export function matchesEducationJapaneseLanguage(haystackRaw: string): boolean {
+  if (!haystackRaw.includes("言語")) return false;
+
+  const stripped = haystackRaw.replace(/(?:プログラミング|プログラム|スクリプト|機械|問い合わせ)\s*言語/gu, " ");
+  return stripped.includes("言語");
+}
+
+type IndustryKeywordMatcher = RegExp | ((haystackRaw: string) => boolean);
+
+const INDUSTRY_WORD_PATTERNS: Record<string, IndustryKeywordMatcher> = {
   AI: /\bAI\b/i,
   LLM: /\bLLMs?\b/i,
   FET: /\bFETs?\b/i,
@@ -225,6 +319,9 @@ const INDUSTRY_WORD_PATTERNS: Record<string, RegExp> = {
   SLAM: /\bSLAM\b/i,
   crop: /\bcrops?\b/i,
   farm: /\bfarm\w*\b/i,
+  localization: matchesRoboticsLocalization,
+  language: matchesEducationLanguage,
+  言語: matchesEducationJapaneseLanguage,
 };
 
 export function isOtherIndustryValue(v: string): boolean {
@@ -244,8 +341,16 @@ export function pickPaperIndustry(options: string[], haystackRaw: string): strin
     for (const k of keys) {
       const nk = normalizeKey(k);
       // 略語や crop が cross / mail / microprocessor の一部に一致するのを避ける。
+      // 文脈依存のキーワード（language, localization, 言語等）は文脈判定を行う。
       const wordPattern = INDUSTRY_WORD_PATTERNS[k];
-      const matches = wordPattern ? wordPattern.test(haystackRaw) : nk && hay.includes(nk);
+      let matches = false;
+      if (typeof wordPattern === "function") {
+        matches = wordPattern(haystackRaw);
+      } else if (wordPattern) {
+        matches = wordPattern.test(haystackRaw);
+      } else {
+        matches = Boolean(nk && hay.includes(nk));
+      }
       if (matches) score += nk.length;
     }
     if (hay.includes(normalizeKey(opt))) score += normalizeKey(opt).length + 10;
