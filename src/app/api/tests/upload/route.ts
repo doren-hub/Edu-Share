@@ -10,7 +10,7 @@ import { assertStoredPickWithOther } from "@/lib/picklist-parse";
 import { mergePicklistOptionsForSelect } from "@/lib/picklist-merge";
 import { fetchPicklistOptionRows } from "@/lib/supabase/picklist-table";
 import { normalizePdfFilename } from "@/lib/pdf-filename";
-import { isPayloadTooLargeError, putObject } from "@/lib/object-storage";
+import { putObject } from "@/lib/object-storage";
 import { sanitizeProcessingError } from "@/lib/sanitize-processing-error";
 import type { UserRole } from "@/lib/types";
 
@@ -127,14 +127,6 @@ export async function POST(req: Request) {
   }
   if (!looksLikePdf(file)) {
     return NextResponse.json({ error: "PDFのみアップロードできます" }, { status: 400 });
-  }
-
-  const MAX_PDF_BYTES = 200 * 1024 * 1024;
-  if (file.size > MAX_PDF_BYTES) {
-    return NextResponse.json(
-      { error: `PDF は ${Math.floor(MAX_PDF_BYTES / (1024 * 1024))}MB 以下にしてください` },
-      { status: 413 },
-    );
   }
 
   const parsed = uploadFormSchema.safeParse({
@@ -400,18 +392,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    await putObject(storagePath, file.stream(), "application/pdf", {
-      maxBytes: MAX_PDF_BYTES,
-      contentLength: file.size,
-    });
+    await putObject(storagePath, file.stream(), "application/pdf");
   } catch (error) {
     await admin.from("tests").delete().eq("id", testId);
-    if (isPayloadTooLargeError(error)) {
-      return NextResponse.json(
-        { error: `PDF は ${Math.floor(MAX_PDF_BYTES / (1024 * 1024))}MB 以下にしてください` },
-        { status: 413 },
-      );
-    }
     return NextResponse.json(
       {
         error: "R2へのアップロードに失敗しました",

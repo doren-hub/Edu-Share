@@ -2,11 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ingestPdfForTest } from "@/lib/ingest-pdf";
-import {
-  createObjectReadUrl,
-  isPayloadTooLargeError,
-  putObject,
-} from "@/lib/object-storage";
+import { createObjectReadUrl, putObject } from "@/lib/object-storage";
 import { sanitizeProcessingError } from "@/lib/sanitize-processing-error";
 
 export const runtime = "nodejs";
@@ -111,8 +107,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
-  const MAX_PDF_BYTES = 200 * 1024 * 1024;
-
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {
@@ -120,12 +114,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
   if (file.type !== "application/pdf") {
     return NextResponse.json({ error: "PDFのみアップロードできます" }, { status: 400 });
-  }
-  if (file.size > MAX_PDF_BYTES) {
-    return NextResponse.json(
-      { error: `PDF は ${Math.floor(MAX_PDF_BYTES / (1024 * 1024))}MB 以下にしてください` },
-      { status: 413 },
-    );
   }
 
   const { error: pendErr } = await admin
@@ -143,24 +131,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   try {
-    await putObject(storagePath, file.stream(), "application/pdf", {
-      maxBytes: MAX_PDF_BYTES,
-      contentLength: file.size,
-    });
+    await putObject(storagePath, file.stream(), "application/pdf");
   } catch (error) {
-    if (isPayloadTooLargeError(error)) {
-      await admin
-        .from("tests")
-        .update({
-          processing_status: "failed",
-          processing_error: `PDF は ${Math.floor(MAX_PDF_BYTES / (1024 * 1024))}MB 以下にしてください`,
-        })
-        .eq("id", testId);
-      return NextResponse.json(
-        { error: `PDF は ${Math.floor(MAX_PDF_BYTES / (1024 * 1024))}MB 以下にしてください` },
-        { status: 413 },
-      );
-    }
     const safeError = sanitizeProcessingError(error);
     await admin
       .from("tests")

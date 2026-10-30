@@ -6,13 +6,13 @@ import {
 } from "@/lib/pdfs-bucket-upload";
 import {
   deleteObjects,
-  isPayloadTooLargeError,
   putObject,
 } from "@/lib/object-storage";
 import {
   legacyNotebooklmVideoMp4StoragePath,
   notebooklmVideoMp4StoragePath,
 } from "@/lib/test-notebooklm-material-paths";
+import { processMultipartFileUpload } from "@/lib/multipart-file-stream";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -59,42 +59,31 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
-  const form = await req.formData();
-  const file = form.get("file");
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: "動画ファイルが必要です" }, { status: 400 });
-  }
-  if (!looksLikeVideoMp4(file)) {
-    return NextResponse.json({ error: "動画は MP4 のみアップロードできます" }, { status: 400 });
-  }
-
-  if (file.size > MAX_BYTES) {
-    return NextResponse.json(
-      { error: `動画は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
-      { status: 413 },
-    );
-  }
-
   const storagePath = notebooklmVideoMp4StoragePath(test.uploaded_by, testId);
 
-  try {
-    await putObject(storagePath, file.stream(), "video/mp4", {
+  const uploadResult = await processMultipartFileUpload(
+    req,
+    {
       maxBytes: MAX_BYTES,
-      contentLength: file.size,
-    });
-  } catch (error) {
-    if (isPayloadTooLargeError(error)) {
-      return NextResponse.json(
-        { error: `動画は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
-        { status: 413 },
-      );
-    }
+      maxBytesMessage: `動画は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください`,
+      missingFileMessage: "動画ファイルが必要です",
+      invalidFormatMessage: "動画は MP4 のみアップロードできます",
+      fileValidator: looksLikeVideoMp4,
+    },
+    async (fileStream) => {
+      await putObject(storagePath, fileStream, "video/mp4", {
+        maxBytes: MAX_BYTES,
+      });
+    },
+  );
+
+  if (!uploadResult.ok) {
     return NextResponse.json(
       {
-        error: "R2へのアップロードに失敗しました",
-        details: error instanceof Error ? error.message : String(error),
+        error: uploadResult.error,
+        ...(uploadResult.details ? { details: uploadResult.details } : {}),
       },
-      { status: 500 },
+      { status: uploadResult.status },
     );
   }
 

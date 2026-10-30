@@ -6,13 +6,13 @@ import {
 } from "@/lib/pdfs-bucket-upload";
 import {
   deleteObjects,
-  isPayloadTooLargeError,
   putObject,
 } from "@/lib/object-storage";
 import {
   legacyNotebooklmSlidePdfStoragePath,
   notebooklmSlidePdfStoragePath,
 } from "@/lib/test-notebooklm-material-paths";
+import { processMultipartFileUpload } from "@/lib/multipart-file-stream";
 
 export const runtime = "nodejs";
 
@@ -58,42 +58,31 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
-  const form = await req.formData();
-  const file = form.get("file");
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: "PDFファイルが必要です" }, { status: 400 });
-  }
-  if (!looksLikeSlidePdf(file)) {
-    return NextResponse.json({ error: "スライドは PDF のみアップロードできます" }, { status: 400 });
-  }
-
-  if (file.size > MAX_BYTES) {
-    return NextResponse.json(
-      { error: `PDF は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
-      { status: 413 },
-    );
-  }
-
   const storagePath = notebooklmSlidePdfStoragePath(test.uploaded_by, testId);
 
-  try {
-    await putObject(storagePath, file.stream(), "application/pdf", {
+  const uploadResult = await processMultipartFileUpload(
+    req,
+    {
       maxBytes: MAX_BYTES,
-      contentLength: file.size,
-    });
-  } catch (error) {
-    if (isPayloadTooLargeError(error)) {
-      return NextResponse.json(
-        { error: `PDF は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
-        { status: 413 },
-      );
-    }
+      maxBytesMessage: `PDF は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください`,
+      missingFileMessage: "PDFファイルが必要です",
+      invalidFormatMessage: "スライドは PDF のみアップロードできます",
+      fileValidator: looksLikeSlidePdf,
+    },
+    async (fileStream) => {
+      await putObject(storagePath, fileStream, "application/pdf", {
+        maxBytes: MAX_BYTES,
+      });
+    },
+  );
+
+  if (!uploadResult.ok) {
     return NextResponse.json(
       {
-        error: "R2へのアップロードに失敗しました",
-        details: error instanceof Error ? error.message : String(error),
+        error: uploadResult.error,
+        ...(uploadResult.details ? { details: uploadResult.details } : {}),
       },
-      { status: 500 },
+      { status: uploadResult.status },
     );
   }
 
