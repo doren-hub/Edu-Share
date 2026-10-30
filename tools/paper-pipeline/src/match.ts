@@ -148,7 +148,6 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
     "datacenter",
     "programming language",
     "programming languages",
-    "programming",
     "software localization",
     "software localisation",
     "software internationalization",
@@ -156,7 +155,6 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
     "通信",
     "情報工学",
     "プログラミング言語",
-    "プログラミング",
     "ソフトウェアローカライゼーション",
     "ソフトウェア翻訳",
   ],
@@ -257,12 +255,12 @@ export function matchesRoboticsLocalization(haystackRaw: string): boolean {
   if (!/\blocali[sz]ations?\b/i.test(haystackRaw)) return false;
 
   const isSoftwareContext =
-    /\bsoftware\s+(?:[a-z-]+\s+){0,5}locali[sz]ations?\b/i.test(haystackRaw) ||
-    /\blocali[sz]ations?\s+(?:of|in|for)\s+(?:[a-z-]+\s+){0,5}software\b/i.test(haystackRaw) ||
-    /\b(?:ui|web|apps?|applications?|game|systems?)\s+(?:[a-z-]+\s+){0,5}locali[sz]ations?\b/i.test(haystackRaw) ||
-    /\blocali[sz]ations?\s+(?:of|in|for)\s+(?:[a-z-]+\s+){0,5}(?:ui|web|apps?|applications?|user interfaces?)\b/i.test(haystackRaw) ||
-    /(?:ソフトウェア|アプリ|web|ui|ユーザーインターフェース).*(?:ローカライズ|ローカライゼーション|翻訳)/i.test(haystackRaw) ||
-    /(?:ローカライズ|ローカライゼーション|翻訳).*(?:ソフトウェア|アプリ|web|ui)/i.test(haystackRaw);
+    /\bsoftware\s+(?:[a-z-]+\s+){0,3}locali[sz]ations?\b/i.test(haystackRaw) ||
+    /\blocali[sz]ations?\s+(?:of|in|for)\s+(?:[a-z-]+\s+){0,3}software\b/i.test(haystackRaw) ||
+    /\b(?:ui|web|apps?|user interfaces?)\s+(?:[a-z-]+\s+){0,2}locali[sz]ations?\b/i.test(haystackRaw) ||
+    /\blocali[sz]ations?\s+(?:of|in|for)\s+(?:[a-z-]+\s+){0,2}(?:ui|web|apps?|user interfaces?)\b/i.test(haystackRaw) ||
+    /(?:ソフトウェア|アプリ|web|ui|ユーザーインターフェース).{0,20}(?:ローカライズ|ローカライゼーション|翻訳)/i.test(haystackRaw) ||
+    /(?:ローカライズ|ローカライゼーション|翻訳).{0,20}(?:ソフトウェア|アプリ|web|ui)/i.test(haystackRaw);
 
   if (!isSoftwareContext) {
     return true;
@@ -283,14 +281,15 @@ export function matchesEducationLanguage(haystackRaw: string): boolean {
   if (!/\blanguages?\b/i.test(haystackRaw)) return false;
 
   // プログラミング・計算機言語の表現を取り除いた上で、自然言語・語学・教育の文脈としての language が残るか判定
+  // machine learning 等の一般的な表現を壊さないよう、間に語を挟めるのは programming/scripting 等に限定する
   const stripped = haystackRaw
     .replace(
-      /\b(?:programming|program|scripting|assembly|machine|markup|query|domain-specific|specification|hardware description)\s+(?:[a-z-]+\s+){0,3}languages?\b/gi,
+      /\b(?:programming|scripting|domain-specific)\s+(?:[a-z-]+\s+){0,2}languages?\b/gi,
       " ",
     )
     .replace(/\blanguages?\s+(?:for|in)\s+(?:programming|software|coding)\b/gi, " ")
     .replace(
-      /\b(?:functional|object-oriented|imperative|declarative|typed|concurrent)\s+(?:[a-z-]+\s+){0,3}languages?\b/gi,
+      /\b(?:machine|assembly|markup|query|specification|hardware description|functional|object-oriented|imperative|declarative|typed|concurrent)\s+languages?\b/gi,
       " ",
     )
     .replace(/(?:プログラミング|プログラム|スクリプト|機械|問い合わせ)\s*言語/gu, " ");

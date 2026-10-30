@@ -265,6 +265,8 @@ test("matchesEducationLanguage: プログラミング言語表現と自然言語
   assert.equal(matchesEducationLanguage("Natural language syntax and semantic parsing"), true);
   assert.equal(matchesEducationLanguage("Second language acquisition in education"), true);
   assert.equal(matchesEducationLanguage("A comparative study of natural language and programming language"), true);
+  assert.equal(matchesEducationLanguage("Machine learning approaches to language acquisition"), true);
+  assert.equal(matchesEducationLanguage("Machine learning models for natural language processing"), true);
 });
 
 test("matchesEducationJapaneseLanguage: プログラミング言語と自然言語を区別する", () => {
@@ -283,6 +285,8 @@ test("matchesRoboticsLocalization: ソフトウェア翻訳とロボット自己
   assert.equal(matchesRoboticsLocalization("Continuous localization in software engineering"), false);
   assert.equal(matchesRoboticsLocalization("ソフトウェアローカライゼーションの手法"), false);
   assert.equal(matchesRoboticsLocalization("Software architecture for mobile robot localization"), true);
+  assert.equal(matchesRoboticsLocalization("Multi-sensor systems and robust localization"), true);
+  assert.equal(matchesRoboticsLocalization("Applications of sound source localization"), true);
 });
 
 test("pickPaperIndustry: 4文脈（プログラミング言語・ソフトウェア翻訳・自然言語・自己位置推定）の回帰テスト", () => {
@@ -318,6 +322,7 @@ test("pickPaperIndustry: 4文脈（プログラミング言語・ソフトウェ
     "Syntactic structures in natural languages",
     "自然言語処理における統語構造の解析",
     "自然言語の意味論と語学教育への応用",
+    "Statistical models for language acquisition",
   ];
   for (const text of nlExamples) {
     assert.equal(pickPaperIndustry(industries, text), "言語・教育", `NL context should match 言語・教育: ${text}`);
@@ -331,8 +336,17 @@ test("pickPaperIndustry: 4文脈（プログラミング言語・ソフトウェ
     "Software architecture for mobile robot localization",
     "自律移動ロボットの自己位置推定アルゴリズム",
     "移動ロボットの自己位置推定と環境地図作成",
+    "Multi-sensor systems and robust localization",
+    "Applications of sound source localization",
   ];
   for (const text of roboticsExamples) {
     assert.equal(pickPaperIndustry(industries, text), "ロボティクス", `Robotics localization context should match ロボティクス: ${text}`);
   }
+});
+
+test("pickPaperIndustry: 単独の programming が数理計画法や教育を IT・通信 に寄せない", () => {
+  // 線形計画法等の最適化問題（農業・食品の論文）が IT・通信 にならない
+  assert.equal(pickPaperIndustry(industries, "Linear programming for crop planning on farms"), "農業・食品");
+  // プログラミング教育が IT・通信 ではなく 言語・教育 になる
+  assert.equal(pickPaperIndustry(industries, "Programming education for children in schools"), "言語・教育");
 });
