@@ -14,11 +14,12 @@ let chromeDownloadsPath = "";
 
 export const CHROME_RELAUNCH_GAP_MS = 2_500;
 
-export const DEFAULT_CHROME_USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-
 export function cleanHeadlessUserAgent(ua: string): string {
   return ua.replace(/HeadlessChrome/g, "Chrome");
+}
+
+export function shouldOverrideHeadlessUserAgent(rawUa: string): boolean {
+  return rawUa.includes("HeadlessChrome");
 }
 
 export function createStealthUserAgentData<
@@ -250,11 +251,12 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     );
     context = await chromium.launchPersistentContext(cfg.chromeUserDataDir, launchOpts);
   }
-  await context.addInitScript(() => {
+  await context.addInitScript(`
+    const createStealthUserAgentData = ${createStealthUserAgentData.toString()};
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     try {
-      if (!(window as unknown as { chrome?: unknown }).chrome) {
-        (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
+      if (!window.chrome) {
+        window.chrome = { runtime: {} };
       }
       if (navigator.userAgent && navigator.userAgent.includes("HeadlessChrome")) {
         const cleanedUa = navigator.userAgent.replace(/HeadlessChrome/g, "Chrome");
@@ -263,37 +265,8 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
           configurable: true,
         });
       }
-      const nav = navigator as unknown as {
-        userAgentData?: {
-          brands?: Array<{ brand: string; version: string }>;
-          mobile?: boolean;
-          platform?: string;
-          getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
-          toJSON?: () => Record<string, unknown>;
-          [key: string]: unknown;
-        };
-      };
-      if (nav.userAgentData) {
-        const brands = nav.userAgentData.brands;
-        const cleanedBrands = Array.isArray(brands)
-          ? brands.map((b) => ({
-              brand: b.brand.replace(/Headless/i, ""),
-              version: b.version,
-            }))
-          : brands;
-        const proxy = new Proxy(nav.userAgentData, {
-          get(target, prop) {
-            if (prop === "brands") return cleanedBrands;
-            if (prop === "toJSON") {
-              return () => {
-                const originalJson = typeof target.toJSON === "function" ? target.toJSON() : {};
-                return { ...originalJson, brands: cleanedBrands };
-              };
-            }
-            const val = Reflect.get(target, prop, target);
-            return typeof val === "function" ? val.bind(target) : val;
-          },
-        });
+      if (navigator.userAgentData) {
+        const proxy = createStealthUserAgentData(navigator.userAgentData);
         Object.defineProperty(navigator, "userAgentData", {
           get: () => proxy,
           configurable: true,
@@ -302,15 +275,22 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     } catch {
       // 偽装初期化エラーは握りつぶす
     }
-  });
+  `);
   const keeper = context.pages()[0] ?? (await context.newPage());
   keeper.setDefaultTimeout(30_000);
   await keeper.goto("about:blank").catch(() => undefined);
   if (!cfg.headed) {
-    const rawUa = await keeper.evaluate(() => navigator.userAgent).catch(() => "");
-    if (rawUa && rawUa.includes("HeadlessChrome")) {
-      const cleanUa = rawUa.replace(/HeadlessChrome/g, "Chrome");
-      await context.setExtraHTTPHeaders({ "user-agent": cleanUa }).catch(() => undefined);
+    try {
+      const cdp = await context.newCDPSession(keeper);
+      const versionInfo = (await cdp.send("Browser.getVersion")) as { userAgent?: string };
+      const rawUa = versionInfo?.userAgent ?? "";
+      if (shouldOverrideHeadlessUserAgent(rawUa)) {
+        const cleanUa = cleanHeadlessUserAgent(rawUa);
+        await context.setExtraHTTPHeaders({ "user-agent": cleanUa }).catch(() => undefined);
+      }
+      await cdp.detach().catch(() => undefined);
+    } catch {
+      // CDP 取得失敗時はフォールバック
     }
   }
   await useChromeOwnDownloads(context, downloadsPath, keeper).catch((e) => {

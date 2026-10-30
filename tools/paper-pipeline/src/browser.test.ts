@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   chromeLaunchArgs,
-  DEFAULT_CHROME_USER_AGENT,
   cleanHeadlessUserAgent,
   createStealthUserAgentData,
+  shouldOverrideHeadlessUserAgent,
 } from "./browser.ts";
 
 test("chromeLaunchArgs: ヘッドレスでは --headless=new を付ける", () => {
@@ -16,9 +16,15 @@ test("chromeLaunchArgs: ヘッドレスでは --headless=new を付ける", () =
   assert.equal(headed.includes("--load-extension="), false);
 });
 
-test("DEFAULT_CHROME_USER_AGENT: HeadlessChrome を含まず通常の Chrome User-Agent である", () => {
-  assert.equal(DEFAULT_CHROME_USER_AGENT.includes("HeadlessChrome"), false);
-  assert.match(DEFAULT_CHROME_USER_AGENT, /Mozilla\/5\.0.*Chrome\/\d+/);
+test("shouldOverrideHeadlessUserAgent: HeadlessChrome が含まれる場合のみ置換対象とする", () => {
+  assert.equal(
+    shouldOverrideHeadlessUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X) HeadlessChrome/156.0.8078.79 Safari/537.36"),
+    true,
+  );
+  assert.equal(
+    shouldOverrideHeadlessUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X) Chrome/156.0.8078.79 Safari/537.36"),
+    false,
+  );
 });
 
 test("cleanHeadlessUserAgent: HeadlessChrome を Chrome に置換して実バージョンを保つ", () => {
