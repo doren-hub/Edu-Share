@@ -294,7 +294,7 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
     throw new NeedVisibleChromeError(
       "SciSpace",
       folderUrl,
-      `headless で SciSpace の指定フォルダが開きません（--headed で実行してください）: ${folderUrl}`,
+      `headless で SciSpace の指定フォルダが開かないため画面付きへ切り替えます: ${folderUrl}`,
     );
   }
   throw new Error(`SciSpace の指定フォルダを開けませんでした: ${folderUrl}`);

@@ -21,14 +21,15 @@ export function cleanHeadlessUserAgent(ua: string): string {
   return ua.replace(/HeadlessChrome/g, "Chrome");
 }
 
-export function createStealthUserAgentData(originalUaData: {
-  brands?: Array<{ brand: string; version: string }>;
-  mobile?: boolean;
-  platform?: string;
-  getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
-  toJSON?: () => Record<string, unknown>;
-  [key: string]: unknown;
-}): typeof originalUaData {
+export function createStealthUserAgentData<
+  T extends {
+    brands?: Array<{ brand: string; version: string }>;
+    mobile?: boolean;
+    platform?: string;
+    getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+    toJSON?: () => Record<string, unknown>;
+  },
+>(originalUaData: T): T {
   const brands = originalUaData.brands;
   const cleanedBrands = Array.isArray(brands)
     ? brands.map((b) => ({
@@ -37,10 +38,16 @@ export function createStealthUserAgentData(originalUaData: {
       }))
     : brands;
   return new Proxy(originalUaData, {
-    get(target, prop, receiver) {
+    get(target, prop) {
       if (prop === "brands") return cleanedBrands;
-      const val = Reflect.get(target, prop, receiver);
-      return typeof val === "function" ? val.bind(receiver) : val;
+      if (prop === "toJSON") {
+        return () => {
+          const originalJson = typeof target.toJSON === "function" ? target.toJSON() : {};
+          return { ...originalJson, brands: cleanedBrands };
+        };
+      }
+      const val = Reflect.get(target, prop, target);
+      return typeof val === "function" ? val.bind(target) : val;
     },
   });
 }
@@ -218,7 +225,6 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   log(cfg.headed ? "Chrome を画面付きで起動します" : "Chrome をヘッドレスで起動します（ウィンドウは開きません）");
   const launchOpts = {
     headless: !cfg.headed,
-    userAgent: cfg.headed ? undefined : DEFAULT_CHROME_USER_AGENT,
     viewport: { width: 1400, height: 900 } as const,
     acceptDownloads: false, // Playwright が横取りすると .crdownload が止まり Chrome が落ちる
     args,
@@ -267,20 +273,25 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
           [key: string]: unknown;
         };
       };
-      const originalUaData = nav.userAgentData;
-      if (originalUaData) {
-        const brands = originalUaData.brands;
+      if (nav.userAgentData) {
+        const brands = nav.userAgentData.brands;
         const cleanedBrands = Array.isArray(brands)
           ? brands.map((b) => ({
               brand: b.brand.replace(/Headless/i, ""),
               version: b.version,
             }))
           : brands;
-        const proxy = new Proxy(originalUaData, {
-          get(target, prop, receiver) {
+        const proxy = new Proxy(nav.userAgentData, {
+          get(target, prop) {
             if (prop === "brands") return cleanedBrands;
-            const val = Reflect.get(target, prop, receiver);
-            return typeof val === "function" ? val.bind(receiver) : val;
+            if (prop === "toJSON") {
+              return () => {
+                const originalJson = typeof target.toJSON === "function" ? target.toJSON() : {};
+                return { ...originalJson, brands: cleanedBrands };
+              };
+            }
+            const val = Reflect.get(target, prop, target);
+            return typeof val === "function" ? val.bind(target) : val;
           },
         });
         Object.defineProperty(navigator, "userAgentData", {
@@ -295,6 +306,13 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   const keeper = context.pages()[0] ?? (await context.newPage());
   keeper.setDefaultTimeout(30_000);
   await keeper.goto("about:blank").catch(() => undefined);
+  if (!cfg.headed) {
+    const rawUa = await keeper.evaluate(() => navigator.userAgent).catch(() => "");
+    if (rawUa && rawUa.includes("HeadlessChrome")) {
+      const cleanUa = rawUa.replace(/HeadlessChrome/g, "Chrome");
+      await context.setExtraHTTPHeaders({ "user-agent": cleanUa }).catch(() => undefined);
+    }
+  }
   await useChromeOwnDownloads(context, downloadsPath, keeper).catch((e) => {
     warn(`Chrome の保存先を切り替えできません: ${e instanceof Error ? e.message : e}`);
   });
