@@ -44,6 +44,7 @@ export type PaperState = {
   venue: string;
   filesPaste: string;
   tldr: string;
+  industry?: string;
   slidePdfPath: string;
   videoMp4Path: string;
   quizCsvPath: string;
@@ -85,6 +86,7 @@ export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath"
     venue: "",
     filesPaste: "",
     tldr: "",
+    industry: "",
     slidePdfPath: "",
     videoMp4Path: "",
     quizCsvPath: "",
@@ -140,6 +142,7 @@ export function loadState(paperDir: string, fallback: PaperState): PaperState {
       descRepairAttempts: Math.max(0, Math.floor(Number(parsed.descRepairAttempts) || 0)),
       descRepairGaveUp: typeof parsed.descRepairGaveUp === "string" ? parsed.descRepairGaveUp : "",
       sciTitleRejected: Boolean(parsed.sciTitleRejected),
+      industry: typeof parsed.industry === "string" ? parsed.industry : fallback.industry ?? "",
       paperDir,
       inboxPdfPath: fallback.inboxPdfPath,
     };

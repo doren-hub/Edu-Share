@@ -262,7 +262,7 @@ async function waitAutofillSettled(page: Page): Promise<void> {
   warn("PDF 自動入力の完了表示を確認できませんでした");
 }
 
-async function ensureIndustry(page: Page, haystack: string): Promise<void> {
+export async function ensureIndustry(page: Page, haystack: string, state?: PaperState): Promise<void> {
   const select = page.locator("#paper-industry");
   if (!(await select.isVisible({ timeout: 0 }).catch(() => false))) {
     await select.waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
@@ -280,13 +280,33 @@ async function ensureIndustry(page: Page, haystack: string): Promise<void> {
       await select.selectOption(best);
     });
     log(`業界: ${best}`);
+    if (state) {
+      state.industry = best;
+      if (state.paperDir) saveState(state);
+    }
     return;
   }
   if (best && current === best) {
     log(`業界（維持）: ${current}`);
+    if (state) {
+      state.industry = current;
+      if (state.paperDir) saveState(state);
+    }
+    return;
+  }
+  if (!best && current && !isOtherIndustryValue(current)) {
+    log(`業界（既存維持）: ${current}`);
+    if (state) {
+      state.industry = current;
+      if (state.paperDir) saveState(state);
+    }
     return;
   }
   warn("業界を自動判定できませんでした。空のままアップロードします");
+  if (state) {
+    state.industry = "業界未判定";
+    if (state.paperDir) saveState(state);
+  }
 }
 
 async function uploadFormAlert(page: Page): Promise<string> {
@@ -430,7 +450,7 @@ export async function runEduShareUpload(
       await fillIfVisible(desc, state.tldr.slice(0, 2000), "説明");
     }
 
-    await ensureIndustry(page, [state.title, state.venue, state.tldr].filter(Boolean).join("\n"));
+    await ensureIndustry(page, [state.title, state.venue, state.tldr].filter(Boolean).join("\n"), state);
     await ensurePaperAuthor(page, state);
 
     const submit = async () => {
@@ -793,7 +813,7 @@ export async function applySciSpaceMetaToPaperPage(
         warn(`発表年 ${wantYear} を候補に追加できませんでした`);
       }
     }
-    await ensureIndustry(page, [state.title, state.venue, tldr].filter(Boolean).join("\n"));
+    await ensureIndustry(page, [state.title, state.venue, tldr].filter(Boolean).join("\n"), state);
     await ensurePaperAuthor(page, state);
     if (!tldrOk && (await fillTldrFromPdfSummarize(page, state))) {
       tldrOk = true;

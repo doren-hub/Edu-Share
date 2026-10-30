@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import { notebookLmCsvStatusLine } from "../edushare-form.ts";
 import { emptyState } from "../state.ts";
-import { importNotebookLmCsv, notebookLmCsvCardText, usableEduShareTitle, verifyEduSharePaper } from "./edushare.ts";
+import { ensureIndustry, importNotebookLmCsv, notebookLmCsvCardText, usableEduShareTitle, verifyEduSharePaper } from "./edushare.ts";
 
 // 見出し → 説明 p → 状態 p → input。両欄の親には rounded クラスがある想定。
 function titleNode(status: string): Element {
@@ -190,4 +190,72 @@ test("issue #131: usableEduShareTitle: PDF名・ページ範囲・掲載誌/会�
 
   stateValid.title = "Editor bias in peer review";
   assert.equal(usableEduShareTitle(stateValid), "Editor bias in peer review");
+});
+
+test("ensureIndustry: 自動判定成功時は選択して state.industry に保存する", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-industry-"));
+  try {
+    const state = emptyState({ filename: "nanosheet.pdf", inboxPdfPath: "", paperDir: root });
+    let selected = "";
+    const fakeSelect = {
+      isVisible: async () => true,
+      waitFor: async () => {},
+      inputValue: async () => selected,
+      locator: () => ({
+        allTextContents: async () => ["選択してください", "半導体・電子デバイス", "AI・データ", "その他"],
+      }),
+      selectOption: async (opt: any) => {
+        selected = typeof opt === "string" ? opt : (opt.label || opt.value || "");
+      },
+    };
+    const page = {
+      locator: (sel: string) => {
+        if (sel === "#paper-industry") return fakeSelect;
+        throw new Error(`Unexpected selector: ${sel}`);
+      },
+    } as unknown as Page;
+
+    await ensureIndustry(page, "Review of Nanosheet Transistors Technology", state);
+    assert.equal(selected, "半導体・電子デバイス");
+    assert.equal(state.industry, "半導体・電子デバイス");
+
+    const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+    assert.equal(saved.industry, "半導体・電子デバイス");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureIndustry: 業界が空になったときは state.industry に「業界未判定」と残す", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-industry-unset-"));
+  try {
+    const state = emptyState({ filename: "unknown.pdf", inboxPdfPath: "", paperDir: root });
+    let selected = "";
+    const fakeSelect = {
+      isVisible: async () => true,
+      waitFor: async () => {},
+      inputValue: async () => selected,
+      locator: () => ({
+        allTextContents: async () => ["選択してください", "半導体・電子デバイス", "AI・データ", "その他"],
+      }),
+      selectOption: async (opt: any) => {
+        selected = typeof opt === "string" ? opt : (opt.label || opt.value || "");
+      },
+    };
+    const page = {
+      locator: (sel: string) => {
+        if (sel === "#paper-industry") return fakeSelect;
+        throw new Error(`Unexpected selector: ${sel}`);
+      },
+    } as unknown as Page;
+
+    await ensureIndustry(page, "Unrelated and uncategorized generic document", state);
+    assert.equal(selected, "");
+    assert.equal(state.industry, "業界未判定");
+
+    const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+    assert.equal(saved.industry, "業界未判定");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
