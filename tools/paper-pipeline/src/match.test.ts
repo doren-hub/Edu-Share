@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isOtherIndustryValue,
+  matchesEducationJapaneseLanguage,
+  matchesEducationLanguage,
   matchesExistingPaper,
+  matchesRoboticsLocalization,
   normalizeDoi,
   pickBestOption,
   pickPaperIndustry,
@@ -252,4 +255,98 @@ test("pickPaperIndustry: microprocessor / microphone 内の crop を農業と誤
   for (const text of ["A low-power microprocessor design", "microphone design"]) {
     assert.equal(pickPaperIndustry(industries, text), "");
   }
+});
+
+test("matchesEducationLanguage: プログラミング言語表現と自然言語表現を区別する", () => {
+  assert.equal(matchesEducationLanguage("Design and implementation of the Rust programming language"), false);
+  assert.equal(matchesEducationLanguage("Type inference for functional programming languages"), false);
+  assert.equal(matchesEducationLanguage("A study on domain-specific languages in software engineering"), false);
+  assert.equal(matchesEducationLanguage("Programming languages for parallel architectures"), false);
+  assert.equal(matchesEducationLanguage("Natural language syntax and semantic parsing"), true);
+  assert.equal(matchesEducationLanguage("Second language acquisition in education"), true);
+  assert.equal(matchesEducationLanguage("A comparative study of natural language and programming language"), true);
+  assert.equal(matchesEducationLanguage("Machine learning approaches to language acquisition"), true);
+  assert.equal(matchesEducationLanguage("Machine learning models for natural language processing"), true);
+});
+
+test("matchesEducationJapaneseLanguage: プログラミング言語と自然言語を区別する", () => {
+  assert.equal(matchesEducationJapaneseLanguage("プログラミング言語の型システム"), false);
+  assert.equal(matchesEducationJapaneseLanguage("スクリプト言語の構文木"), false);
+  assert.equal(matchesEducationJapaneseLanguage("自然言語の形態素解析"), true);
+  assert.equal(matchesEducationJapaneseLanguage("プログラミング言語と自然言語の比較"), true);
+});
+
+test("matchesRoboticsLocalization: ソフトウェア翻訳とロボット自己位置推定を区別する", () => {
+  assert.equal(matchesRoboticsLocalization("localization"), true);
+  assert.equal(matchesRoboticsLocalization("Mobile robot localization using LiDAR"), true);
+  assert.equal(matchesRoboticsLocalization("Visual SLAM and self-localization for mobile robots"), true);
+  assert.equal(matchesRoboticsLocalization("Software localization for web applications"), false);
+  assert.equal(matchesRoboticsLocalization("Localization of software user interfaces"), false);
+  assert.equal(matchesRoboticsLocalization("Continuous localization in software engineering"), false);
+  assert.equal(matchesRoboticsLocalization("ソフトウェアローカライゼーションの手法"), false);
+  assert.equal(matchesRoboticsLocalization("Software architecture for mobile robot localization"), true);
+  assert.equal(matchesRoboticsLocalization("Multi-sensor systems and robust localization"), true);
+  assert.equal(matchesRoboticsLocalization("Applications of sound source localization"), true);
+});
+
+test("pickPaperIndustry: 4文脈（プログラミング言語・ソフトウェア翻訳・自然言語・自己位置推定）の回帰テスト", () => {
+  // 1. プログラミング言語文脈 -> IT・通信（言語・教育への誤判定を防ぐ）
+  const plExamples = [
+    "Design and implementation of the Rust programming language",
+    "Type inference for functional programming languages",
+    "A domain-specific programming language for distributed computing",
+    "プログラミング言語の構文解析と型検査アルゴリズム",
+    "新世代プログラミング言語におけるメモリ安全性",
+  ];
+  for (const text of plExamples) {
+    assert.equal(pickPaperIndustry(industries, text), "IT・通信", `PL context should match IT・通信: ${text}`);
+  }
+
+  // 2. ソフトウェア翻訳文脈 -> IT・通信（ロボティクスへの誤判定を防ぐ）
+  const localizationExamples = [
+    "Software localization for global web applications",
+    "Best practices for localization in software engineering",
+    "Localization of software user interfaces and menus",
+    "Continuous software localization and internationalization workflows",
+    "ソフトウェアローカライゼーションの自動化に関する考察",
+    "ソフトウェア翻訳と多言語対応支援ツールの評価",
+  ];
+  for (const text of localizationExamples) {
+    assert.equal(pickPaperIndustry(industries, text), "IT・通信", `Software localization context should match IT・通信: ${text}`);
+  }
+
+  // 3. 自然言語文脈 -> 言語・教育
+  const nlExamples = [
+    "Natural language understanding and syntactic analysis",
+    "Natural language acquisition in early childhood education",
+    "Syntactic structures in natural languages",
+    "自然言語処理における統語構造の解析",
+    "自然言語の意味論と語学教育への応用",
+    "Statistical models for language acquisition",
+  ];
+  for (const text of nlExamples) {
+    assert.equal(pickPaperIndustry(industries, text), "言語・教育", `NL context should match 言語・教育: ${text}`);
+  }
+
+  // 4. ロボット自己位置推定文脈 -> ロボティクス
+  const roboticsExamples = [
+    "Mobile robot localization using LiDAR and sensor fusion",
+    "Visual SLAM and self-localization for indoor mobile robots",
+    "Indoor robot localization and mapping in dynamic environments",
+    "Software architecture for mobile robot localization",
+    "自律移動ロボットの自己位置推定アルゴリズム",
+    "移動ロボットの自己位置推定と環境地図作成",
+    "Multi-sensor systems and robust localization",
+    "Applications of sound source localization",
+  ];
+  for (const text of roboticsExamples) {
+    assert.equal(pickPaperIndustry(industries, text), "ロボティクス", `Robotics localization context should match ロボティクス: ${text}`);
+  }
+});
+
+test("pickPaperIndustry: 単独の programming が数理計画法や教育を IT・通信 に寄せない", () => {
+  // 線形計画法等の最適化問題（農業・食品の論文）が IT・通信 にならない
+  assert.equal(pickPaperIndustry(industries, "Linear programming for crop planning on farms"), "農業・食品");
+  // プログラミング教育が IT・通信 ではなく 言語・教育 になる
+  assert.equal(pickPaperIndustry(industries, "Programming education for children in schools"), "言語・教育");
 });
