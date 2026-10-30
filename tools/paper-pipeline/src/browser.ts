@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "./config.ts";
@@ -60,43 +61,24 @@ export function buildStealthUserAgentMetadata(opts: {
     { brand: "Google Chrome", version: majorVersion },
     { brand: "Not=A?Brand", version: "24" },
   ];
+  let defaultPlatform = "Windows";
+  if (process.platform === "darwin") {
+    defaultPlatform = "macOS";
+  } else if (process.platform === "linux") {
+    defaultPlatform = "Linux";
+  }
+  const defaultPlatformVersion = process.platform === "darwin" ? (os.release?.() || "15.7.0") : "10.0.0";
   return {
     brands: cleanHeadlessBrands(rawBrands),
     fullVersion,
-    platform: opts.platform || (process.platform === "darwin" ? "macOS" : "Windows"),
-    platformVersion: opts.platformVersion || "15.7.0",
+    platform: opts.platform || defaultPlatform,
+    platformVersion: opts.platformVersion || defaultPlatformVersion,
     architecture: opts.architecture || (process.arch === "arm64" ? "arm" : "x86"),
     model: opts.model || "",
     mobile: opts.mobile ?? false,
     bitness: "64",
     wow64: false,
   };
-}
-
-export function createStealthUserAgentData<
-  T extends {
-    brands?: Array<{ brand: string; version: string }>;
-    mobile?: boolean;
-    platform?: string;
-    getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
-    toJSON?: () => Record<string, unknown>;
-  },
->(originalUaData: T): T {
-  const brands = originalUaData.brands;
-  const cleanedBrands = cleanHeadlessBrands(brands ?? []);
-  return new Proxy(originalUaData, {
-    get(target, prop) {
-      if (prop === "brands") return cleanedBrands;
-      if (prop === "toJSON") {
-        return () => {
-          const originalJson = typeof target.toJSON === "function" ? target.toJSON() : {};
-          return { ...originalJson, brands: cleanedBrands };
-        };
-      }
-      const val = Reflect.get(target, prop, target);
-      return typeof val === "function" ? val.bind(target) : val;
-    },
-  });
 }
 
 export function getChromeDownloadsPath(): string {
@@ -310,6 +292,7 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   const keeper = context.pages()[0] ?? (await context.newPage());
   keeper.setDefaultTimeout(30_000);
   await keeper.goto("about:blank").catch(() => undefined);
+  let applyOverride: ((p: Page) => Promise<void>) | null = null;
   if (!cfg.headed) {
     let stealthUa = "";
     let stealthMetadata: StealthUserAgentMetadata | null = null;
@@ -329,7 +312,7 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
       // CDP 取得失敗時はフォールバック
     }
     if (stealthUa && stealthMetadata) {
-      const applyOverride = async (p: Page) => {
+      const overrideFn = async (p: Page) => {
         try {
           const pageCdp = await context.newCDPSession(p);
           await pageCdp.send("Network.setUserAgentOverride", {
@@ -340,9 +323,10 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
           // ページ初期化時の例外は無視
         }
       };
-      await applyOverride(keeper);
+      applyOverride = overrideFn;
+      await overrideFn(keeper);
       context.on("page", (p) => {
-        void applyOverride(p);
+        void overrideFn(p);
       });
     }
   }
@@ -350,6 +334,9 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     warn(`Chrome の保存先を切り替えできません: ${e instanceof Error ? e.message : e}`);
   });
   const page = await context.newPage();
+  if (applyOverride) {
+    await applyOverride(page);
+  }
   page.setDefaultTimeout(30_000);
   page.setDefaultNavigationTimeout(60_000);
   return { context, page };

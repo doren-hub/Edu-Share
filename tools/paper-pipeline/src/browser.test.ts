@@ -5,7 +5,6 @@ import {
   chromeLaunchArgs,
   cleanHeadlessBrands,
   cleanHeadlessUserAgent,
-  createStealthUserAgentData,
   shouldOverrideHeadlessUserAgent,
 } from "./browser.ts";
 
@@ -38,92 +37,6 @@ test("cleanHeadlessUserAgent: HeadlessChrome を Chrome に置換して実バー
     cleaned,
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.79 Safari/537.36",
   );
-});
-
-test("createStealthUserAgentData: brands から Headless を除きつつ getHighEntropyValues やプロパティを保持する", async () => {
-  const mockUaData = {
-    brands: [
-      { brand: "HeadlessChrome", version: "131" },
-      { brand: "Chromium", version: "131" },
-      { brand: "Not_A Brand", version: "24" },
-    ],
-    mobile: false,
-    platform: "macOS",
-    async getHighEntropyValues(hints: string[]) {
-      return { platform: "macOS", architecture: "arm", hints };
-    },
-    toJSON() {
-      return { brands: this.brands, mobile: this.mobile };
-    },
-  };
-
-  const proxy = createStealthUserAgentData(mockUaData);
-
-  assert.deepEqual(proxy.brands, [
-    { brand: "Chrome", version: "131" },
-    { brand: "Chromium", version: "131" },
-    { brand: "Not_A Brand", version: "24" },
-  ]);
-  assert.equal(proxy.mobile, false);
-  assert.equal(proxy.platform, "macOS");
-  assert.equal(typeof proxy.getHighEntropyValues, "function");
-
-  const entropy = await proxy.getHighEntropyValues?.(["architecture"]);
-  assert.deepEqual(entropy, { platform: "macOS", architecture: "arm", hints: ["architecture"] });
-  assert.deepEqual(proxy.toJSON?.(), { brands: proxy.brands, mobile: false });
-});
-
-test("createStealthUserAgentData: 組み込み getter / メソッドと同様に private フィールドを持つクラスでも Illegal invocation にならない", async () => {
-  class NativeNavigatorUADataSimulator {
-    #platform: string;
-    #mobile: boolean;
-    brands: Array<{ brand: string; version: string }>;
-
-    constructor() {
-      this.#platform = "macOS";
-      this.#mobile = false;
-      this.brands = [
-        { brand: "HeadlessChrome", version: "131" },
-        { brand: "Chromium", version: "131" },
-      ];
-    }
-
-    get platform(): string {
-      return this.#platform;
-    }
-
-    get mobile(): boolean {
-      return this.#mobile;
-    }
-
-    async getHighEntropyValues(hints: string[]): Promise<Record<string, unknown>> {
-      return { platform: this.#platform, hints };
-    }
-
-    toJSON(): Record<string, unknown> {
-      return { platform: this.#platform, mobile: this.#mobile };
-    }
-  }
-
-  const nativeSimulator = new NativeNavigatorUADataSimulator();
-  const proxy = createStealthUserAgentData(nativeSimulator);
-
-  assert.deepEqual(proxy.brands, [
-    { brand: "Chrome", version: "131" },
-    { brand: "Chromium", version: "131" },
-  ]);
-  assert.equal(proxy.platform, "macOS");
-  assert.equal(proxy.mobile, false);
-  const entropy = await proxy.getHighEntropyValues?.(["arch"]);
-  assert.deepEqual(entropy, { platform: "macOS", hints: ["arch"] });
-  assert.deepEqual(proxy.toJSON?.(), {
-    platform: "macOS",
-    mobile: false,
-    brands: [
-      { brand: "Chrome", version: "131" },
-      { brand: "Chromium", version: "131" },
-    ],
-  });
 });
 
 test("cleanHeadlessBrands: ブランド配列から Headless を除去する", () => {
