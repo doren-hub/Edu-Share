@@ -48,7 +48,7 @@ import {
   SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS,
 } from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
-import { isInteractiveUi, looksLikeBotChallenge, pauseIfBlocked } from "../human.ts";
+import { isInteractiveUi, looksLikeBotChallenge, NeedVisibleChromeError, pauseIfBlocked } from "../human.ts";
 import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
 import { saveFailureShot, uploadViaChooserOrInput } from "../ui.ts";
 
@@ -221,7 +221,8 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
     if (page.isClosed() || !(await pageAlive(page))) {
       throw new Error("SciSpace 待ち中にブラウザが閉じられました");
     }
-    if (await isNotebooksFilesView(page, folderUrl)) {
+    const isReady = await isNotebooksFilesView(page, folderUrl);
+    if (isReady) {
       log("SciSpace Files 表を確認");
       return;
     }
@@ -269,6 +270,7 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
         .catch(() => false);
 
       const classified = classifySciSpaceWaitState({
+        isReady,
         isBotChallenge: botBlocked,
         isLogin: loginBlocked,
         hasTable,
@@ -289,7 +291,9 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
     await sleep(2000);
   }
   if (isHeadless) {
-    throw new Error(
+    throw new NeedVisibleChromeError(
+      "SciSpace",
+      folderUrl,
       `headless で SciSpace の指定フォルダが開きません（--headed で実行してください）: ${folderUrl}`,
     );
   }

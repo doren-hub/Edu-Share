@@ -17,6 +17,34 @@ export const CHROME_RELAUNCH_GAP_MS = 2_500;
 export const DEFAULT_CHROME_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+export function cleanHeadlessUserAgent(ua: string): string {
+  return ua.replace(/HeadlessChrome/g, "Chrome");
+}
+
+export function createStealthUserAgentData(originalUaData: {
+  brands?: Array<{ brand: string; version: string }>;
+  mobile?: boolean;
+  platform?: string;
+  getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+  toJSON?: () => Record<string, unknown>;
+  [key: string]: unknown;
+}): typeof originalUaData {
+  const brands = originalUaData.brands;
+  const cleanedBrands = Array.isArray(brands)
+    ? brands.map((b) => ({
+        brand: b.brand.replace(/Headless/i, ""),
+        version: b.version,
+      }))
+    : brands;
+  return new Proxy(originalUaData, {
+    get(target, prop, receiver) {
+      if (prop === "brands") return cleanedBrands;
+      const val = Reflect.get(target, prop, receiver);
+      return typeof val === "function" ? val.bind(receiver) : val;
+    },
+  });
+}
+
 export function getChromeDownloadsPath(): string {
   return chromeDownloadsPath;
 }
@@ -190,7 +218,7 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   log(cfg.headed ? "Chrome を画面付きで起動します" : "Chrome をヘッドレスで起動します（ウィンドウは開きません）");
   const launchOpts = {
     headless: !cfg.headed,
-    userAgent: DEFAULT_CHROME_USER_AGENT,
+    userAgent: cfg.headed ? undefined : DEFAULT_CHROME_USER_AGENT,
     viewport: { width: 1400, height: 900 } as const,
     acceptDownloads: false, // Playwright が横取りすると .crdownload が止まり Chrome が落ちる
     args,
@@ -222,18 +250,42 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
       if (!(window as unknown as { chrome?: unknown }).chrome) {
         (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
       }
-      const nav = navigator as unknown as { userAgentData?: { brands?: Array<{ brand: string; version: string }> } };
-      const brands = nav.userAgentData?.brands;
-      if (Array.isArray(brands)) {
-        const cleanedBrands = brands.map((b) => ({
-          brand: b.brand.replace(/Headless/i, ""),
-          version: b.version,
-        }));
+      if (navigator.userAgent && navigator.userAgent.includes("HeadlessChrome")) {
+        const cleanedUa = navigator.userAgent.replace(/HeadlessChrome/g, "Chrome");
+        Object.defineProperty(navigator, "userAgent", {
+          get: () => cleanedUa,
+          configurable: true,
+        });
+      }
+      const nav = navigator as unknown as {
+        userAgentData?: {
+          brands?: Array<{ brand: string; version: string }>;
+          mobile?: boolean;
+          platform?: string;
+          getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+          toJSON?: () => Record<string, unknown>;
+          [key: string]: unknown;
+        };
+      };
+      const originalUaData = nav.userAgentData;
+      if (originalUaData) {
+        const brands = originalUaData.brands;
+        const cleanedBrands = Array.isArray(brands)
+          ? brands.map((b) => ({
+              brand: b.brand.replace(/Headless/i, ""),
+              version: b.version,
+            }))
+          : brands;
+        const proxy = new Proxy(originalUaData, {
+          get(target, prop, receiver) {
+            if (prop === "brands") return cleanedBrands;
+            const val = Reflect.get(target, prop, receiver);
+            return typeof val === "function" ? val.bind(receiver) : val;
+          },
+        });
         Object.defineProperty(navigator, "userAgentData", {
-          get: () => ({
-            ...nav.userAgentData,
-            brands: cleanedBrands,
-          }),
+          get: () => proxy,
+          configurable: true,
         });
       }
     } catch {

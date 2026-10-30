@@ -86,17 +86,15 @@ export async function looksLikeGoogleLogin(page: Page): Promise<boolean> {
 
 export function pageLooksLikeBotChallenge(url: string, title: string, body: string): boolean {
   if (
-    /Just a moment\.\.\.|Attention Required! \| Cloudflare|Security Check|Verify you are human|Bot Verification|Cloudflare/i.test(
+    /Just a moment\.\.\.|Attention Required! \| Cloudflare|Security Check \| Cloudflare|Verify you are human/i.test(
       title,
     )
   ) {
     return true;
   }
   if (/challenges\.cloudflare\.com|cf-turnstile|cf-challenge/i.test(url)) return true;
-  return (
-    /Checking your browser before accessing|Verify you are human|Enable JavaScript and cookies to continue|Ray ID:|Performance & security by Cloudflare|Access denied|unusual traffic|ロボットではありません/i.test(
-      body,
-    ) || /captcha|recaptcha/i.test(body)
+  return /Checking your browser before accessing|Verify you are human|Enable JavaScript and cookies to continue|Ray ID: [0-9a-f]+|Performance & security by Cloudflare/i.test(
+    body,
   );
 }
 

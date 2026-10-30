@@ -68,4 +68,13 @@ test("pageLooksLikeBotChallenge: Cloudflare や Turnstile、キャプチャを�
     pageLooksLikeBotChallenge("https://scispace.com/folder/x", "SciSpace - Folder", "Upload PDFs Files (10)"),
     false,
   );
+  // 論文名や要旨に captcha や access denied が含まれても誤検出しない
+  assert.equal(
+    pageLooksLikeBotChallenge(
+      "https://scispace.com/folder/x",
+      "Analysis of CAPTCHA robust systems in modern web security",
+      "Upload PDFs Files (10) We evaluate reCAPTCHA bypass techniques and access denied response patterns.",
+    ),
+    false,
+  );
 });

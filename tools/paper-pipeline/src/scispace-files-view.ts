@@ -68,6 +68,13 @@ export const SCISPACE_HEADED_FOLDER_TIMEOUT_MS = 15 * 60_000;
 
 export type SciSpaceWaitState = "ready" | "login" | "bot_challenge" | "loading";
 
+export const SCISPACE_WAIT_STATE_LABELS: Record<SciSpaceWaitState, string> = {
+  login: "ログイン画面",
+  bot_challenge: "ボット判定",
+  loading: "読み込み中",
+  ready: "Files 表確認",
+};
+
 export interface SciSpaceFolderElements {
   hasTable: boolean;
   hasFilesTab: boolean;
@@ -75,6 +82,7 @@ export interface SciSpaceFolderElements {
 }
 
 export function classifySciSpaceWaitState(params: {
+  isReady?: boolean;
   isBotChallenge?: boolean;
   isLogin?: boolean;
   hasTable?: boolean;
@@ -85,15 +93,15 @@ export function classifySciSpaceWaitState(params: {
   stateLabel: string;
 } {
   if (params.isBotChallenge) {
-    return { state: "bot_challenge", stateLabel: "ボット判定" };
+    return { state: "bot_challenge", stateLabel: SCISPACE_WAIT_STATE_LABELS.bot_challenge };
   }
   if (params.isLogin) {
-    return { state: "login", stateLabel: "ログイン画面" };
+    return { state: "login", stateLabel: SCISPACE_WAIT_STATE_LABELS.login };
   }
-  if (params.hasTable && params.hasUploadBtn) {
-    return { state: "ready", stateLabel: "Files 表確認" };
+  if (params.isReady || (params.hasTable && params.hasUploadBtn)) {
+    return { state: "ready", stateLabel: SCISPACE_WAIT_STATE_LABELS.ready };
   }
-  return { state: "loading", stateLabel: "読み込み中" };
+  return { state: "loading", stateLabel: SCISPACE_WAIT_STATE_LABELS.loading };
 }
 
 export function formatSciSpaceWaitLog(params: {
@@ -103,13 +111,7 @@ export function formatSciSpaceWaitLog(params: {
   state: SciSpaceWaitState;
   elements: Partial<SciSpaceFolderElements>;
 }): string {
-  const stateLabels: Record<SciSpaceWaitState, string> = {
-    login: "ログイン画面",
-    bot_challenge: "ボット判定",
-    loading: "読み込み中",
-    ready: "Files 表確認",
-  };
-  const label = stateLabels[params.state] ?? params.state;
+  const label = SCISPACE_WAIT_STATE_LABELS[params.state] ?? params.state;
   const elements = [
     `table:${params.elements.hasTable ? "あり" : "なし"}`,
     `filesTab:${params.elements.hasFilesTab ? "あり" : "なし"}`,

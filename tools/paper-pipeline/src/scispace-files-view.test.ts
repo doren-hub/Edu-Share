@@ -123,6 +123,10 @@ test("classifySciSpaceWaitState: ボット判定・ログイン画面・Files表
     { state: "ready", stateLabel: "Files 表確認" },
   );
   assert.deepEqual(
+    classifySciSpaceWaitState({ isReady: true }),
+    { state: "ready", stateLabel: "Files 表確認" },
+  );
+  assert.deepEqual(
     classifySciSpaceWaitState({ hasFilesTab: true, hasTable: false, hasUploadBtn: false }),
     { state: "loading", stateLabel: "読み込み中" },
   );
