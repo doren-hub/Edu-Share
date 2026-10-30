@@ -4,7 +4,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   looksLikeSlidePdf,
 } from "@/lib/pdfs-bucket-upload";
-import { deleteObjects, putObject } from "@/lib/object-storage";
+import {
+  deleteObjects,
+  isPayloadTooLargeError,
+  putObject,
+} from "@/lib/object-storage";
 import {
   legacyNotebooklmSlidePdfStoragePath,
   notebooklmSlidePdfStoragePath,
@@ -63,8 +67,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: "スライドは PDF のみアップロードできます" }, { status: 400 });
   }
 
-  const buf = new Uint8Array(await file.arrayBuffer());
-  if (buf.byteLength > MAX_BYTES) {
+  if (file.size > MAX_BYTES) {
     return NextResponse.json(
       { error: `PDF は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
       { status: 413 },
@@ -74,8 +77,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const storagePath = notebooklmSlidePdfStoragePath(test.uploaded_by, testId);
 
   try {
-    await putObject(storagePath, buf, "application/pdf");
+    await putObject(storagePath, file.stream(), "application/pdf", {
+      maxBytes: MAX_BYTES,
+      contentLength: file.size,
+    });
   } catch (error) {
+    if (isPayloadTooLargeError(error)) {
+      return NextResponse.json(
+        { error: `PDF は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
+        { status: 413 },
+      );
+    }
     return NextResponse.json(
       {
         error: "R2へのアップロードに失敗しました",

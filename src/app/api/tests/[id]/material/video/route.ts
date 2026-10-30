@@ -4,7 +4,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   looksLikeVideoMp4,
 } from "@/lib/pdfs-bucket-upload";
-import { deleteObjects, putObject } from "@/lib/object-storage";
+import {
+  deleteObjects,
+  isPayloadTooLargeError,
+  putObject,
+} from "@/lib/object-storage";
 import {
   legacyNotebooklmVideoMp4StoragePath,
   notebooklmVideoMp4StoragePath,
@@ -64,8 +68,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: "動画は MP4 のみアップロードできます" }, { status: 400 });
   }
 
-  const buf = new Uint8Array(await file.arrayBuffer());
-  if (buf.byteLength > MAX_BYTES) {
+  if (file.size > MAX_BYTES) {
     return NextResponse.json(
       { error: `動画は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
       { status: 413 },
@@ -75,8 +78,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const storagePath = notebooklmVideoMp4StoragePath(test.uploaded_by, testId);
 
   try {
-    await putObject(storagePath, buf, "video/mp4");
+    await putObject(storagePath, file.stream(), "video/mp4", {
+      maxBytes: MAX_BYTES,
+      contentLength: file.size,
+    });
   } catch (error) {
+    if (isPayloadTooLargeError(error)) {
+      return NextResponse.json(
+        { error: `動画は ${Math.floor(MAX_BYTES / (1024 * 1024))}MB 以下にしてください` },
+        { status: 413 },
+      );
+    }
     return NextResponse.json(
       {
         error: "R2へのアップロードに失敗しました",
