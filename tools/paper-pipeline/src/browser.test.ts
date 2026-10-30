@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildStealthUserAgentMetadata,
   chromeLaunchArgs,
+  cleanHeadlessBrands,
   cleanHeadlessUserAgent,
   createStealthUserAgentData,
   shouldOverrideHeadlessUserAgent,
@@ -123,5 +125,40 @@ test("createStealthUserAgentData: 組み込み getter / メソッドと同様に
     ],
   });
 });
+
+test("cleanHeadlessBrands: ブランド配列から Headless を除去する", () => {
+  const brands = [
+    { brand: "HeadlessChrome", version: "131" },
+    { brand: "Chromium", version: "131" },
+    { brand: "Not_A Brand", version: "24" },
+  ];
+  assert.deepEqual(cleanHeadlessBrands(brands), [
+    { brand: "Chrome", version: "131" },
+    { brand: "Chromium", version: "131" },
+    { brand: "Not_A Brand", version: "24" },
+  ]);
+});
+
+test("buildStealthUserAgentMetadata: rawUserAgent からバージョンを抽出しメタデータを構築する", () => {
+  const rawUa =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/131.0.6778.86 Safari/537.36";
+  const metadata = buildStealthUserAgentMetadata({
+    rawUserAgent: rawUa,
+    platform: "macOS",
+    platformVersion: "15.7.0",
+    architecture: "arm",
+  });
+  assert.equal(metadata.fullVersion, "131.0.6778.86");
+  assert.equal(metadata.platform, "macOS");
+  assert.equal(metadata.platformVersion, "15.7.0");
+  assert.equal(metadata.architecture, "arm");
+  assert.equal(metadata.mobile, false);
+  assert.deepEqual(metadata.brands, [
+    { brand: "Chromium", version: "131" },
+    { brand: "Google Chrome", version: "131" },
+    { brand: "Not=A?Brand", version: "24" },
+  ]);
+});
+
 
 

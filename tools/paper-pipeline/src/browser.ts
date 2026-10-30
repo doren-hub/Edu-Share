@@ -22,6 +22,57 @@ export function shouldOverrideHeadlessUserAgent(rawUa: string): boolean {
   return rawUa.includes("HeadlessChrome");
 }
 
+export function cleanHeadlessBrands(
+  brands: Array<{ brand: string; version: string }>,
+): Array<{ brand: string; version: string }> {
+  return brands.map((b) => ({
+    brand: b.brand.replace(/Headless/i, ""),
+    version: b.version,
+  }));
+}
+
+export interface StealthUserAgentMetadata {
+  brands: Array<{ brand: string; version: string }>;
+  fullVersion?: string;
+  platform: string;
+  platformVersion: string;
+  architecture: string;
+  model: string;
+  mobile: boolean;
+  bitness?: string;
+  wow64?: boolean;
+}
+
+export function buildStealthUserAgentMetadata(opts: {
+  rawUserAgent: string;
+  brands?: Array<{ brand: string; version: string }>;
+  platform?: string;
+  platformVersion?: string;
+  architecture?: string;
+  model?: string;
+  mobile?: boolean;
+}): StealthUserAgentMetadata {
+  const versionMatch = opts.rawUserAgent.match(/Chrome\/(\d+(\.\d+)*)/);
+  const fullVersion = versionMatch ? versionMatch[1] : "131.0.0.0";
+  const majorVersion = fullVersion.split(".")[0];
+  const rawBrands = opts.brands ?? [
+    { brand: "Chromium", version: majorVersion },
+    { brand: "Google Chrome", version: majorVersion },
+    { brand: "Not=A?Brand", version: "24" },
+  ];
+  return {
+    brands: cleanHeadlessBrands(rawBrands),
+    fullVersion,
+    platform: opts.platform || (process.platform === "darwin" ? "macOS" : "Windows"),
+    platformVersion: opts.platformVersion || "15.7.0",
+    architecture: opts.architecture || (process.arch === "arm64" ? "arm" : "x86"),
+    model: opts.model || "",
+    mobile: opts.mobile ?? false,
+    bitness: "64",
+    wow64: false,
+  };
+}
+
 export function createStealthUserAgentData<
   T extends {
     brands?: Array<{ brand: string; version: string }>;
@@ -32,12 +83,7 @@ export function createStealthUserAgentData<
   },
 >(originalUaData: T): T {
   const brands = originalUaData.brands;
-  const cleanedBrands = Array.isArray(brands)
-    ? brands.map((b) => ({
-        brand: b.brand.replace(/Headless/i, ""),
-        version: b.version,
-      }))
-    : brands;
+  const cleanedBrands = cleanHeadlessBrands(brands ?? []);
   return new Proxy(originalUaData, {
     get(target, prop) {
       if (prop === "brands") return cleanedBrands;
@@ -251,46 +297,53 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
     );
     context = await chromium.launchPersistentContext(cfg.chromeUserDataDir, launchOpts);
   }
-  await context.addInitScript(`
-    const createStealthUserAgentData = ${createStealthUserAgentData.toString()};
+  await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     try {
-      if (!window.chrome) {
-        window.chrome = { runtime: {} };
-      }
-      if (navigator.userAgent && navigator.userAgent.includes("HeadlessChrome")) {
-        const cleanedUa = navigator.userAgent.replace(/HeadlessChrome/g, "Chrome");
-        Object.defineProperty(navigator, "userAgent", {
-          get: () => cleanedUa,
-          configurable: true,
-        });
-      }
-      if (navigator.userAgentData) {
-        const proxy = createStealthUserAgentData(navigator.userAgentData);
-        Object.defineProperty(navigator, "userAgentData", {
-          get: () => proxy,
-          configurable: true,
-        });
+      if (!(window as unknown as { chrome?: unknown }).chrome) {
+        (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
       }
     } catch {
       // 偽装初期化エラーは握りつぶす
     }
-  `);
+  });
   const keeper = context.pages()[0] ?? (await context.newPage());
   keeper.setDefaultTimeout(30_000);
   await keeper.goto("about:blank").catch(() => undefined);
   if (!cfg.headed) {
+    let stealthUa = "";
+    let stealthMetadata: StealthUserAgentMetadata | null = null;
     try {
       const cdp = await context.newCDPSession(keeper);
-      const versionInfo = (await cdp.send("Browser.getVersion")) as { userAgent?: string };
-      const rawUa = versionInfo?.userAgent ?? "";
-      if (shouldOverrideHeadlessUserAgent(rawUa)) {
-        const cleanUa = cleanHeadlessUserAgent(rawUa);
-        await context.setExtraHTTPHeaders({ "user-agent": cleanUa }).catch(() => undefined);
+      try {
+        const versionInfo = (await cdp.send("Browser.getVersion")) as { userAgent?: string };
+        const rawUa = versionInfo?.userAgent ?? "";
+        if (shouldOverrideHeadlessUserAgent(rawUa)) {
+          stealthUa = cleanHeadlessUserAgent(rawUa);
+          stealthMetadata = buildStealthUserAgentMetadata({ rawUserAgent: rawUa });
+        }
+      } finally {
+        await cdp.detach().catch(() => undefined);
       }
-      await cdp.detach().catch(() => undefined);
     } catch {
       // CDP 取得失敗時はフォールバック
+    }
+    if (stealthUa && stealthMetadata) {
+      const applyOverride = async (p: Page) => {
+        try {
+          const pageCdp = await context.newCDPSession(p);
+          await pageCdp.send("Network.setUserAgentOverride", {
+            userAgent: stealthUa,
+            userAgentMetadata: stealthMetadata!,
+          });
+        } catch {
+          // ページ初期化時の例外は無視
+        }
+      };
+      await applyOverride(keeper);
+      context.on("page", (p) => {
+        void applyOverride(p);
+      });
     }
   }
   await useChromeOwnDownloads(context, downloadsPath, keeper).catch((e) => {
