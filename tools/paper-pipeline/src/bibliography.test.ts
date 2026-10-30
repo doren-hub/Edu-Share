@@ -28,6 +28,13 @@ const cases = [
   { name: "basis subtitle then non-Latin authors then prose", suffix: `${subtitle}\n架空 著者・合成 太郎\n${narrative}`, expected: true },
   { name: "wrapped basis subtitle then author then prose", suffix: `On the basis\nof synthetic field trials\n${author}\n${narrative}`, expected: true },
   { name: "unlabelled basis abstract wrapped phrase then We", suffix: `On the basis\nof synthetic trials,\n${narrative}`, expected: false },
+  // #173: unlabelled basis abstract wrapped at an arbitrary word (other than
+  // after "basis" before "of") stops the evidence window at the line break to
+  // avoid crossing non-narrative lines (e.g. authors). Without narrative prose
+  // in context, it is conservatively held for title verification (expected: true).
+  { name: "unlabelled basis abstract wrapped at arbitrary word (lowercase we)", suffix: "On the basis of synthetic\ntrials, we compare synthetic robot systems.", expected: true },
+  { name: "unlabelled basis abstract wrapped at arbitrary word", suffix: `On the basis of synthetic\ntrials, ${narrative}`, expected: true },
+  { name: "unlabelled basis abstract wrapped at arbitrary word then We", suffix: `On the basis of synthetic\ntrials,\n${narrative}`, expected: true },
   // No physical boundary exists here; retain the same-line narrative rule.
   { name: "same-line authors and prose remain ambiguous", suffix: `${subtitle} ${author} ${narrative}`, expected: false },
   { name: "tool subtitle then author then prose", suffix: `Tool for Synthetic Robotics\n${author}\n${narrative}`, expected: true },
