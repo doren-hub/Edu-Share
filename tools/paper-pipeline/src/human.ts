@@ -110,7 +110,13 @@ export async function looksLikeBotChallenge(page: Page): Promise<boolean> {
     return false;
   }
   const body = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
-  return pageLooksLikeBotChallenge(url, title, body);
+  if (pageLooksLikeBotChallenge(url, title, body)) return true;
+  const cfIframe = await page
+    .locator('iframe[src*="challenges.cloudflare.com"], iframe[src*="cloudflare"], .cf-turnstile, #cf-turnstile')
+    .first()
+    .isVisible({ timeout: 0 })
+    .catch(() => false);
+  return cfIframe;
 }
 
 export async function looksLikeCaptcha(page: Page): Promise<boolean> {

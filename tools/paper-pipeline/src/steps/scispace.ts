@@ -36,15 +36,19 @@ import {
   pickSciSpaceRecordUrl,
 } from "../scispace-record-url.ts";
 import {
+  classifySciSpaceWaitState,
   filesListNeedsLoadMore,
   filesTabClickAllowed,
+  formatSciSpaceWaitLog,
   isFilesListSearchHint,
   looksLikeSciSpaceChatHome,
   looksLikeSciSpaceFilesTable,
   pageShowsPdfFilename,
+  SCISPACE_HEADED_FOLDER_TIMEOUT_MS,
+  SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS,
 } from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
-import { pauseIfBlocked } from "../human.ts";
+import { isInteractiveUi, looksLikeBotChallenge, pauseIfBlocked } from "../human.ts";
 import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
 import { saveFailureShot, uploadViaChooserOrInput } from "../ui.ts";
 
@@ -207,7 +211,9 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
   } else if (!(await needsSciSpaceLogin(page)) && !isOnSpecifiedFolder(page, folderUrl)) {
     await gotoSpecifiedFolder(page, folderUrl);
   }
-  const deadline = Date.now() + 15 * 60_000;
+  const isHeadless = !isInteractiveUi();
+  const timeoutMs = isHeadless ? SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS : SCISPACE_HEADED_FOLDER_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   let loggedWait = false;
   let lastBeat = 0;
   let lastFilesClick = 0;
@@ -219,28 +225,73 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
       log("SciSpace Files 表を確認");
       return;
     }
-    if (isAuthUrl(page) || (await needsSciSpaceLogin(page))) {
+    const botBlocked = await looksLikeBotChallenge(page);
+    const loginBlocked = isAuthUrl(page) || (await needsSciSpaceLogin(page));
+
+    if (botBlocked) {
+      log("SciSpace: ボット判定（Cloudflare等）を検出しました");
+      await pauseIfBlocked(page, "SciSpace");
+    } else if (loginBlocked) {
       await pauseIfBlocked(page, "SciSpace");
       if (!loggedWait) {
-        log("SciSpace: ログイン中は画面を触りません。このウィンドウでログインしてください");
+        log("SciSpace: ログイン画面を検出しました。このウィンドウでログインしてください");
         loggedWait = true;
       }
-    } else if (Date.now() - lastFilesClick >= 15_000) {      lastFilesClick = Date.now();
+    } else if (Date.now() - lastFilesClick >= 15_000) {
+      lastFilesClick = Date.now();
       await restoreFolderFilesTable(page, folderUrl);
     }
-    if (Date.now() - lastBeat >= 30_000) {
+    if (Date.now() - lastBeat >= 15_000) {
       lastBeat = Date.now();
       const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
       const url = (() => {
         try {
-          return page.url().slice(0, 80);
+          return page.url();
         } catch {
           return "(url不明)";
         }
       })();
-      log(`SciSpace 待ち（残り約 ${left}s） url=${url}`);
+      const title = await page.title().catch(() => "");
+      const hasTable = await page
+        .locator('table:has(tr), [role="grid"]:has([role="row"]), [role="table"]:has([role="row"])')
+        .first()
+        .isVisible({ timeout: 0 })
+        .catch(() => false);
+      const hasFilesTab = await page
+        .getByText(/Files\s*\(\d+\)/)
+        .first()
+        .isVisible({ timeout: 0 })
+        .catch(() => false);
+      const hasUploadBtn = await page
+        .getByRole("button", { name: /Upload PDFs|Upload papers|Upload PDF/i })
+        .first()
+        .isVisible({ timeout: 0 })
+        .catch(() => false);
+
+      const classified = classifySciSpaceWaitState({
+        isBotChallenge: botBlocked,
+        isLogin: loginBlocked,
+        hasTable,
+        hasUploadBtn,
+        hasFilesTab,
+      });
+
+      log(
+        formatSciSpaceWaitLog({
+          leftSeconds: left,
+          url,
+          title,
+          state: classified.state,
+          elements: { hasTable, hasFilesTab, hasUploadBtn },
+        }),
+      );
     }
     await sleep(2000);
+  }
+  if (isHeadless) {
+    throw new Error(
+      `headless で SciSpace の指定フォルダが開きません（--headed で実行してください）: ${folderUrl}`,
+    );
   }
   throw new Error(`SciSpace の指定フォルダを開けませんでした: ${folderUrl}`);
 }
