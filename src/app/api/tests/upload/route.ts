@@ -391,9 +391,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
   try {
-    await putObject(storagePath, bytes, "application/pdf");
+    await putObject(storagePath, file.stream(), "application/pdf");
   } catch (error) {
     await admin.from("tests").delete().eq("id", testId);
     return NextResponse.json(

@@ -130,9 +130,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
   try {
-    await putObject(storagePath, bytes, "application/pdf");
+    await putObject(storagePath, file.stream(), "application/pdf");
   } catch (error) {
     const safeError = sanitizeProcessingError(error);
     await admin

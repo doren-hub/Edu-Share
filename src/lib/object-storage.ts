@@ -5,7 +5,42 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Readable } from "node:stream";
+
+export class PayloadTooLargeError extends Error {
+  readonly maxBytes: number;
+  readonly bytesRead: number;
+
+  constructor(maxBytes: number, bytesRead: number) {
+    super(`Payload size exceeded limit of ${maxBytes} bytes (read ${bytesRead} bytes)`);
+    this.name = "PayloadTooLargeError";
+    this.maxBytes = maxBytes;
+    this.bytesRead = bytesRead;
+  }
+}
+
+export function isPayloadTooLargeError(error: unknown): error is PayloadTooLargeError {
+  if (error instanceof PayloadTooLargeError) return true;
+  if (error && typeof error === "object") {
+    const e = error as { name?: string; cause?: unknown };
+    if (e.name === "PayloadTooLargeError") return true;
+    if (e.cause && isPayloadTooLargeError(e.cause)) return true;
+  }
+  return false;
+}
+
+export type PutObjectOptions = {
+  contentLength?: number;
+  maxBytes?: number;
+};
+
+export type PutObjectBody =
+  | Uint8Array
+  | Readable
+  | ReadableStream<Uint8Array>
+  | Blob;
 
 export type ObjectMetadata = {
   exists: boolean;
@@ -20,6 +55,7 @@ type R2Config = {
 };
 
 let cachedConfig: R2Config | null = null;
+let testClientOverride: S3Client | null = null;
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -42,6 +78,13 @@ function assertObjectKey(key: string): string {
 }
 
 function getR2Config(): R2Config {
+  if (testClientOverride) {
+    return {
+      bucket: process.env.R2_BUCKET_NAME?.trim() || "test-bucket",
+      publicBaseUrl: process.env.R2_PUBLIC_BASE_URL?.trim().replace(/\/+$/, "") || null,
+      client: testClientOverride,
+    };
+  }
   if (cachedConfig) return cachedConfig;
 
   const accountId = process.env.R2_ACCOUNT_ID?.trim();
@@ -76,19 +119,91 @@ function encodedObjectKey(key: string): string {
 
 export async function putObject(
   key: string,
-  body: Uint8Array,
+  body: PutObjectBody,
   contentType: string,
+  options?: PutObjectOptions,
 ): Promise<void> {
   const cfg = getR2Config();
-  await cfg.client.send(
-    new PutObjectCommand({
+  const maxBytes = options?.maxBytes;
+  let contentLength = options?.contentLength;
+
+  if (typeof Blob !== "undefined" && body instanceof Blob) {
+    if (contentLength == null) {
+      contentLength = body.size;
+    }
+  }
+
+  if (contentLength != null && maxBytes != null && contentLength > maxBytes) {
+    throw new PayloadTooLargeError(maxBytes, contentLength);
+  }
+
+  if (body instanceof Uint8Array) {
+    if (maxBytes != null && body.byteLength > maxBytes) {
+      throw new PayloadTooLargeError(maxBytes, body.byteLength);
+    }
+    await cfg.client.send(
+      new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: assertObjectKey(key),
+        Body: body,
+        ContentType: contentType,
+        CacheControl: "public, max-age=300",
+        ContentLength: contentLength ?? body.byteLength,
+      }),
+    );
+    return;
+  }
+
+  const rawStream: AsyncIterable<Uint8Array> =
+    typeof Blob !== "undefined" && body instanceof Blob
+      ? (body.stream() as unknown as AsyncIterable<Uint8Array>)
+      : (body as AsyncIterable<Uint8Array>);
+
+  let streamToSend: Readable;
+  if (maxBytes != null) {
+    let bytesRead = 0;
+    async function* limitGenerator() {
+      for await (const chunk of rawStream) {
+        const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        bytesRead += u8.byteLength;
+        if (bytesRead > maxBytes) {
+          throw new PayloadTooLargeError(maxBytes, bytesRead);
+        }
+        yield u8;
+      }
+    }
+    streamToSend = Readable.from(limitGenerator());
+  } else {
+    if (typeof (rawStream as ReadableStream).getReader === "function") {
+      streamToSend = Readable.fromWeb(rawStream as import("node:stream/web").ReadableStream);
+    } else {
+      streamToSend = rawStream as Readable;
+    }
+  }
+
+  const upload = new Upload({
+    client: cfg.client,
+    params: {
       Bucket: cfg.bucket,
       Key: assertObjectKey(key),
-      Body: body,
+      Body: streamToSend,
       ContentType: contentType,
       CacheControl: "public, max-age=300",
-    }),
-  );
+    },
+    partSize: 5 * 1024 * 1024,
+    queueSize: 1,
+  });
+
+  try {
+    await upload.done();
+  } catch (err) {
+    try {
+      await upload.abort();
+    } catch {
+      // ignore abort cleanup failure
+    }
+    throw err;
+  }
 }
 
 export async function getObjectBytes(key: string): Promise<Uint8Array> {
@@ -172,4 +287,10 @@ export async function createObjectReadUrl(
 /** テストで環境変数を切り替える場合だけ使用する。 */
 export function resetObjectStorageConfigForTests(): void {
   cachedConfig = null;
+  testClientOverride = null;
+}
+
+/** テストで S3Client をモックする場合に使用する。 */
+export function setR2ClientForTests(client: S3Client | null): void {
+  testClientOverride = client;
 }
