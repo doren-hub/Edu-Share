@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "./config.ts";
@@ -13,6 +14,72 @@ export type BrowserSession = {
 let chromeDownloadsPath = "";
 
 export const CHROME_RELAUNCH_GAP_MS = 2_500;
+
+export function cleanHeadlessUserAgent(ua: string): string {
+  return ua.replace(/HeadlessChrome/g, "Chrome");
+}
+
+export function shouldOverrideHeadlessUserAgent(rawUa: string): boolean {
+  return rawUa.includes("HeadlessChrome");
+}
+
+export function cleanHeadlessBrands(
+  brands: Array<{ brand: string; version: string }>,
+): Array<{ brand: string; version: string }> {
+  return brands.map((b) => ({
+    brand: b.brand.replace(/Headless/i, ""),
+    version: b.version,
+  }));
+}
+
+export interface StealthUserAgentMetadata {
+  brands: Array<{ brand: string; version: string }>;
+  fullVersion?: string;
+  platform: string;
+  platformVersion: string;
+  architecture: string;
+  model: string;
+  mobile: boolean;
+  bitness?: string;
+  wow64?: boolean;
+}
+
+export function buildStealthUserAgentMetadata(opts: {
+  rawUserAgent: string;
+  brands?: Array<{ brand: string; version: string }>;
+  platform?: string;
+  platformVersion?: string;
+  architecture?: string;
+  model?: string;
+  mobile?: boolean;
+}): StealthUserAgentMetadata {
+  const versionMatch = opts.rawUserAgent.match(/Chrome\/(\d+(\.\d+)*)/);
+  const fullVersion = versionMatch ? versionMatch[1] : "131.0.0.0";
+  const majorVersion = fullVersion.split(".")[0];
+  const rawBrands = opts.brands ?? [
+    { brand: "Chromium", version: majorVersion },
+    { brand: "Google Chrome", version: majorVersion },
+    { brand: "Not=A?Brand", version: "24" },
+  ];
+  let defaultPlatform = "Windows";
+  if (process.platform === "darwin") {
+    defaultPlatform = "macOS";
+  } else if (process.platform === "linux") {
+    defaultPlatform = "Linux";
+  }
+  const defaultPlatformVersion = process.platform === "darwin" ? (os.release?.() || "15.7.0") : "10.0.0";
+  return {
+    brands: cleanHeadlessBrands(rawBrands),
+    fullVersion,
+    platform: opts.platform || defaultPlatform,
+    platformVersion: opts.platformVersion || defaultPlatformVersion,
+    architecture: opts.architecture || (process.arch === "arm64" ? "arm" : "x86"),
+    model: opts.model || "",
+    mobile: opts.mobile ?? false,
+    bitness: "64",
+    wow64: false,
+  };
+}
 
 export function getChromeDownloadsPath(): string {
   return chromeDownloadsPath;
@@ -214,14 +281,62 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   }
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    try {
+      if (!(window as unknown as { chrome?: unknown }).chrome) {
+        (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
+      }
+    } catch {
+      // 偽装初期化エラーは握りつぶす
+    }
   });
   const keeper = context.pages()[0] ?? (await context.newPage());
   keeper.setDefaultTimeout(30_000);
   await keeper.goto("about:blank").catch(() => undefined);
+  let applyOverride: ((p: Page) => Promise<void>) | null = null;
+  if (!cfg.headed) {
+    let stealthUa = "";
+    let stealthMetadata: StealthUserAgentMetadata | null = null;
+    try {
+      const cdp = await context.newCDPSession(keeper);
+      try {
+        const versionInfo = (await cdp.send("Browser.getVersion")) as { userAgent?: string };
+        const rawUa = versionInfo?.userAgent ?? "";
+        if (shouldOverrideHeadlessUserAgent(rawUa)) {
+          stealthUa = cleanHeadlessUserAgent(rawUa);
+          stealthMetadata = buildStealthUserAgentMetadata({ rawUserAgent: rawUa });
+        }
+      } finally {
+        await cdp.detach().catch(() => undefined);
+      }
+    } catch {
+      // CDP 取得失敗時はフォールバック
+    }
+    if (stealthUa && stealthMetadata) {
+      const overrideFn = async (p: Page) => {
+        try {
+          const pageCdp = await context.newCDPSession(p);
+          await pageCdp.send("Network.setUserAgentOverride", {
+            userAgent: stealthUa,
+            userAgentMetadata: stealthMetadata!,
+          });
+        } catch {
+          // ページ初期化時の例外は無視
+        }
+      };
+      applyOverride = overrideFn;
+      await overrideFn(keeper);
+      context.on("page", (p) => {
+        void overrideFn(p);
+      });
+    }
+  }
   await useChromeOwnDownloads(context, downloadsPath, keeper).catch((e) => {
     warn(`Chrome の保存先を切り替えできません: ${e instanceof Error ? e.message : e}`);
   });
   const page = await context.newPage();
+  if (applyOverride) {
+    await applyOverride(page);
+  }
   page.setDefaultTimeout(30_000);
   page.setDefaultNavigationTimeout(60_000);
   return { context, page };

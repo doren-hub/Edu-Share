@@ -62,3 +62,63 @@ export function looksLikeSciSpaceChatHome(text: string): boolean {
 export function filenameWithoutWhitespace(value: string): string {
   return value.replace(/\s+/g, "");
 }
+
+export const SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS = 60_000;
+export const SCISPACE_HEADED_FOLDER_TIMEOUT_MS = 15 * 60_000;
+
+export type SciSpaceWaitState = "ready" | "login" | "bot_challenge" | "loading";
+
+export const SCISPACE_WAIT_STATE_LABELS: Record<SciSpaceWaitState, string> = {
+  login: "ログイン画面",
+  bot_challenge: "ボット判定",
+  loading: "読み込み中",
+  ready: "Files 表確認",
+};
+
+export interface SciSpaceFolderElements {
+  hasTable: boolean;
+  hasFilesTab: boolean;
+  hasUploadBtn: boolean;
+}
+
+export function classifySciSpaceWaitState(params: {
+  isReady?: boolean;
+  isBotChallenge?: boolean;
+  isLogin?: boolean;
+  hasTable?: boolean;
+  hasUploadBtn?: boolean;
+  hasFilesTab?: boolean;
+}): {
+  state: SciSpaceWaitState;
+  stateLabel: string;
+} {
+  if (params.isBotChallenge) {
+    return { state: "bot_challenge", stateLabel: SCISPACE_WAIT_STATE_LABELS.bot_challenge };
+  }
+  if (params.isLogin) {
+    return { state: "login", stateLabel: SCISPACE_WAIT_STATE_LABELS.login };
+  }
+  if (params.isReady || (params.hasTable && params.hasUploadBtn)) {
+    return { state: "ready", stateLabel: SCISPACE_WAIT_STATE_LABELS.ready };
+  }
+  return { state: "loading", stateLabel: SCISPACE_WAIT_STATE_LABELS.loading };
+}
+
+export function formatSciSpaceWaitLog(params: {
+  leftSeconds: number;
+  url: string;
+  title: string;
+  state: SciSpaceWaitState;
+  elements: Partial<SciSpaceFolderElements>;
+}): string {
+  const label = SCISPACE_WAIT_STATE_LABELS[params.state] ?? params.state;
+  const elements = [
+    `table:${params.elements.hasTable ? "あり" : "なし"}`,
+    `filesTab:${params.elements.hasFilesTab ? "あり" : "なし"}`,
+    `uploadBtn:${params.elements.hasUploadBtn ? "あり" : "なし"}`,
+  ].join(", ");
+  const shortTitle = params.title ? `"${params.title.slice(0, 40)}"` : '""';
+  const shortUrl = params.url ? params.url.slice(0, 80) : "(url不明)";
+  return `SciSpace 待ち（残り約 ${params.leftSeconds}s, 状態: ${label}） url=${shortUrl} title=${shortTitle} 要素=[${elements}]`;
+}
+

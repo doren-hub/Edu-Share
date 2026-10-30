@@ -8,6 +8,10 @@ import {
   filesListNeedsLoadMore,
   isFilesListSearchHint,
   pageShowsPdfFilename,
+  classifySciSpaceWaitState,
+  formatSciSpaceWaitLog,
+  SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS,
+  SCISPACE_HEADED_FOLDER_TIMEOUT_MS,
 } from "./scispace-files-view.ts";
 
 const homeDump =
@@ -104,3 +108,46 @@ test("語中の改行も空白も除いて PDF 名を比較する", () => {
   assert.equal(pageShowsPdfFilename("phase2_3_0_1.pdf", "phase2_3_\n0_1.pdf"), true);
   assert.equal(pageShowsPdfFilename("another.pdf", "phase2_3_0_1.pdf"), false);
 });
+
+test("classifySciSpaceWaitState: ボット判定・ログイン画面・Files表・読み込み中を区別する", () => {
+  assert.deepEqual(
+    classifySciSpaceWaitState({ isBotChallenge: true }),
+    { state: "bot_challenge", stateLabel: "ボット判定" },
+  );
+  assert.deepEqual(
+    classifySciSpaceWaitState({ isLogin: true }),
+    { state: "login", stateLabel: "ログイン画面" },
+  );
+  assert.deepEqual(
+    classifySciSpaceWaitState({ hasTable: true, hasUploadBtn: true }),
+    { state: "ready", stateLabel: "Files 表確認" },
+  );
+  assert.deepEqual(
+    classifySciSpaceWaitState({ isReady: true }),
+    { state: "ready", stateLabel: "Files 表確認" },
+  );
+  assert.deepEqual(
+    classifySciSpaceWaitState({ hasFilesTab: true, hasTable: false, hasUploadBtn: false }),
+    { state: "loading", stateLabel: "読み込み中" },
+  );
+});
+
+test("formatSciSpaceWaitLog: 待機ログに残り時間・状態・URL・タイトル・主要要素を含める", () => {
+  const logMsg = formatSciSpaceWaitLog({
+    leftSeconds: 58,
+    url: "https://scispace.com/folder/notebooks-enu289ww",
+    title: "SciSpace - Folder",
+    state: "loading",
+    elements: { hasTable: false, hasFilesTab: true, hasUploadBtn: false },
+  });
+  assert.match(logMsg, /SciSpace 待ち（残り約 58s, 状態: 読み込み中）/);
+  assert.match(logMsg, /url=https:\/\/scispace\.com\/folder\/notebooks-enu289ww/);
+  assert.match(logMsg, /title="SciSpace - Folder"/);
+  assert.match(logMsg, /要素=\[table:なし, filesTab:あり, uploadBtn:なし\]/);
+});
+
+test("タイムアウト定数: ヘッドレスは 60s、画面付きは 15 分", () => {
+  assert.equal(SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS, 60_000);
+  assert.equal(SCISPACE_HEADED_FOLDER_TIMEOUT_MS, 15 * 60_000);
+});
+
