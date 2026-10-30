@@ -17,11 +17,13 @@ export function isInteractiveUi(): boolean {
 export class NeedVisibleChromeError extends Error {
   readonly context: string;
   readonly url: string;
-  constructor(context: string, url: string) {
-    super(`${context}: ログインまたは追加確認が必要です`);
+  readonly reason?: string;
+  constructor(context: string, url: string, reason?: string) {
+    super(`${context}: ログインまたは追加確認が必要です${reason ? `（${reason}）` : ""}`);
     this.name = "NeedVisibleChromeError";
     this.context = context;
     this.url = url;
+    this.reason = reason;
   }
 }
 
@@ -82,6 +84,35 @@ export async function looksLikeGoogleLogin(page: Page): Promise<boolean> {
   return pageLooksLikeLoginWall(url, body);
 }
 
+export function pageLooksLikeBotChallenge(url: string, title: string, body: string): boolean {
+  if (
+    /Just a moment\.\.\.|Attention Required! \| Cloudflare|Security Check|Verify you are human|Bot Verification|Cloudflare/i.test(
+      title,
+    )
+  ) {
+    return true;
+  }
+  if (/challenges\.cloudflare\.com|cf-turnstile|cf-challenge/i.test(url)) return true;
+  return (
+    /Checking your browser before accessing|Verify you are human|Enable JavaScript and cookies to continue|Ray ID:|Performance & security by Cloudflare|Access denied|unusual traffic|ロボットではありません/i.test(
+      body,
+    ) || /captcha|recaptcha/i.test(body)
+  );
+}
+
+export async function looksLikeBotChallenge(page: Page): Promise<boolean> {
+  let url = "";
+  let title = "";
+  try {
+    url = page.url();
+    title = await page.title().catch(() => "");
+  } catch {
+    return false;
+  }
+  const body = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
+  return pageLooksLikeBotChallenge(url, title, body);
+}
+
 export async function looksLikeCaptcha(page: Page): Promise<boolean> {
   const body = await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "");
   return /captcha|recaptcha|unusual traffic|ロボットではありません/i.test(body);
@@ -93,7 +124,13 @@ export async function waitUntilUnblocked(page: Page, context: string): Promise<v
   let lastBeat = 0;
   while (Date.now() - start < limit) {
     if (page.isClosed()) throw new Error(`${context}: 待ち中にブラウザが閉じられました`);
-    if (!(await looksLikeGoogleLogin(page)) && !(await looksLikeCaptcha(page))) return;
+    if (
+      !(await looksLikeGoogleLogin(page)) &&
+      !(await looksLikeCaptcha(page)) &&
+      !(await looksLikeBotChallenge(page))
+    ) {
+      return;
+    }
     if (Date.now() - lastBeat >= 30_000) {
       lastBeat = Date.now();
       const left = Math.max(0, Math.round((limit - (Date.now() - start)) / 1000));
@@ -105,7 +142,13 @@ export async function waitUntilUnblocked(page: Page, context: string): Promise<v
 }
 
 export async function pauseIfBlocked(page: Page, context: string): Promise<void> {
-  if (!(await looksLikeCaptcha(page)) && !(await looksLikeGoogleLogin(page))) return;
+  if (
+    !(await looksLikeCaptcha(page)) &&
+    !(await looksLikeGoogleLogin(page)) &&
+    !(await looksLikeBotChallenge(page))
+  ) {
+    return;
+  }
   const mode = humanPauseMode();
   if (mode === "promote") {
     let url = "";
@@ -114,7 +157,7 @@ export async function pauseIfBlocked(page: Page, context: string): Promise<void>
     } catch {
       /* 閉じたタブ */
     }
-    throw new NeedVisibleChromeError(context, url);
+    throw new NeedVisibleChromeError(context, url, "ボット判定またはログイン待ち");
   }
   if (mode === "enter") {
     await waitForEnter(

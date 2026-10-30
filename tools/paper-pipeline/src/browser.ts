@@ -14,6 +14,9 @@ let chromeDownloadsPath = "";
 
 export const CHROME_RELAUNCH_GAP_MS = 2_500;
 
+export const DEFAULT_CHROME_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 export function getChromeDownloadsPath(): string {
   return chromeDownloadsPath;
 }
@@ -187,6 +190,7 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   log(cfg.headed ? "Chrome を画面付きで起動します" : "Chrome をヘッドレスで起動します（ウィンドウは開きません）");
   const launchOpts = {
     headless: !cfg.headed,
+    userAgent: DEFAULT_CHROME_USER_AGENT,
     viewport: { width: 1400, height: 900 } as const,
     acceptDownloads: false, // Playwright が横取りすると .crdownload が止まり Chrome が落ちる
     args,
@@ -214,6 +218,27 @@ export async function launchBrowser(cfg: AppConfig): Promise<BrowserSession> {
   }
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    try {
+      if (!(window as unknown as { chrome?: unknown }).chrome) {
+        (window as unknown as { chrome: unknown }).chrome = { runtime: {} };
+      }
+      const nav = navigator as unknown as { userAgentData?: { brands?: Array<{ brand: string; version: string }> } };
+      const brands = nav.userAgentData?.brands;
+      if (Array.isArray(brands)) {
+        const cleanedBrands = brands.map((b) => ({
+          brand: b.brand.replace(/Headless/i, ""),
+          version: b.version,
+        }));
+        Object.defineProperty(navigator, "userAgentData", {
+          get: () => ({
+            ...nav.userAgentData,
+            brands: cleanedBrands,
+          }),
+        });
+      }
+    } catch {
+      // 偽装初期化エラーは握りつぶす
+    }
   });
   const keeper = context.pages()[0] ?? (await context.newPage());
   keeper.setDefaultTimeout(30_000);

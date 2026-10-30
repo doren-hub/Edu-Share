@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { humanPauseMode, pageLooksLikeGoogleLogin, pageLooksLikeLoginWall, NeedVisibleChromeError } from "./human.ts";
+import {
+  humanPauseMode,
+  pageLooksLikeGoogleLogin,
+  pageLooksLikeLoginWall,
+  pageLooksLikeBotChallenge,
+  NeedVisibleChromeError,
+} from "./human.ts";
 
 test("humanPauseMode: ヘッドレスは画面付きへ上げる。画面付きは Enter か poll", () => {
   assert.equal(humanPauseMode({ headed: false, stdinIsTty: true }), "promote");
@@ -37,8 +43,29 @@ test("pageLooksLikeLoginWall: Edu Share と SciSpace のログインも画面が
 });
 
 test("NeedVisibleChromeError: ヘッドレス側が画面付きへ渡す", () => {
-  const e = new NeedVisibleChromeError("NotebookLM", "https://accounts.google.com/signin");
+  const e = new NeedVisibleChromeError("NotebookLM", "https://accounts.google.com/signin", "テスト理由");
   assert.equal(e.name, "NeedVisibleChromeError");
   assert.equal(e.context, "NotebookLM");
   assert.match(e.url, /accounts\.google/);
+  assert.equal(e.reason, "テスト理由");
+  assert.match(e.message, /テスト理由/);
+});
+
+test("pageLooksLikeBotChallenge: Cloudflare や Turnstile、キャプチャを判定する", () => {
+  assert.equal(
+    pageLooksLikeBotChallenge("https://scispace.com/folder/x", "Just a moment...", "Checking your browser before accessing scispace.com"),
+    true,
+  );
+  assert.equal(
+    pageLooksLikeBotChallenge("https://challenges.cloudflare.com/turnstile/v0/api.js", "SciSpace", "Verify you are human"),
+    true,
+  );
+  assert.equal(
+    pageLooksLikeBotChallenge("https://scispace.com/folder/x", "Attention Required! | Cloudflare", "Ray ID: 8123abc"),
+    true,
+  );
+  assert.equal(
+    pageLooksLikeBotChallenge("https://scispace.com/folder/x", "SciSpace - Folder", "Upload PDFs Files (10)"),
+    false,
+  );
 });
