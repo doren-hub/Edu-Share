@@ -9,7 +9,9 @@ import {
   firstPendingStudioStage,
   firstUnstartedStudioStage,
   hasStudioStarted,
+  loadState,
   markCompleted,
+  saveState,
   SKIP_SLIDES_VIDEO_STAGES,
   STAGES,
   studioKickoffBegun,
@@ -151,6 +153,26 @@ test("firstUnstartedStudioStage / markCompleted: 開始済み段階を除き、�
 
     markCompleted(state, "nlm-slides");
     assert.equal(waitingStudioStage(state), undefined);
+  } finally {
+    rmSync(paperDir, { recursive: true, force: true });
+  }
+});
+
+test("loadState / saveState: industry（業界未判定を含む）の保存と復元ができる", () => {
+  const paperDir = mkdtempSync(join(tmpdir(), "pp-state-industry-"));
+  try {
+    const state = paper({
+      paperDir,
+      industry: "業界未判定",
+    });
+    saveState(state);
+    const loaded = loadState(paperDir, paper({ paperDir }));
+    assert.equal(loaded.industry, "業界未判定");
+
+    state.industry = "半導体・電子デバイス";
+    saveState(state);
+    const reloaded = loadState(paperDir, paper({ paperDir }));
+    assert.equal(reloaded.industry, "半導体・電子デバイス");
   } finally {
     rmSync(paperDir, { recursive: true, force: true });
   }

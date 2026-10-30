@@ -142,6 +142,15 @@ const examples: [string, string][] = [
   ["machine learning with neural networks", "AI・データ"],
   ["telecom software", "IT・通信"],
   ["semiconductor photonic display 光電融合", "半導体・電子デバイス"],
+  ["Review of Nanosheet Transistors Technology", "半導体・電子デバイス"],
+  ["Sub-3nm GAA Nanosheet Reliability", "半導体・電子デバイス"],
+  ["CMOS MOSFET transistor on 300mm wafer with EUV lithography", "半導体・電子デバイス"],
+  ["gate-all-around chiplet packaging and interconnects", "半導体・電子デバイス"],
+  ["ナノシートトランジスタの電気的特性", "半導体・電子デバイス"],
+  ["SmartNIC and browser architecture in network systems", "IT・通信"],
+  ["wave equation and quantum relativity in physics", "基礎科学（物理・数学）"],
+  ["Large language models and LLM reasoning with transformers", "AI・データ"],
+  ["astrophysics and supermassive black hole with space telescope", "宇宙・天文"],
   ["renewable energy", "エネルギー・資源"],
   ["galaxy astronomy", "宇宙・天文"],
   ["arXiv survey of Schwarzschild and Einstein general relativity", "基礎科学（物理・数学）"],
@@ -187,6 +196,56 @@ test("pickPaperIndustry: 旧選択肢・自由入力値・その他を返さな�
   assert.equal(isOtherIndustryValue("その他（Home）"), true);
   assert.equal(pickPaperIndustry([], "robot"), "");
   assert.equal(pickPaperIndustry(["教育・研究", "ロボティクス"], "robot research"), "ロボティクス");
+});
+
+for (const keyword of [
+  "transistor",
+  "FET",
+  "MOSFET",
+  "CMOS",
+  "nanosheet",
+  "gate-all-around",
+  "GAA",
+  "chiplet",
+  "lithography",
+  "wafer",
+  "トランジスタ",
+  "ナノシート",
+]) {
+  test(`pickPaperIndustry: 半導体・電子デバイスキーワード ${keyword}`, () => {
+    assert.equal(pickPaperIndustry(industries, keyword), "半導体・電子デバイス");
+  });
+}
+
+test("pickPaperIndustry: GAA や FET が無関係な英単語の一部に当たらない", () => {
+  const unrelatedWords = [
+    "safety first in laboratory",
+    "the team could defeat any rival",
+    "fetch the remote dataset",
+    "university cafeteria lunch menu",
+    "prenatal and fetal development study",
+    "buffet service optimization",
+    "confident and lifetime achievement",
+    "struggle against climate change",
+    "marine algae growth under light",
+    "megaampere pulsed power generator",
+    "fauna of Madagascar",
+    "satellite navigation system",
+  ];
+  for (const text of unrelatedWords) {
+    assert.notEqual(pickPaperIndustry(industries, text), "半導体・電子デバイス", `should not match for: ${text}`);
+  }
+});
+
+test("pickPaperIndustry: GAA や FET の境界一致（単体・ハイフン区切り）で半導体・電子デバイスを判定する", () => {
+  for (const text of [
+    "Sub-3nm GAA Nanosheet Reliability",
+    "A study of novel FETs for low-power logic",
+    "GAA-FET device scaling",
+    "FinFET and nanosheet FET architectures",
+  ]) {
+    assert.equal(pickPaperIndustry(industries, text), "半導体・電子デバイス", `should match for: ${text}`);
+  }
 });
 
 test("pickPaperIndustry: microprocessor / microphone 内の crop を農業と誤判定しない", () => {
