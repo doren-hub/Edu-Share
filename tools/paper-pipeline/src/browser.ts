@@ -231,6 +231,7 @@ export function chromeLaunchArgs(cfg: Pick<AppConfig, "headed" | "exportExtensio
   if (!cfg.headed) {
     // channel: "chrome" の旧ヘッドレスでは拡張が動かないため new を明示する
     args.push("--headless=new");
+    args.push("--disable-gpu");
   }
   if (cfg.exportExtensionPath) {
     args.push(`--load-extension=${cfg.exportExtensionPath}`);

@@ -34,6 +34,7 @@ yarn-error.log*
 # paper-pipeline（ローカル実行）
 tools/paper-pipeline/node_modules/
 tools/paper-pipeline/.chrome-profile/
+tools/paper-pipeline/dist/
 
 # 旧開発ループのログ（移行・互換用）
 /.run-issues/

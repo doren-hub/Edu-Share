@@ -54,7 +54,9 @@ npm start -- --headless
 
 Export 拡張をまだ入れていなければ、開いた Chrome の `chrome://extensions` から読み込むか、`.env` に拡張フォルダのパスを書きます。
 
-inbox に置いてから完了までの操作手順は [docs/inbox.md](docs/inbox.md)。フローチャートと段階の説明は [docs/flow.md](docs/flow.md)。
+inbox に置いてから完了までの操作手順は [docs/inbox.md](docs/inbox.md)。フローチャートと段階の説明は [docs/flow.md](docs/flow.md)。メモリ測定手順は [docs/memory.md](docs/memory.md)。
+
+`npm start` / `npm run repair-meta` / `npm run fill-inbox` / `npm run worker` は実行前に自動で事前ビルド（`tsc -p tsconfig.build.json`）を行い、`dist/` 配下の JavaScript を `node` で直接実行します（tsx のランタイム変換メモリを消費しません）。また、ヘッドレス起動時は `--disable-gpu` により不要な GPU プロセスのメモリ消費を抑えます。
 
 ## 動き
 
