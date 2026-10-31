@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\"",
     "db:build-apply-all": "node --experimental-strip-types tools/build-apply-all-migrations.ts",
     "db:check-apply-all": "node --experimental-strip-types tools/build-apply-all-migrations.ts --check",
