@@ -161,21 +161,22 @@ export async function putObject(
 
   let streamToSend: Readable;
   if (maxBytes != null) {
+    const limit = maxBytes;
     let bytesRead = 0;
     async function* limitGenerator() {
       for await (const chunk of rawStream) {
         const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
         bytesRead += u8.byteLength;
-        if (bytesRead > maxBytes) {
-          throw new PayloadTooLargeError(maxBytes, bytesRead);
+        if (bytesRead > limit) {
+          throw new PayloadTooLargeError(limit, bytesRead);
         }
         yield u8;
       }
     }
     streamToSend = Readable.from(limitGenerator());
   } else {
-    if (typeof (rawStream as ReadableStream).getReader === "function") {
-      streamToSend = Readable.fromWeb(rawStream as import("node:stream/web").ReadableStream);
+    if (typeof (rawStream as unknown as ReadableStream).getReader === "function") {
+      streamToSend = Readable.fromWeb(rawStream as unknown as import("node:stream/web").ReadableStream);
     } else {
       streamToSend = rawStream as Readable;
     }
