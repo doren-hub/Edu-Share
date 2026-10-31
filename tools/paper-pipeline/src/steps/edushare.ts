@@ -1302,18 +1302,25 @@ export async function verifyEduSharePaper(
     if (!hasVideo) warn("動画は未登録です");
 
     // CSV タブではアップロード欄が隠れるため、切り替える前に種類別の状態を読む。
-    const quizImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, QUIZ_CSV_HEADING));
-    const vocabImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, VOCAB_CSV_HEADING));
+    // 見出しの状態行は描画が遅れる。開始リンクを待ったあと、CSV タブで欄が隠れる前にもう一度読む。
+    let quizImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, QUIZ_CSV_HEADING));
+    let vocabImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, VOCAB_CSV_HEADING));
     const csvTab = page.getByRole("tab", { name: "NotebookLM CSV" });
+    if (!skipQuiz) {
+      await quizStart.first().waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
+    }
+    if (!quizImported) {
+      quizImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, QUIZ_CSV_HEADING));
+    }
+    if (!vocabImported) {
+      vocabImported = notebookLmCsvPoolImported(await notebookLmCsvCardText(page, VOCAB_CSV_HEADING));
+    }
     if (await csvTab.isVisible({ timeout: 0 }).catch(() => false)) {
       await csvTab.click({ timeout: 5_000 }).catch(() => undefined);
       await page.waitForTimeout(400);
     }
     const quizReady = Boolean(state.quizCsvPath && existsSync(state.quizCsvPath));
     const vocabReady = Boolean(state.vocabCsvPath && existsSync(state.vocabCsvPath));
-    if (!skipQuiz) {
-      await quizStart.first().waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
-    }
 
     if (!skipQuiz) {
       if (await quizStart.first().isVisible({ timeout: 0 }).catch(() => false)) {
@@ -1322,15 +1329,20 @@ export async function verifyEduSharePaper(
         await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
       } else if (quizImported) {
         log("確認: クイズは取り込み済みです。開始リンクは出ていないので飛ばします");
-      } else if (quizReady) {
-        unmarkEduUploaded(state, "nlm-quiz");
-        throw new Error("Edu Share にクイズ CSV がありません");
       } else {
         const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=quiz";
         log("確認: クイズ開始ボタンが無いので CSV プール URL を開きます");
-        await page.goto(take, { waitUntil: "domcontentloaded" });
-        await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
-        await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
+        try {
+          await page.goto(take, { waitUntil: "domcontentloaded" });
+          await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
+          await page.goto(state.eduShareTestUrl, { waitUntil: "domcontentloaded" });
+        } catch (err) {
+          if (quizReady) {
+            unmarkEduUploaded(state, "nlm-quiz");
+            throw new Error("Edu Share にクイズ CSV がありません");
+          }
+          throw err;
+        }
       }
     }
     if (await csvTab.isVisible({ timeout: 0 }).catch(() => false)) {
@@ -1343,14 +1355,19 @@ export async function verifyEduSharePaper(
         await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
       } else if (vocabImported) {
         log("確認: 単語帳は取り込み済みです。開始リンクは出ていないので飛ばします");
-      } else if (vocabReady) {
-        unmarkEduUploaded(state, "nlm-flashcards");
-        throw new Error("Edu Share に単語帳 CSV がありません");
       } else {
         const take = state.eduShareTestUrl.replace(/\/$/, "") + "/take?csvPool=vocab";
         log("確認: 単語帳開始ボタンが無いので CSV プール URL を開きます");
-        await page.goto(take, { waitUntil: "domcontentloaded" });
-        await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
+        try {
+          await page.goto(take, { waitUntil: "domcontentloaded" });
+          await page.waitForURL(/\/tests\/.+\/take/, { timeout: 20_000 });
+        } catch (err) {
+          if (vocabReady) {
+            unmarkEduUploaded(state, "nlm-flashcards");
+            throw new Error("Edu Share に単語帳 CSV がありません");
+          }
+          throw err;
+        }
       }
     }
 

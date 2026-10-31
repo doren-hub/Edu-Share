@@ -15,8 +15,9 @@ function titleNode(status: string): Element {
   } } } as unknown as Element;
 }
 
-function fakePage(quiz: string, vocab: string) {
+function fakePage(quiz: string, vocab: string, blankReads = 0, takeOpens = false) {
   let tabOpened = false;
+  let reads = 0;
   const sent: number[] = [];
   const navigations: string[] = [];
   function loc(key = "", index = 0): any {
@@ -31,6 +32,8 @@ function fakePage(quiz: string, vocab: string) {
       setInputFiles: async () => { sent.push(index); },
       evaluate: async (fn: typeof notebookLmCsvStatusLine) => {
         if (tabOpened) throw new Error("form hidden by CSV tab");
+        reads += 1;
+        if (reads <= blankReads) return "";
         return fn(titleNode(key === "クイズ（選択肢）" ? quiz : vocab));
       },
     };
@@ -42,7 +45,9 @@ function fakePage(quiz: string, vocab: string) {
     getByRole: (role: string, opts: { name?: string } = {}) => loc(`${role}:${opts.name}`),
     goto: async (url: string) => { navigations.push(url); tabOpened = false; },
     waitForTimeout: async () => {},
-    waitForURL: async () => { throw new Error("開始リンクなしでは take へ遷移しない"); },
+    waitForURL: async () => {
+      if (!takeOpens) throw new Error("開始リンクなしでは take へ遷移しない");
+    },
   } as unknown as Page;
   return { page, sent, navigations };
 }
@@ -226,6 +231,23 @@ test("ensureIndustry: 自動判定成功時は選択して state.industry に保
   }
 });
 
+test("状態行の初回読みが空でも取り込み済みなら確認を通す", async () => {
+  const root = mkdtempSync(join(tmpdir(), "csv-verify-late-"));
+  try {
+    const state = emptyState({ filename: "paper.pdf", inboxPdfPath: join(root, "paper.pdf"), paperDir: root });
+    state.eduShareTestUrl = "https://example.test/tests/test";
+    state.quizCsvPath = join(root, "quiz.csv");
+    state.vocabCsvPath = join(root, "vocab.csv");
+    writeFileSync(state.quizCsvPath, "csv");
+    writeFileSync(state.vocabCsvPath, "csv");
+    const { page } = fakePage("取り込み済み（12問）", "取り込み済み（40問）", 2);
+    await verifyEduSharePaper(page, { paperDir: root, state, skipSlidesVideo: true });
+    assert.ok(state.completed.includes("verify"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ensureIndustry: 業界が空になったときは state.industry に「業界未判定」と残す", async () => {
   const root = mkdtempSync(join(tmpdir(), "ensure-industry-unset-"));
   try {
@@ -255,6 +277,24 @@ test("ensureIndustry: 業界が空になったときは state.industry に「業
 
     const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
     assert.equal(saved.industry, "業界未判定");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("開始ボタンが無くてもクイズのCSVプールURLが開けば確認を通す", async () => {
+  const root = mkdtempSync(join(tmpdir(), "csv-verify-take-"));
+  try {
+    const state = emptyState({ filename: "paper.pdf", inboxPdfPath: join(root, "paper.pdf"), paperDir: root });
+    state.eduShareTestUrl = "https://example.test/tests/test";
+    state.quizCsvPath = join(root, "quiz.csv");
+    state.vocabCsvPath = join(root, "vocab.csv");
+    writeFileSync(state.quizCsvPath, "csv");
+    writeFileSync(state.vocabCsvPath, "csv");
+    const { page, navigations } = fakePage("", "", 0, true);
+    await verifyEduSharePaper(page, { paperDir: root, state, skipSlidesVideo: true });
+    assert.ok(state.completed.includes("verify"));
+    assert.ok(navigations.some((url) => url.includes("csvPool=quiz")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
