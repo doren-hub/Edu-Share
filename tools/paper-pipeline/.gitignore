@@ -2,3 +2,4 @@ node_modules/
 .chrome-profile/
 .env
 .env.save
+dist/

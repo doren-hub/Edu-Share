@@ -8,11 +8,13 @@ import {
   shouldOverrideHeadlessUserAgent,
 } from "./browser.ts";
 
-test("chromeLaunchArgs: ヘッドレスでは --headless=new を付ける", () => {
+test("chromeLaunchArgs: ヘッドレスでは --headless=new と --disable-gpu を付ける、画面付きでは付けない", () => {
   const headed = chromeLaunchArgs({ headed: true, exportExtensionPath: "" });
   const headless = chromeLaunchArgs({ headed: false, exportExtensionPath: "/ext" });
   assert.equal(headed.includes("--headless=new"), false);
+  assert.equal(headed.includes("--disable-gpu"), false);
   assert.equal(headless.includes("--headless=new"), true);
+  assert.equal(headless.includes("--disable-gpu"), true);
   assert.equal(headless.includes("--load-extension=/ext"), true);
   assert.equal(headed.includes("--load-extension="), false);
 });

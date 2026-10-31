@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/orchestrate.ts",
-    "repair-meta": "tsx src/orchestrate.ts --repair-meta",
-    "fill-inbox": "tsx src/fill-inbox-cli.ts",
-    "worker": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prestart": "npm run build",
+    "start": "node dist/orchestrate.js",
+    "repair-meta": "npm run build && node dist/orchestrate.js --repair-meta",
+    "fill-inbox": "npm run build && node dist/fill-inbox-cli.js",
+    "worker": "npm run build && node dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/bibliography.test.ts src/content-match.test.ts src/pipeline.test.ts src/steps/edushare.test.ts src/steps/notebooklm.test.ts src/match.test.ts src/scispace-card.test.ts src/scispace-record-url.test.ts src/scispace-files-view.test.ts src/inbox.test.ts src/schedule.test.ts src/state.test.ts src/studio-cards.test.ts src/studio-select.test.ts src/edushare-form.test.ts src/video-file.test.ts src/arxiv-abstract.test.ts src/crossref.test.ts src/notebook-quota.test.ts src/harvest.test.ts src/ui-download.test.ts src/human.test.ts src/config.test.ts src/browser.test.ts src/waiting.test.ts src/fill-inbox.test.ts src/give-up.test.ts src/pdf-grounding.test.ts src/pdf-text.test.ts src/steps/scispace.test.ts src/studio-artifact-cards.test.ts src/source-upload.test.ts"
+    "test": "node --import tsx --test src/bibliography.test.ts src/content-match.test.ts src/pipeline.test.ts src/steps/edushare.test.ts src/steps/notebooklm.test.ts src/match.test.ts src/scispace-card.test.ts src/scispace-record-url.test.ts src/scispace-files-view.test.ts src/inbox.test.ts src/schedule.test.ts src/state.test.ts src/studio-cards.test.ts src/studio-select.test.ts src/edushare-form.test.ts src/video-file.test.ts src/arxiv-abstract.test.ts src/crossref.test.ts src/notebook-quota.test.ts src/harvest.test.ts src/ui-download.test.ts src/human.test.ts src/config.test.ts src/browser.test.ts src/waiting.test.ts src/fill-inbox.test.ts src/give-up.test.ts src/pdf-grounding.test.ts src/pdf-text.test.ts src/steps/scispace.test.ts src/studio-artifact-cards.test.ts src/source-upload.test.ts src/orchestrate.test.ts"
   },
   "dependencies": {
     "ffmpeg-static": "^5.3.0",

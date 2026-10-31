@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   filterDuplicateInboxPdfs,
   loadExistingMatchTargets,
@@ -52,15 +53,36 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+export function resolveWorkerSpawn(
+  args: string[],
+  opts?: { metaUrl?: string; distCliExists?: boolean },
+): { command: string; spawnArgs: string[] } {
+  const metaUrl = opts?.metaUrl ?? import.meta.url;
+  const isBuiltJs = metaUrl.endsWith(".js");
+  const distCli = join(PACKAGE_ROOT, "dist/cli.js");
+  const hasDistCli = opts?.distCliExists !== undefined ? opts.distCliExists : existsSync(distCli);
+  if (isBuiltJs && hasDistCli) {
+    return {
+      command: process.execPath,
+      spawnArgs: [distCli, ...args],
+    };
+  }
+  return {
+    command: process.execPath,
+    spawnArgs: [
+      join(PACKAGE_ROOT, "node_modules/tsx/dist/cli.mjs"),
+      join(PACKAGE_ROOT, "src/cli.ts"),
+      ...args,
+    ],
+  };
+}
+
 function runWorker(args: string[]): Promise<number> {
+  const { command, spawnArgs } = resolveWorkerSpawn(args);
   return new Promise((resolve, reject) => {
     const child = spawn(
-      process.execPath,
-      [
-        join(PACKAGE_ROOT, "node_modules/tsx/dist/cli.mjs"),
-        join(PACKAGE_ROOT, "src/cli.ts"),
-        ...args,
-      ],
+      command,
+      spawnArgs,
       { cwd: PACKAGE_ROOT, stdio: "inherit", env: process.env },
     );
     child.on("error", reject);
@@ -410,7 +432,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => {
-  logError(e instanceof Error ? e.stack ?? e.message : String(e));
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    logError(e instanceof Error ? e.stack ?? e.message : String(e));
+    process.exitCode = 1;
+  });
+}

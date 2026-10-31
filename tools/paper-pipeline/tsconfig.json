@@ -8,6 +8,7 @@
     "esModuleInterop": true,
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "types": ["node"],
     "rootDir": "src",
     "noEmit": true
