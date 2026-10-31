@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   filterDuplicateInboxPdfs,
   loadExistingMatchTargets,
@@ -432,7 +432,19 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function isMainModule(
+  metaUrl: string = import.meta.url,
+  scriptPath: string | null = process.argv[1] ?? null,
+): boolean {
+  if (!scriptPath) return false;
+  try {
+    return realpathSync(scriptPath) === fileURLToPath(metaUrl);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main().catch((e) => {
     logError(e instanceof Error ? e.stack ?? e.message : String(e));
     process.exitCode = 1;

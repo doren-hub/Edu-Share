@@ -45,8 +45,11 @@ PDF 処理中の全体メモリ: **約 1.4 GB**
 #### 1. プロセス一覧と RSS の確認
 
 ```bash
-# 関連プロセスの PID・RSS・コマンドを表示
-ps -eo pid,rss,%cpu,%mem,command | grep -E "paper-pipeline.*dist|paper-pipeline.*src|\.chrome-profile" | grep -v grep
+# 進行役・worker・Chrome 関連プロセスの PID を取得
+PIDS=$(pgrep -f "(dist|src)/(orchestrate|cli|fill-inbox-cli)\.(js|ts)|\.chrome-profile")
+
+# BSD ps 用にカンマ区切りの PID を作成して表示
+ps -o pid,rss,%cpu,%mem,command -p "$(echo $PIDS | tr ' ' ',')"
 ```
 
 ※ `rss` 列は KB 単位（1024 で割ると MB）です。
@@ -54,13 +57,10 @@ ps -eo pid,rss,%cpu,%mem,command | grep -E "paper-pipeline.*dist|paper-pipeline.
 #### 2. アクティビティモニタ同等の物理フットプリント（macOS `footprint` コマンド）
 
 ```bash
-# 関連プロセスの PID を取得
-PIDS=$(pgrep -f "paper-pipeline.*dist|paper-pipeline.*src|\.chrome-profile")
-
 # 各プロセスの Footprint を表示
 for PID in $PIDS; do
   echo "PID: $PID"
-  footprint -p "$PID" | grep "Footprint:"
+  footprint -p "$PID" | grep -E "Footprint:|TOTAL"
 done
 ```
 
