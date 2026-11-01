@@ -14,6 +14,9 @@ import {
 } from "./scheduled-run.ts";
 import { EXIT_QUOTA, EXIT_QUOTA_UNAVAILABLE, type NotebookQuotaConfig } from "./notebook-quota.ts";
 import { humanPauseMode, NeedVisibleChromeError } from "./human.ts";
+import { runCatchingLogin } from "./cli.ts";
+import type { AppConfig } from "./config.ts";
+import type { BrowserSession } from "./browser.ts";
 
 const mockQuotaConfig = (over: Partial<NotebookQuotaConfig> = {}): NotebookQuotaConfig => ({
   ignoreNotebookQuota: false,
@@ -338,4 +341,66 @@ test("humanPauseMode & NeedVisibleChromeError: ヘッドレス中のログイン
   assert.equal(err.name, "NeedVisibleChromeError");
   assert.match(err.message, /NotebookLM: ログインまたは追加確認が必要です/);
   assert.equal(EXIT_LOGIN_REQUIRED, 15);
+});
+
+test("runCatchingLogin: noRevealLogin が真のときは画面を開かず onLoginRequired を呼んで終了する", async () => {
+  const dummySession = { page: {} } as unknown as BrowserSession;
+  const cfg = { noRevealLogin: true } as AppConfig;
+
+  let revealCalled = false;
+  let onLoginCalled = false;
+
+  await assert.rejects(
+    async () => {
+      await runCatchingLogin(
+        dummySession,
+        cfg,
+        async () => {
+          throw new NeedVisibleChromeError("NotebookLM", "https://accounts.google.com", "ログイン待ち");
+        },
+        {
+          reveal: async () => {
+            revealCalled = true;
+            return dummySession;
+          },
+          onLoginRequired: (err) => {
+            onLoginCalled = true;
+            throw new Error(`handled login required: ${err.context}`);
+          },
+        },
+      );
+    },
+    /handled login required: NotebookLM/,
+  );
+
+  assert.equal(revealCalled, false);
+  assert.equal(onLoginCalled, true);
+});
+
+test("runCatchingLogin: noRevealLogin が偽のときは reveal を呼んで再試行する", async () => {
+  const dummySession = { page: {} } as unknown as BrowserSession;
+  const cfg = { noRevealLogin: false } as AppConfig;
+
+  let revealCount = 0;
+  let attempt = 0;
+
+  const result = await runCatchingLogin(
+    dummySession,
+    cfg,
+    async () => {
+      if (attempt++ === 0) {
+        throw new NeedVisibleChromeError("SciSpace", "https://scispace.com/login", "ログイン");
+      }
+      return "success_after_login";
+    },
+    {
+      reveal: async (s) => {
+        revealCount++;
+        return s;
+      },
+    },
+  );
+
+  assert.equal(revealCount, 1);
+  assert.equal(result.value, "success_after_login");
 });

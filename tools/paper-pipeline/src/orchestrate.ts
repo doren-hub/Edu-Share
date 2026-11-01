@@ -319,6 +319,7 @@ async function main(): Promise<void> {
   const skipped: string[] = [];
   const failed: string[] = [];
   let exitedOnQuota = false;
+  let loginRequired = false;
 
   while (true) {
     await refreshInbox();
@@ -383,10 +384,10 @@ async function main(): Promise<void> {
     await sleep(CHROME_UNLOCK_MS);
 
     if (code === EXIT_LOGIN_REQUIRED) {
+      loginRequired = true;
       logError(
         `オーケストレータ: ${track.item.filename} でログインまたは追加確認が必要です。--no-reveal-login のためパイプラインを終了します`,
       );
-      process.exitCode = EXIT_LOGIN_REQUIRED;
       break;
     }
 
@@ -505,15 +506,31 @@ async function main(): Promise<void> {
 
   log(
     `オーケストレータ結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}${
-      exitedOnQuota ? " / 利用量終了" : ""
+      exitedOnQuota ? " / 利用量終了" : loginRequired ? " / ログイン必要" : ""
     }`,
   );
-  if (exitedOnQuota) {
-    process.exitCode = EXIT_QUOTA;
-  } else if (failed.length) {
-    logError(`失敗: ${failed.join(", ")}`);
-    process.exitCode = 1;
+  const exitCode = decideOrchestratorExitCode({
+    loginRequired,
+    exitedOnQuota,
+    failedCount: failed.length,
+  });
+  if (exitCode !== 0) {
+    process.exitCode = exitCode;
   }
+  if (!loginRequired && !exitedOnQuota && failed.length) {
+    logError(`失敗: ${failed.join(", ")}`);
+  }
+}
+
+export function decideOrchestratorExitCode(opts: {
+  loginRequired?: boolean;
+  exitedOnQuota?: boolean;
+  failedCount?: number;
+}): number {
+  if (opts.loginRequired) return EXIT_LOGIN_REQUIRED;
+  if (opts.exitedOnQuota) return EXIT_QUOTA;
+  if (opts.failedCount && opts.failedCount > 0) return 1;
+  return 0;
 }
 
 export function isMainModule(

@@ -10,12 +10,14 @@ import {
   type QuotaCheckDeps,
 } from "./quota-check.ts";
 
+import { EXIT_LOGIN_REQUIRED } from "./human.ts";
+
 export const DEFAULT_MIN_INBOX = 5;
 
 export const EXIT_ALREADY_RUNNING = 10;
 export const EXIT_INBOX_ERROR = 13;
 export const EXIT_PROCESS_CHECK_ERROR = 14;
-export const EXIT_LOGIN_REQUIRED = 15;
+export { EXIT_LOGIN_REQUIRED };
 
 export type RunningCheckResult = {
   running: boolean;

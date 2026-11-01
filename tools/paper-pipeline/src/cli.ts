@@ -80,10 +80,16 @@ async function revealForLogin(
   return session;
 }
 
-async function runCatchingLogin<T>(
+export type RunCatchingLoginDeps = {
+  reveal?: typeof revealForLogin;
+  onLoginRequired?: (err: NeedVisibleChromeError, session: BrowserSession) => Promise<never> | never;
+};
+
+export async function runCatchingLogin<T>(
   session: BrowserSession,
   cfg: AppConfig,
   fn: (page: Page) => Promise<T>,
+  deps: RunCatchingLoginDeps = {},
 ): Promise<{ session: BrowserSession; value: T }> {
   let current = session;
   for (let i = 0; i < 3; i++) {
@@ -95,10 +101,16 @@ async function runCatchingLogin<T>(
         logError(
           `${e.context}: ログインまたは追加確認が必要ですが、--no-reveal-login のため画面を開かずに終了します（${e.reason ?? ""}）`,
         );
+        if (deps.onLoginRequired) {
+          await deps.onLoginRequired(e, current);
+        }
+        await closeBrowser(current).catch(() => undefined);
+        activeSession = null;
         process.exitCode = EXIT_LOGIN_REQUIRED;
         process.exit(EXIT_LOGIN_REQUIRED);
       }
-      current = await revealForLogin(current, cfg, e);
+      const reveal = deps.reveal ?? revealForLogin;
+      current = await reveal(current, cfg, e);
     }
   }
   throw new Error("ログイン後も続行できませんでした");
@@ -317,7 +329,11 @@ async function main(): Promise<void> {
   process.exit(process.exitCode ?? 0);
 }
 
-main().catch((e) => {
-  logError(e instanceof Error ? e.stack ?? e.message : String(e));
-  process.exit(1);
-});
+import { isMainModule } from "./orchestrate.ts";
+
+if (isMainModule(import.meta.url)) {
+  main().catch((e) => {
+    logError(e instanceof Error ? e.stack ?? e.message : String(e));
+    process.exit(1);
+  });
+}
