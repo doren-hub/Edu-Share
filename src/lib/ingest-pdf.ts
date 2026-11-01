@@ -45,22 +45,6 @@ export async function ingestPdfForTest(params: {
     pdfPages = chunks.map(() => null);
   }
 
-  await admin.from("document_chunks").delete().eq("test_id", params.testId);
-
-  if (chunks.length === 0) {
-    const processingError =
-      "PDFから本文テキストを自動抽出できませんでした（画像のみ・スキャンなどの可能性）。テキストがコピーできるPDFへの差し替えを推奨します。「テスト開始」による新規出題はできません。";
-    const upd = await admin
-      .from("tests")
-      .update({
-        processing_status: "ready",
-        processing_error: processingError,
-      })
-      .eq("id", params.testId);
-    if (upd.error) throw new Error(upd.error.message);
-    return;
-  }
-
   const useEmb = openAiEmbeddingsEnabled();
   const embeddings: number[][] = [];
   if (useEmb) {
@@ -77,44 +61,21 @@ export async function ingestPdfForTest(params: {
     }
   }
 
-  const batchRows = 80;
-  for (let i = 0; i < chunks.length; i += batchRows) {
-    const slice = chunks.slice(i, i + batchRows);
-    const rows = slice.map((content, j) => {
-      const chunk_index = i + j;
-      const pdf_page = pdfPages[chunk_index] ?? null;
-      return {
-        test_id: params.testId,
-        chunk_index,
-        content,
-        ...(pdf_page != null ? { pdf_page } : {}),
-        embedding: useEmb ? embeddings[chunk_index] : null,
-      };
-    });
-
-    let ins = await admin.from("document_chunks").insert(rows);
-    if (ins.error && /pdf_page|column|schema cache|PGRST/i.test(ins.error.message)) {
-      const rowsLegacy = rows.map((row) => {
-        const { pdf_page: _p, ...rest } = row as {
-          pdf_page?: number | null;
-          test_id: string;
-          chunk_index: number;
-          content: string;
-          embedding: number[] | null;
-        };
-        return rest;
-      });
-      ins = await admin.from("document_chunks").insert(rowsLegacy);
-    }
-    if (ins.error) throw new Error(ins.error.message);
-  }
-
-  const upd = await admin
-    .from("tests")
-    .update({
-      processing_status: "ready",
-      processing_error: null,
-    })
-    .eq("id", params.testId);
-  if (upd.error) throw new Error(upd.error.message);
+  // One transaction replaces chunks and publishes the new PDF only after all
+  // extraction/embedding calls have succeeded. Never fall back to delete/insert.
+  const rows = chunks.map((content, chunk_index) => ({
+    chunk_index,
+    content,
+    pdf_page: pdfPages[chunk_index] ?? null,
+    embedding: useEmb ? JSON.stringify(embeddings[chunk_index]) : null,
+  }));
+  const { error } = await admin.rpc("replace_test_pdf_chunks", {
+    p_test_id: params.testId,
+    p_storage_path: params.storagePath,
+    p_chunks: rows,
+    p_processing_error: chunks.length === 0
+      ? "PDFから本文テキストを自動抽出できませんでした（画像のみ・スキャンなどの可能性）。テキストがコピーできるPDFへの差し替えを推奨します。「テスト開始」による新規出題はできません。"
+      : null,
+  });
+  if (error) throw new Error(error.message);
 }
