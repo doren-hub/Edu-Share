@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
+import { reconcilePaperMaterialObjectPaths } from "./paper-notebooklm-storage.ts";
+import { paperNotebookLmMaterialPresence } from "./paper-notebooklm-materials.ts";
 
 const uploadId = "11111111-1111-4111-8111-111111111111";
 function fixture(kind: "slide" | "video", options: {
@@ -89,6 +91,9 @@ for (const kind of ["slide", "video"] as const) {
     assert.equal(success.published(), null);
     assert.equal(success.objects.has(success.oldPath!), false);
     assert.deepEqual(success.events, ["db", "cleanup"]);
+    const cleanupFailure = fixture(kind, { deletion: true, cleanupError: true });
+    assert.equal((await cleanupFailure.run()).status, 200);
+    assert.equal(cleanupFailure.published(), null);
     for (const failure of [{ dbError: true }, { conflict: true }]) {
       const f = fixture(kind, { deletion: true, ...failure });
       assert.equal((await f.run()).status, failure.dbError ? 500 : 409);
@@ -127,6 +132,14 @@ for (const kind of ["slide", "video"] as const) {
     assert.notEqual(path, f.path);
     assert.ok(!path.includes("-upload-"));
     assert.equal(f.objects.get(path), "new bytes");
+    const column = kind === "slide" ? "notebooklm_slide_pdf_storage_path" : "notebooklm_video_mp4_storage_path";
+    const input = { id: "paper", uploaded_by: "owner", [column]: path };
+    const [reconciled] = await reconcilePaperMaterialObjectPaths(
+      { from: () => ({ update: () => { throw new Error("Published path must not change"); } }) },
+      [input], async key => ({ exists: f.objects.has(key), size: f.objects.has(key) ? 30_000 : null, contentType: null }),
+    );
+    assert.deepEqual(reconciled, input);
+    assert.equal(paperNotebookLmMaterialPresence(reconciled)[kind], true);
     assert.equal(f.objects.has(f.oldPath!), false);
     assert.equal(f.objects.has(f.path), false);
     assert.ok(f.events.indexOf("copy") < f.events.indexOf("db"));

@@ -169,7 +169,11 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
   if (!changed?.length) {
     return NextResponse.json({ error: "教材が変更されました。再読み込みしてください。" }, { status: 409 });
   }
-  await deleteObjects([oldPath, storagePath, legacyPath]);
+  try {
+    await deleteObjects([oldPath, storagePath, legacyPath]);
+  } catch {
+    // The DB reference is already cleared; cleanup is best effort.
+  }
 
   return NextResponse.json({ ok: true });
 }

@@ -146,3 +146,15 @@ test("toPaperBrowseListRow: JSON を落としてフラグだけ残す", () => {
   assert.equal("uploaded_by" in out, false);
   assert.equal(out.title, "t");
 });
+
+test("immutable commit paths count as complete materials, staging paths never do", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const slidePath = `u/abc-notebooklm-slide-${id}.pdf`;
+  const videoPath = `u/abc-notebooklm-video-${id}.mp4`;
+  assert.equal(paperNotebookLmMaterialsComplete({
+    notebooklm_has_quiz_csv: true, notebooklm_has_vocab_csv: true,
+    notebooklm_slide_pdf_storage_path: slidePath, notebooklm_video_mp4_storage_path: videoPath,
+  }), true);
+  assert.equal(paperHasNotebookLmSlidePath(`u/abc-notebooklm-slide-upload-${id}.pdf`), false);
+  assert.equal(paperHasNotebookLmVideoPath(`u/abc-notebooklm-video-upload-${id}.mp4`), false);
+});
