@@ -21,3 +21,30 @@ test("bounded API routes bypass middleware cloning, other APIs and pages still r
     assert.equal(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url: path }), true, path);
   }
 });
+
+
+test("streaming material uploads bypass middleware only at the exact video and slide paths", () => {
+  for (const id of ["abc", "550e8400-e29b-41d4-a716-446655440000"]) {
+    for (const kind of ["video", "slide"]) {
+      for (const suffix of ["", "/", "?query=1", "/?query=1"]) {
+        const path = `/api/tests/${id}/material/${kind}${suffix}`;
+        assert.equal(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url: path }), false, path);
+      }
+    }
+  }
+  for (const path of [
+    "/api/tests/upload",
+    "/api/tests/abc/material",
+    "/api/tests/abc/material/audio",
+    "/api/tests/abc/material/videos",
+    "/api/tests/abc/material/slides",
+    "/api/tests/abc/material/video/commit",
+    "/api/tests/abc/material/slide/commit",
+    "/api/tests/abc/extra/material/video",
+    "/tests/abc/material/video",
+  ]) {
+    for (const suffix of ["", "/", "?query=1"]) {
+      assert.equal(unstable_doesMiddlewareMatch({ config, nextConfig: {}, url: path + suffix }), true, path + suffix);
+    }
+  }
+});
