@@ -25,17 +25,17 @@ function fakeAdmin(rows: Rows, writes: string[]) {
     rpc: async (name: string) => { writes.push(`rpc:${name}`); return { data: null, error: null }; },
     from: (table: string) => {
       let op = "select";
-      const result = () => op === "select"
+      const result = (single = false) => op === "select"
         ? (rows[table] ? { data: rows[table], error: null } : { data: null, error: { message: "not found" } })
-        : { data: { id: "new-session" }, error: null };
+        : { data: single ? { id: "new-session" } : [{ id: "new-session" }], error: null };
       const builder: Record<string, unknown> = new Proxy({}, {
         get: (_t, prop) => {
           if (prop === "then") {
             return (ok: (v: unknown) => unknown, ng: (e: unknown) => unknown) => Promise.resolve(result()).then(ok, ng);
           }
-          if (prop === "single") return async () => result();
+          if (prop === "single") return async () => result(true);
           if (prop === "maybeSingle") {
-            return async () => (op === "select" && !rows[table] ? { data: null, error: null } : result());
+            return async () => (op === "select" && !rows[table] ? { data: null, error: null } : result(true));
           }
           return (..._args: unknown[]) => {
             const name = String(prop);
@@ -52,7 +52,7 @@ function fakeAdmin(rows: Rows, writes: string[]) {
   };
 }
 
-function loadRoute(path: string, stubs: Record<string, unknown>, calls: string[]) {
+function loadModule(path: string, stubs: Record<string, unknown>, calls: string[]) {
   const source = readFileSync(new URL(path, import.meta.url), "utf8");
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -70,7 +70,7 @@ function loadRoute(path: string, stubs: Record<string, unknown>, calls: string[]
   };
   const exports: Record<string, unknown> = {};
   new Function("exports", "require", outputText)(exports, stubRequire);
-  return exports as Record<string, (req: Request, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>>;
+  return exports;
 }
 
 type Extra = (record: (name: string, value?: unknown) => (...a: unknown[]) => Promise<unknown>) => Record<string, unknown>;
@@ -87,6 +87,7 @@ function harness(path: string, opts: { user: string | null; rows: Rows; extra?: 
   const stubs: Record<string, unknown> = {
     "next/server": { NextResponse },
     "@/lib/request-json": requestJson,
+    "@/lib/llm-rate-limit": { llmRateLimitResponse: () => null },
     "@/lib/api-input-schemas": schemas,
     "@/lib/supabase/server": {
       createClient: async () => ({
@@ -97,9 +98,10 @@ function harness(path: string, opts: { user: string | null; rows: Rows; extra?: 
     "@/lib/supabase/admin": { createAdminClient: () => fakeAdmin(opts.rows, writes) },
     "@/lib/object-storage": {
       deleteObjects: record("r2:delete"),
+      copyObject: record("r2:copy"),
       putObject: record("r2:put"),
       createObjectUploadUrl: record("r2:uploadUrl", "https://upload.invalid"),
-      getObjectMetadata: async () => ({ exists: true, size: 50_000, contentType: null }),
+      getObjectMetadata: async (path: string) => ({ exists: true, size: 50_000, contentType: path.includes("video") ? "video/mp4" : "application/pdf", etag: "etag" }),
       createObjectReadUrl: async () => "https://read.invalid",
     },
     "@/lib/ingest-pdf": { ingestPdfForTest: record("ingest") },
@@ -113,7 +115,9 @@ function harness(path: string, opts: { user: string | null; rows: Rows; extra?: 
     "@/lib/paper-industries": paperIndustries,
     ...opts.extra?.(record),
   };
-  const route = loadRoute(path, stubs, calls);
+  // 認証・所有者確認を含む共通実装も実コードで読み込む。
+  stubs["@/lib/commit-notebooklm-material"] = loadModule("./commit-notebooklm-material.ts", stubs, calls);
+  const route = loadModule(path, stubs, calls) as Record<string, (req: Request, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>>;
   return { route, writes, calls };
 }
 
@@ -162,13 +166,13 @@ const cases: Case[] = [
   },
   {
     name: "material/slide commit", path: "../app/api/tests/[id]/material/slide/commit/route.ts", method: "POST",
-    params: { id: TEST_ID }, rows: (o) => ({ tests: { ...testRow(o), pdf_storage_path: null } }), request: json({ action: "commit" }),
-    ownerWrites: ["update:tests", "r2:delete"],
+    params: { id: TEST_ID }, rows: (o) => ({ tests: { ...testRow(o), pdf_storage_path: null } }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-slide-upload-${SESSION_ID}.pdf` }),
+    ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
   },
   {
     name: "material/video commit", path: "../app/api/tests/[id]/material/video/commit/route.ts", method: "POST",
-    params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({ action: "commit" }),
-    ownerWrites: ["update:tests", "r2:delete"],
+    params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-video-upload-${SESSION_ID}.mp4` }),
+    ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
   },
   {
     name: "quiz DELETE", path: "../app/api/quiz/[sessionId]/route.ts", method: "DELETE", params: { sessionId: SESSION_ID },
