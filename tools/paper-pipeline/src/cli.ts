@@ -10,6 +10,7 @@ import {
 } from "./browser.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
 import { EXIT_LOGIN_REQUIRED, NeedVisibleChromeError, waitUntilUnblocked } from "./human.ts";
+import { isMainModule } from "./orchestrate.ts";
 import { maybeLoginEduShare } from "./steps/edushare.ts";
 import { listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
@@ -83,6 +84,8 @@ async function revealForLogin(
 export type RunCatchingLoginDeps = {
   reveal?: typeof revealForLogin;
   onLoginRequired?: (err: NeedVisibleChromeError, session: BrowserSession) => Promise<never> | never;
+  closeBrowser?: typeof closeBrowser;
+  exit?: (code: number) => never;
 };
 
 export async function runCatchingLogin<T>(
@@ -104,8 +107,12 @@ export async function runCatchingLogin<T>(
         if (deps.onLoginRequired) {
           await deps.onLoginRequired(e, current);
         }
-        await closeBrowser(current).catch(() => undefined);
+        const closer = deps.closeBrowser ?? closeBrowser;
+        await closer(current).catch(() => undefined);
         activeSession = null;
+        if (deps.exit) {
+          deps.exit(EXIT_LOGIN_REQUIRED);
+        }
         process.exitCode = EXIT_LOGIN_REQUIRED;
         process.exit(EXIT_LOGIN_REQUIRED);
       }
@@ -328,8 +335,6 @@ async function main(): Promise<void> {
   }
   process.exit(process.exitCode ?? 0);
 }
-
-import { isMainModule } from "./orchestrate.ts";
 
 if (isMainModule(import.meta.url)) {
   main().catch((e) => {

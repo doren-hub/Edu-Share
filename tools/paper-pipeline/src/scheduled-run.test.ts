@@ -377,6 +377,36 @@ test("runCatchingLogin: noRevealLogin が真のときは画面を開かず onLog
   assert.equal(onLoginCalled, true);
 });
 
+test("runCatchingLogin: noRevealLogin 時に closeBrowser を呼んでから process.exit(15) で終了する", async () => {
+  const dummySession = { page: {} } as unknown as BrowserSession;
+  const cfg = { noRevealLogin: true } as AppConfig;
+  const events: string[] = [];
+
+  await assert.rejects(
+    async () => {
+      await runCatchingLogin(
+        dummySession,
+        cfg,
+        async () => {
+          throw new NeedVisibleChromeError("NotebookLM", "https://accounts.google.com", "ログイン待ち");
+        },
+        {
+          closeBrowser: async () => {
+            events.push("closeBrowser");
+          },
+          exit: (code) => {
+            events.push(`exit:${code}`);
+            throw new Error(`exited with ${code}`);
+          },
+        },
+      );
+    },
+    /exited with 15/,
+  );
+
+  assert.deepEqual(events, ["closeBrowser", "exit:15"]);
+});
+
 test("runCatchingLogin: noRevealLogin が偽のときは reveal を呼んで再試行する", async () => {
   const dummySession = { page: {} } as unknown as BrowserSession;
   const cfg = { noRevealLogin: false } as AppConfig;
