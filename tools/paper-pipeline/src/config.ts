@@ -36,6 +36,7 @@ export type AppConfig = {
   studioSkip: readonly StudioStageId[];
   studioGenerateExplicit: boolean;
   ignoreNotebookQuota: boolean;
+  exitOnQuota: boolean;
   newestFirst: boolean;
   notebookQuotaUrls: readonly string[];
   notebookQuotaFiles: readonly string[];
@@ -55,6 +56,7 @@ export type CliOverrides = {
   skipSlidesVideo?: boolean;
   generate?: string[];
   ignoreNotebookQuota?: boolean;
+  exitOnQuota?: boolean;
   newestFirst?: boolean;
   /** 短期枠の使用量がこの％を超えたら生成を止める */
   notebookShortStopPercent?: number;
@@ -86,6 +88,7 @@ export function parseArgv(argv: string[]): CliOverrides {
       }
       out.generate = [...(out.generate ?? []), ...tokens];
     } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
+    else if (a === "--exit-on-quota") out.exitOnQuota = true;
     else if (a === "--newest-first") out.newestFirst = true;
     else if (a === "--notebook-short-stop-percent") {
       out.notebookShortStopPercent = parseRequiredPercent(
@@ -191,6 +194,9 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
       overrides.ignoreNotebookQuota === true ||
       process.env.IGNORE_NOTEBOOK_QUOTA === "1" ||
       process.env.IGNORE_NOTEBOOK_QUOTA === "true",
+    exitOnQuota:
+      overrides.exitOnQuota === true ||
+      envFlagEnabled(process.env.NOTEBOOK_EXIT_ON_QUOTA),
     newestFirst:
       overrides.newestFirst === true ||
       process.env.NEWEST_FIRST === "1" ||
@@ -259,6 +265,8 @@ npm start は inbox 直下の PDF だけを、1論文ずつ worker で処理し�
                        短期枠の使用量がこの％を超えたら生成を止める（既定 85、0〜100）
                        環境変数 NOTEBOOK_SHORT_STOP_PERCENT より優先
   --ignore-notebook-quota  Notebook 利用量による停止をしない
+  --exit-on-quota      Notebook 利用枠が上限に達し進められる作業が無くなったときにリセットを待たず終了コード 11 で終了
+                       環境変数 NOTEBOOK_EXIT_ON_QUOTA=1 でも可
 `;
 }
 

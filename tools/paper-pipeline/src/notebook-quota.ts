@@ -321,11 +321,11 @@ function unique(xs: string[]): string[] {
   return out;
 }
 
-function fmtPct(n: number): string {
+export function fmtPct(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
-function formatJst(ms: number): string {
+export function formatJst(ms: number): string {
   const d = new Date(ms);
   const p = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Asia/Tokyo",
