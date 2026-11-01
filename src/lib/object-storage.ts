@@ -1,4 +1,5 @@
 import {
+  CopyObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -46,6 +47,7 @@ export type ObjectMetadata = {
   exists: boolean;
   size: number | null;
   contentType: string | null;
+  etag?: string | null;
 };
 
 type R2Config = {
@@ -226,6 +228,7 @@ export async function getObjectMetadata(key: string): Promise<ObjectMetadata> {
       exists: true,
       size: typeof result.ContentLength === "number" ? result.ContentLength : null,
       contentType: result.ContentType ?? null,
+      etag: result.ETag ?? null,
     };
   } catch (error) {
     const e = error as { name?: string; $metadata?: { httpStatusCode?: number } };
@@ -253,10 +256,31 @@ export async function deleteObjects(keys: Array<string | null | undefined>): Pro
   }
 }
 
+/** Copy the exact validated bytes to a key that has never had a PUT URL. */
+export async function copyObject(
+  source: string,
+  destination: string,
+  etag: string,
+  contentType: string,
+): Promise<void> {
+  const cfg = getR2Config();
+  const result = await cfg.client.send(new CopyObjectCommand({
+    Bucket: cfg.bucket,
+    Key: assertObjectKey(destination),
+    CopySource: `${cfg.bucket}/${encodedObjectKey(source)}`,
+    CopySourceIfMatch: etag,
+    MetadataDirective: "REPLACE",
+    ContentType: contentType,
+    CacheControl: "public, max-age=300",
+  }));
+  if (!result.CopyObjectResult?.ETag) throw new Error("R2コピーの完了を確認できませんでした");
+}
+
 export async function createObjectUploadUrl(
   key: string,
   contentType: string,
   expiresInSeconds = 15 * 60,
+  contentLength?: number,
 ): Promise<string> {
   const cfg = getR2Config();
   return getSignedUrl(
@@ -265,6 +289,7 @@ export async function createObjectUploadUrl(
       Bucket: cfg.bucket,
       Key: assertObjectKey(key),
       ContentType: contentType,
+      ContentLength: contentLength,
     }),
     { expiresIn: expiresInSeconds },
   );

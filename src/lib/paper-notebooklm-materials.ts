@@ -25,14 +25,14 @@ export function paperHasNotebookLmSlidePath(
   path: string | null | undefined,
 ): boolean {
   const p = path?.trim() ?? "";
-  return /notebooklm-slide\.pdf$/i.test(p);
+  return /notebooklm-slide(?:-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\.pdf$/i.test(p);
 }
 
 export function paperHasNotebookLmVideoPath(
   path: string | null | undefined,
 ): boolean {
   const p = path?.trim() ?? "";
-  return /notebooklm-video\.mp4$/i.test(p);
+  return /notebooklm-video(?:-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\.mp4$/i.test(p);
 }
 
 export type PaperNotebookLmMaterialInput = {
