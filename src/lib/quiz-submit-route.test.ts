@@ -25,15 +25,15 @@ function loadWithStubs(path: string, stubs: Record<string, unknown>) {
   return exports;
 }
 
-type Row = { id: string; user_id: string; test_id: string | null; questions_json: unknown; answers_json: unknown };
+type Row = { id: string; user_id: string; test_id: string | null; questions_json: unknown; answers_json: unknown; score_mc: number; score_essay: number; score_total: number; feedback_json: unknown };
 
 // quiz_sessions の 1 行を模したメモリ DB。update は .is("answers_json", null)
 // 条件を評価し、条件付き更新の原子性（1 行を 1 回だけ更新）を再現する。
 function fixture(opts: { row?: Partial<Row>; user?: string | null } = {}) {
   const row: Row = {
     id: sessionId, user_id: userId, test_id: "test-1",
-    questions_json: [{ id: "q1", type: "multiple_choice", prompt: "p", choices: ["a", "b"], correctIndex: 0 }],
-    answers_json: null, ...opts.row,
+    questions_json: [{ id: "q1", type: "multiple_choice", prompt: "p", options: ["a", "b"], correctIndex: 0 }],
+    answers_json: null, score_mc: 0, score_essay: 0, score_total: 0, feedback_json: null, ...opts.row,
   };
   const calls = { grade: 0, stats: 0, updates: 0 };
   const admin = {
@@ -83,8 +83,8 @@ function fixture(opts: { row?: Partial<Row>; user?: string | null } = {}) {
     },
   });
   const post = route.POST as (req: Request, ctx: { params: Promise<{ sessionId: string }> }) => Promise<Response>;
-  const submit = () => post(
-    new Request("https://unused.invalid/submit", { method: "POST", body: JSON.stringify({ answers: { q1: 0 } }) }),
+  const submit = (answer = 0) => post(
+    new Request("https://unused.invalid/submit", { method: "POST", body: JSON.stringify({ answers: { q1: answer } }) }),
     { params: Promise.resolve({ sessionId }) },
   );
   return { row, calls, submit, setSingleGrade: () => { releaseGrade = () => {}; } };
@@ -100,17 +100,24 @@ test("submit: 初回提出は採点を保存し統計を 1 回記録する", asy
 });
 
 test("submit: 提出済みセッションへの再提出は 409 で拒否し結果を変えない", async () => {
-  const f = fixture({ row: { answers_json: { q1: 1 } } });
+  const f = fixture({ row: { answers_json: { q1: 1 }, score_mc: 0, score_total: 0, feedback_json: { result: "original" } } });
+  const before = structuredClone(f.row);
   const res = await f.submit();
   assert.equal(res.status, 409);
-  assert.deepEqual(f.row.answers_json, { q1: 1 });
+  assert.deepEqual(f.row, before);
   assert.deepEqual(f.calls, { grade: 0, stats: 0, updates: 0 });
 });
 
 test("submit: 並行 2 提出では 1 件だけ保存され統計は 1 回分だけ増える", async () => {
   const f = fixture();
-  const statuses = (await Promise.all([f.submit(), f.submit()])).map((r) => r.status).sort();
-  assert.deepEqual(statuses, [200, 409]);
+  const responses = await Promise.all([f.submit(0), f.submit(1)]);
+  assert.deepEqual(responses.map((r) => r.status).sort(), [200, 409]);
+  const winningAnswer = responses[0].status === 200 ? 0 : 1;
+  assert.deepEqual(f.row.answers_json, { q1: winningAnswer });
+  const saved = structuredClone(f.row);
+  assert.equal((await f.submit(1 - winningAnswer)).status, 409);
+  assert.deepEqual(f.row, saved);
+  assert.equal(f.calls.grade, 2);
   assert.equal(f.calls.updates, 1);
   assert.equal(f.calls.stats, 1);
 });
