@@ -19,3 +19,6 @@ setup = "test -d node_modules || npm ci"
 worktree = true
 worktree_path = "../edu-share-app-agy"
 args = "--dangerously-skip-permissions"
+
+[review]
+read_only = true
