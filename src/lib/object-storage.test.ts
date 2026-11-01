@@ -270,3 +270,32 @@ test("putObject: Uint8Array は PutObjectCommand で直接送信され上限判�
 
   resetObjectStorageConfigForTests();
 });
+
+test("conditional copy binds validated ETag, encodes source and checks completion", async () => {
+  const storage = await import("./object-storage.ts");
+  const inputs: Record<string, unknown>[] = [];
+  const mock = createMockS3Client();
+  mock.send = (async (cmd: { input: Record<string, unknown> }) => {
+    inputs.push(cmd.input);
+    return inputs.length === 1 ? { CopyObjectResult: { ETag: '"copied"' } } : {};
+  }) as typeof mock.send;
+  storage.setR2ClientForTests(mock);
+  try {
+    await storage.copyObject("owner/staging #1.pdf", "owner/live.pdf", '"validated"', "application/pdf");
+    assert.equal(inputs[0].CopySource, "test-bucket/owner/staging%20%231.pdf");
+    assert.equal(inputs[0].CopySourceIfMatch, '"validated"');
+    assert.equal(inputs[0].Key, "owner/live.pdf");
+    assert.equal(inputs[0].MetadataDirective, "REPLACE");
+    assert.equal(inputs[0].ContentType, "application/pdf");
+    await assert.rejects(storage.copyObject("source", "dest", '"etag"', "video/mp4"), /コピー/);
+  } finally { storage.resetObjectStorageConfigForTests(); }
+});
+
+test("presigned upload requires the declared content length", async () => {
+  const storage = await import("./object-storage.ts");
+  storage.setR2ClientForTests(createMockS3Client());
+  try {
+    const url = new URL(await storage.createObjectUploadUrl("owner/upload.pdf", "application/pdf", 900, 30_000));
+    assert.ok(url.searchParams.get("X-Amz-SignedHeaders")?.split(";").includes("content-length"));
+  } finally { storage.resetObjectStorageConfigForTests(); }
+});
