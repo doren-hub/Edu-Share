@@ -16,7 +16,7 @@ Next.js の Server Actions の `bodySizeLimit: 200mb` は Route Handler の制�
 各ハンドラーの `auth.getUser()` は維持する。Route Handler の Supabase クライアントは
 cookie を更新できるため、対象 API でのセッション更新も維持する。tests の DELETE も
 同じパスを使用し、ハンドラー自身が認証・所有者確認を行う。
-アップロード `/api/tests/upload` や他のページ・API には従来の middleware を適用する。
+PDF 本体のアップロード `/api/tests/upload` や他のページ・API には従来の middleware を適用する。
 
 | 対象 | 上限（UTF-8 bytes） | 根拠 |
 | --- | --- | --- |
@@ -78,3 +78,22 @@ middleware 除外は維持する。Route Handler の既存 `createClient()` と
 401 / 429 / 400 / 413 と正常応答のいずれも認証時の更新を妨げない。
 ネットワーク非依存のハンドラーテストでは実際の Supabase server helper を読み込み、
 認証SDKと Next の cookie store を偽物に置き換え、cookie の読み取り・更新を検証する。
+
+
+## 動画・スライド登録のストリーム維持（Issue #213）
+
+`/api/tests/:id/material/video` と `/api/tests/:id/material/slide` も middleware の
+matcher から除外する。ハンドラーは multipart 本文をストリームで R2 に送るが、
+middleware を通すとハンドラー到達前に Next.js が本文を複製して保持するため、
+動画最大200 MiB・スライド最大45 MiBのファイル全体をメモリに載せない目的を満たせない。
+除外により、この middleware による複製を避けて既存のストリーム処理に渡す。
+
+POST / DELETE のハンドラーは変更せず、既存の `auth.getUser()` と `uploaded_by` の
+所有者確認を維持する。Route Handler の Supabase クライアントによる cookie 更新も維持する。
+除外は video / slide のパスそのもの（末尾スラッシュ・クエリを含む）に限定し、
+`/video/commit`・`/slide/commit` はファイル本文を受け取らないため引き続き middleware を通す。
+`/api/tests/upload`、他の material パス、ページも引き続き対象とする。
+
+ネットワーク非依存のテストで、`src/middleware.ts` の実際の matcher を
+Next.js の `unstable_doesMiddlewareMatch` に渡し、除外対象と周辺パスの境界を確認する。
+実サーバーでの大容量アップロードやメモリ計測は実施せず、本番 Supabase / R2 に接続しない。
