@@ -34,8 +34,8 @@ async function uploadDirectlyToR2(
     body: JSON.stringify({ action: "prepare", size: file.size }),
   });
   if (!prepare.ok) throw new Error(await readApiError(prepare));
-  const prepared = (await prepare.json()) as { uploadUrl?: string };
-  if (!prepared.uploadUrl) throw new Error("R2アップロードURLを取得できませんでした");
+  const prepared = (await prepare.json()) as { uploadUrl?: string; path?: string };
+  if (!prepared.uploadUrl || !prepared.path) throw new Error("R2アップロードURLを取得できませんでした");
 
   const upload = await fetch(prepared.uploadUrl, {
     method: "PUT",
@@ -52,7 +52,7 @@ async function uploadDirectlyToR2(
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "commit" }),
+    body: JSON.stringify({ action: "commit", path: prepared.path }),
   });
   if (!commit.ok) throw new Error(await readApiError(commit));
 }
