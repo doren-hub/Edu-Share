@@ -9,7 +9,8 @@ import {
   type BrowserSession,
 } from "./browser.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
-import { NeedVisibleChromeError, waitUntilUnblocked } from "./human.ts";
+import { EXIT_LOGIN_REQUIRED, NeedVisibleChromeError, waitUntilUnblocked } from "./human.ts";
+import { isMainModule } from "./orchestrate.ts";
 import { maybeLoginEduShare } from "./steps/edushare.ts";
 import { listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
@@ -80,10 +81,18 @@ async function revealForLogin(
   return session;
 }
 
-async function runCatchingLogin<T>(
+export type RunCatchingLoginDeps = {
+  reveal?: typeof revealForLogin;
+  onLoginRequired?: (err: NeedVisibleChromeError, session: BrowserSession) => Promise<never> | never;
+  closeBrowser?: typeof closeBrowser;
+  exit?: (code: number) => never;
+};
+
+export async function runCatchingLogin<T>(
   session: BrowserSession,
   cfg: AppConfig,
   fn: (page: Page) => Promise<T>,
+  deps: RunCatchingLoginDeps = {},
 ): Promise<{ session: BrowserSession; value: T }> {
   let current = session;
   for (let i = 0; i < 3; i++) {
@@ -91,7 +100,24 @@ async function runCatchingLogin<T>(
       return { session: current, value: await fn(current.page) };
     } catch (e) {
       if (!(e instanceof NeedVisibleChromeError) || shuttingDown) throw e;
-      current = await revealForLogin(current, cfg, e);
+      if (cfg.noRevealLogin) {
+        logError(
+          `${e.context}: ログインまたは追加確認が必要ですが、--no-reveal-login のため画面を開かずに終了します（${e.reason ?? ""}）`,
+        );
+        if (deps.onLoginRequired) {
+          await deps.onLoginRequired(e, current);
+        }
+        const closer = deps.closeBrowser ?? closeBrowser;
+        await closer(current).catch(() => undefined);
+        activeSession = null;
+        if (deps.exit) {
+          deps.exit(EXIT_LOGIN_REQUIRED);
+        }
+        process.exitCode = EXIT_LOGIN_REQUIRED;
+        process.exit(EXIT_LOGIN_REQUIRED);
+      }
+      const reveal = deps.reveal ?? revealForLogin;
+      current = await reveal(current, cfg, e);
     }
   }
   throw new Error("ログイン後も続行できませんでした");
@@ -310,7 +336,9 @@ async function main(): Promise<void> {
   process.exit(process.exitCode ?? 0);
 }
 
-main().catch((e) => {
-  logError(e instanceof Error ? e.stack ?? e.message : String(e));
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  main().catch((e) => {
+    logError(e instanceof Error ? e.stack ?? e.message : String(e));
+    process.exit(1);
+  });
+}

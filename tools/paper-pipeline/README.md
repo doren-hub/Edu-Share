@@ -80,9 +80,11 @@ npm start -- --generate quiz,flashcards
 npm start -- --only paper.pdf --generate slides,video
 npm start -- --generate all
 npm run repair-meta -- --headed
+npm run quota-check
+npm run scheduled-decide
 ```
 
-`--generate` は `slides` / `video` / `quiz` / `flashcards` を複数指定できます。`all` で全部。省略時は 4 種すべて。`--skip-slides-video` は `--generate quiz,flashcards` と同じです。対象は inbox にあるその PDF です。作業フォルダだけのメタの取り直しは `npm run repair-meta` です。
+`--generate` は `slides` / `video` / `quiz` / `flashcards` を複数指定できます。`all` で全部。省略時は 4 種すべて。`--skip-slides-video` は `--generate quiz,flashcards` と同じです。対象は inbox にあるその PDF です。作業フォルダだけのメタの取り直しは `npm run repair-meta` です。NotebookLM の利用枠だけを確認するコマンドは `npm run quota-check`、プロセス・枠・inbox 件数を総合して定期実行の可否を判定するコマンドは `npm run scheduled-decide` です。macOS の launchd を使って 1 時間ごとに枠を確認し、論文補充とパイプライン実行を自動化する手順は [定期実行と枠確認・自動補充の手順書](docs/scheduled-run.md) を参照してください。
 
 ## 注意
 

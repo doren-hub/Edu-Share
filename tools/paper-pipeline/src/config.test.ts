@@ -38,6 +38,30 @@ test("parseArgv: --exit-on-quota", () => {
   assert.equal(parseArgv(["--exit-on-quota"]).exitOnQuota, true);
 });
 
+test("parseArgv: --no-reveal-login", () => {
+  assert.equal(parseArgv([]).noRevealLogin, undefined);
+  assert.equal(parseArgv(["--no-reveal-login"]).noRevealLogin, true);
+});
+
+test("loadConfig: noRevealLogin は引数または環境変数 NO_REVEAL_LOGIN=1 を反映する", () => {
+  const prev = process.env.NO_REVEAL_LOGIN;
+  try {
+    delete process.env.NO_REVEAL_LOGIN;
+    const def = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work" });
+    assert.equal(def.noRevealLogin, false);
+
+    const flag = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work", noRevealLogin: true });
+    assert.equal(flag.noRevealLogin, true);
+
+    process.env.NO_REVEAL_LOGIN = "1";
+    const env1 = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work" });
+    assert.equal(env1.noRevealLogin, true);
+  } finally {
+    if (prev !== undefined) process.env.NO_REVEAL_LOGIN = prev;
+    else delete process.env.NO_REVEAL_LOGIN;
+  }
+});
+
 test("loadConfig: exitOnQuota は引数または環境変数 NOTEBOOK_EXIT_ON_QUOTA=1 を反映する", () => {
   const prevEnv = process.env.NOTEBOOK_EXIT_ON_QUOTA;
   try {

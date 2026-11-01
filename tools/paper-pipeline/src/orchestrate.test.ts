@@ -3,12 +3,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   decideIdleAction,
+  decideOrchestratorExitCode,
   formatExitOnQuotaMessage,
   isMainModule,
   resolveWorkerSpawn,
 } from "./orchestrate.ts";
 import type { SchedJob } from "./schedule.ts";
-import type { NotebookQuotaPause } from "./notebook-quota.ts";
+import { EXIT_QUOTA, type NotebookQuotaPause } from "./notebook-quota.ts";
+import { EXIT_LOGIN_REQUIRED } from "./human.ts";
 
 function makeJob(partial: Partial<SchedJob> & Pick<SchedJob, "id">): SchedJob {
   return {
@@ -224,5 +226,39 @@ test("formatExitOnQuotaMessage: 短期枠・週枠のラベル、使用率、リ
   assert.ok(msgWeekly.includes("100%"), "使用率を含む");
   assert.ok(msgWeekly.includes("2026-11-08 10:00"), "formatJst によるリセット時刻を含む");
   assert.ok(msgWeekly.includes("途中の論文: 0 件"), "途中の論文数を含む");
+});
+
+test("decideOrchestratorExitCode: loginRequired が最優先で 15 を返し、exitedOnQuota が 11、failed が 1、正常が 0", () => {
+  // ログイン切れは最優先（exitedOnQuota や過去の失敗があっても 15）
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: true, exitedOnQuota: true, failedCount: 2 }),
+    EXIT_LOGIN_REQUIRED,
+  );
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: true, exitedOnQuota: false, failedCount: 0 }),
+    EXIT_LOGIN_REQUIRED,
+  );
+
+  // 利用枠終了は失敗より優先（11）
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: false, exitedOnQuota: true, failedCount: 3 }),
+    EXIT_QUOTA,
+  );
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: false, exitedOnQuota: true, failedCount: 0 }),
+    EXIT_QUOTA,
+  );
+
+  // 失敗がある場合は 1
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: false, exitedOnQuota: false, failedCount: 1 }),
+    1,
+  );
+
+  // 全て正常終了時は 0
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: false, exitedOnQuota: false, failedCount: 0 }),
+    0,
+  );
 });
 

@@ -13,6 +13,8 @@ export function isInteractiveUi(): boolean {
   return interactiveUi;
 }
 
+export const EXIT_LOGIN_REQUIRED = 15;
+
 /** ヘッドレス中にログイン画面へ来た。呼び出し側が画面付きへ切り替える */
 export class NeedVisibleChromeError extends Error {
   readonly context: string;

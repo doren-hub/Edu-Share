@@ -6,6 +6,7 @@ import {
   DEFAULT_WEEKLY_STOP_PERCENT,
   defaultNotebookQuotaFiles,
   defaultNotebookQuotaUrls,
+  type NotebookQuotaConfig,
 } from "./notebook-quota.ts";
 import { isStageId, type StageId, type StudioStageId } from "./state.ts";
 import {
@@ -37,6 +38,7 @@ export type AppConfig = {
   studioGenerateExplicit: boolean;
   ignoreNotebookQuota: boolean;
   exitOnQuota: boolean;
+  noRevealLogin: boolean;
   newestFirst: boolean;
   notebookQuotaUrls: readonly string[];
   notebookQuotaFiles: readonly string[];
@@ -57,9 +59,12 @@ export type CliOverrides = {
   generate?: string[];
   ignoreNotebookQuota?: boolean;
   exitOnQuota?: boolean;
+  noRevealLogin?: boolean;
   newestFirst?: boolean;
   /** 短期枠の使用量がこの％を超えたら生成を止める */
   notebookShortStopPercent?: number;
+  /** 週枠の使用量がこの％に達したら生成を止める */
+  notebookWeeklyStopPercent?: number;
 };
 
 function stripTrailingSlash(u: string): string {
@@ -89,10 +94,16 @@ export function parseArgv(argv: string[]): CliOverrides {
       out.generate = [...(out.generate ?? []), ...tokens];
     } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
     else if (a === "--exit-on-quota") out.exitOnQuota = true;
+    else if (a === "--no-reveal-login") out.noRevealLogin = true;
     else if (a === "--newest-first") out.newestFirst = true;
     else if (a === "--notebook-short-stop-percent") {
       out.notebookShortStopPercent = parseRequiredPercent(
         "--notebook-short-stop-percent",
+        next(),
+      );
+    } else if (a === "--notebook-weekly-stop-percent") {
+      out.notebookWeeklyStopPercent = parseRequiredPercent(
+        "--notebook-weekly-stop-percent",
         next(),
       );
     }
@@ -114,9 +125,30 @@ export function resolveHeaded(
   return !envFlagEnabled(headlessEnv);
 }
 
+export function loadNotebookQuotaConfig(overrides: CliOverrides = {}): NotebookQuotaConfig {
+  loadDotEnv(`${PACKAGE_ROOT}/.env`);
+  return {
+    ignoreNotebookQuota:
+      overrides.ignoreNotebookQuota === true ||
+      envFlagEnabled(process.env.IGNORE_NOTEBOOK_QUOTA),
+    notebookQuotaUrls: defaultNotebookQuotaUrls(),
+    notebookQuotaFiles: defaultNotebookQuotaFiles(),
+    notebookShortStopPercent:
+      overrides.notebookShortStopPercent ??
+      envPercent("NOTEBOOK_SHORT_STOP_PERCENT", DEFAULT_SHORT_STOP_PERCENT),
+    notebookWeeklyStopPercent:
+      overrides.notebookWeeklyStopPercent ??
+      envPercent(
+        "NOTEBOOK_WEEKLY_STOP_PERCENT",
+        DEFAULT_WEEKLY_STOP_PERCENT,
+      ),
+  };
+}
+
 export function loadConfig(overrides: CliOverrides): AppConfig {
   loadDotEnv(`${PACKAGE_ROOT}/.env`);
   const cwd = process.cwd();
+  const quotaConfig = loadNotebookQuotaConfig(overrides);
   const inbox = overrides.inbox || process.env.PAPER_INBOX_DIR || "";
   const work = overrides.work || process.env.PAPER_WORK_DIR || "";
   if (!inbox.trim() || !work.trim()) {
@@ -190,26 +222,17 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
     studioGenerate,
     studioSkip,
     studioGenerateExplicit,
-    ignoreNotebookQuota:
-      overrides.ignoreNotebookQuota === true ||
-      process.env.IGNORE_NOTEBOOK_QUOTA === "1" ||
-      process.env.IGNORE_NOTEBOOK_QUOTA === "true",
+    ...quotaConfig,
     exitOnQuota:
       overrides.exitOnQuota === true ||
       envFlagEnabled(process.env.NOTEBOOK_EXIT_ON_QUOTA),
+    noRevealLogin:
+      overrides.noRevealLogin === true ||
+      envFlagEnabled(process.env.NO_REVEAL_LOGIN),
     newestFirst:
       overrides.newestFirst === true ||
       process.env.NEWEST_FIRST === "1" ||
       process.env.NEWEST_FIRST === "true",
-    notebookQuotaUrls: defaultNotebookQuotaUrls(),
-    notebookQuotaFiles: defaultNotebookQuotaFiles(),
-    notebookShortStopPercent:
-      overrides.notebookShortStopPercent ??
-      envPercent("NOTEBOOK_SHORT_STOP_PERCENT", DEFAULT_SHORT_STOP_PERCENT),
-    notebookWeeklyStopPercent: envPercent(
-      "NOTEBOOK_WEEKLY_STOP_PERCENT",
-      DEFAULT_WEEKLY_STOP_PERCENT,
-    ),
   };
 }
 
