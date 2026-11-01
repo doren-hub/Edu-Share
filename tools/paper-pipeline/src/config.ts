@@ -38,6 +38,7 @@ export type AppConfig = {
   studioGenerateExplicit: boolean;
   ignoreNotebookQuota: boolean;
   exitOnQuota: boolean;
+  noRevealLogin: boolean;
   newestFirst: boolean;
   notebookQuotaUrls: readonly string[];
   notebookQuotaFiles: readonly string[];
@@ -58,6 +59,7 @@ export type CliOverrides = {
   generate?: string[];
   ignoreNotebookQuota?: boolean;
   exitOnQuota?: boolean;
+  noRevealLogin?: boolean;
   newestFirst?: boolean;
   /** 短期枠の使用量がこの％を超えたら生成を止める */
   notebookShortStopPercent?: number;
@@ -92,6 +94,7 @@ export function parseArgv(argv: string[]): CliOverrides {
       out.generate = [...(out.generate ?? []), ...tokens];
     } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
     else if (a === "--exit-on-quota") out.exitOnQuota = true;
+    else if (a === "--no-reveal-login") out.noRevealLogin = true;
     else if (a === "--newest-first") out.newestFirst = true;
     else if (a === "--notebook-short-stop-percent") {
       out.notebookShortStopPercent = parseRequiredPercent(
@@ -223,6 +226,9 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
     exitOnQuota:
       overrides.exitOnQuota === true ||
       envFlagEnabled(process.env.NOTEBOOK_EXIT_ON_QUOTA),
+    noRevealLogin:
+      overrides.noRevealLogin === true ||
+      envFlagEnabled(process.env.NO_REVEAL_LOGIN),
     newestFirst:
       overrides.newestFirst === true ||
       process.env.NEWEST_FIRST === "1" ||

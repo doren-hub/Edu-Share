@@ -14,6 +14,8 @@ export const DEFAULT_MIN_INBOX = 5;
 
 export const EXIT_ALREADY_RUNNING = 10;
 export const EXIT_INBOX_ERROR = 13;
+export const EXIT_PROCESS_CHECK_ERROR = 14;
+export const EXIT_LOGIN_REQUIRED = 15;
 
 export type RunningCheckResult = {
   running: boolean;
@@ -87,12 +89,49 @@ export function shouldFillInbox(inboxCount: number, minThreshold = DEFAULT_MIN_I
   return inboxCount < minThreshold;
 }
 
+export function parseMinInbox(raw: string | undefined, fallback = DEFAULT_MIN_INBOX): number {
+  const t = (raw ?? "").trim();
+  if (!t) return fallback;
+  const n = Number(t);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`INBOX_MIN_PAPERS には 0 以上の整数を指定してください（入力: ${raw}）`);
+  }
+  return n;
+}
+
+export type ProcessListResult =
+  | { ok: true; processes: string[] }
+  | { ok: false; error: string };
+
+export function getRunningProcesses(
+  exec: () => string = () =>
+    execSync("ps -axo command", {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }),
+): ProcessListResult {
+  try {
+    const out = exec();
+    return { ok: true, processes: out.split("\n") };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg };
+  }
+}
+
 export type ScheduledRunDecision =
   | {
       action: "skip";
       reason: "already_running";
       detail: string;
       exitCode: typeof EXIT_ALREADY_RUNNING;
+    }
+  | {
+      action: "skip";
+      reason: "process_check_error";
+      detail: string;
+      exitCode: typeof EXIT_PROCESS_CHECK_ERROR;
     }
   | {
       action: "skip";
@@ -121,21 +160,8 @@ export type ScheduledRunDecision =
       exitCode: 0;
     };
 
-export function getRunningProcesses(): string[] {
-  try {
-    const out = execSync("ps -axo command", {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return out.split("\n");
-  } catch {
-    return [];
-  }
-}
-
 export async function decideScheduledRun(
-  processes: readonly string[],
+  processesInput: ProcessListResult | readonly string[],
   cfg: NotebookQuotaConfig,
   inboxDir: string,
   options: {
@@ -145,6 +171,23 @@ export async function decideScheduledRun(
   } = {},
   deps: QuotaCheckDeps = {},
 ): Promise<ScheduledRunDecision> {
+  // プロセス一覧の取得結果判定
+  if (typeof processesInput === "object" && "ok" in processesInput) {
+    if (!processesInput.ok) {
+      return {
+        action: "skip",
+        reason: "process_check_error",
+        detail: `プロセス一覧の取得に失敗しました（${processesInput.error}）。安全のため動かしません`,
+        exitCode: EXIT_PROCESS_CHECK_ERROR,
+      };
+    }
+  }
+
+  const processes =
+    typeof processesInput === "object" && "ok" in processesInput
+      ? processesInput.processes
+      : processesInput;
+
   const minInbox = options.minInbox ?? DEFAULT_MIN_INBOX;
 
   // 1. すでに動いているか確認

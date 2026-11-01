@@ -9,7 +9,7 @@ import {
   type BrowserSession,
 } from "./browser.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
-import { NeedVisibleChromeError, waitUntilUnblocked } from "./human.ts";
+import { EXIT_LOGIN_REQUIRED, NeedVisibleChromeError, waitUntilUnblocked } from "./human.ts";
 import { maybeLoginEduShare } from "./steps/edushare.ts";
 import { listEduMaterialRepairPdfs, listExistingWorkPapers, listInboxPdfs, listRawPasteRepairPdfs, listStudioFollowupPdfs, listVideoRepairPdfs, listWorkPdfs, mergeInboxAndVideoRepair } from "./inbox.ts";
 import { error as logError, firstLine, log, warn } from "./log.ts";
@@ -91,6 +91,13 @@ async function runCatchingLogin<T>(
       return { session: current, value: await fn(current.page) };
     } catch (e) {
       if (!(e instanceof NeedVisibleChromeError) || shuttingDown) throw e;
+      if (cfg.noRevealLogin) {
+        logError(
+          `${e.context}: ログインまたは追加確認が必要ですが、--no-reveal-login のため画面を開かずに終了します（${e.reason ?? ""}）`,
+        );
+        process.exitCode = EXIT_LOGIN_REQUIRED;
+        process.exit(EXIT_LOGIN_REQUIRED);
+      }
       current = await revealForLogin(current, cfg, e);
     }
   }

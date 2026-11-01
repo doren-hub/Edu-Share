@@ -10,7 +10,7 @@ set -euo pipefail
 #    - Notebook 利用枠確認（npm run quota-check 相当）
 #    - inbox 未処理論文数としきい値確認
 # 3. 判断結果に基づき、必要なら補充（npm run fill-inbox）
-# 4. パイプライン実行（npm start -- --headless --exit-on-quota）
+# 4. パイプライン実行（npm start -- --headless --exit-on-quota --no-reveal-login）
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -61,9 +61,13 @@ log "=== 定期実行チェックを開始します (PID: $$) ==="
 # 1. ロック取得（二重起動防止）
 # -------------------------------------------------------------
 LOCK_DIR="${SCHEDULED_LOCK_DIR:-/tmp/paper-pipeline-scheduled-run.lock}"
+LOCK_OWNED=0
 
 cleanup_lock() {
-  rm -rf "$LOCK_DIR"
+  if [ "$LOCK_OWNED" -eq 1 ]; then
+    rm -rf "$LOCK_DIR"
+    LOCK_OWNED=0
+  fi
 }
 
 on_term() {
@@ -85,6 +89,7 @@ trap on_term TERM
 acquire_lock() {
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "$$" > "$LOCK_DIR/pid"
+    LOCK_OWNED=1
     return 0
   fi
 
@@ -108,9 +113,19 @@ acquire_lock() {
   log "警告: 古いロックファイルを検出しました (PID: $existing_pid は停止中)。原子的退避を試みます"
   local stale_dir="$LOCK_DIR.stale.$$"
   if mv "$LOCK_DIR" "$stale_dir" 2>/dev/null; then
+    local moved_pid=""
+    if [ -f "$stale_dir/pid" ]; then
+      moved_pid=$(cat "$stale_dir/pid" 2>/dev/null || true)
+    fi
+    if [ "$moved_pid" != "$existing_pid" ]; then
+      log "警告: 退避したロックは別プロセス (PID: ${moved_pid:-なし}) のものでした。元に戻してスキップします"
+      mv "$stale_dir" "$LOCK_DIR" 2>/dev/null || rm -rf "$stale_dir"
+      exit 0
+    fi
     rm -rf "$stale_dir"
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       echo "$$" > "$LOCK_DIR/pid"
+      LOCK_OWNED=1
       return 0
     fi
   fi
@@ -126,9 +141,9 @@ acquire_lock
 # -------------------------------------------------------------
 log "定期実行の判断を実行します (npm run scheduled-decide)"
 
-DECISION_JSON=""
+DECISION_ENV=""
 DECISION_EXIT=0
-DECISION_JSON=$(npm run --silent scheduled-decide -- --json 2>> "$LOG_FILE") || DECISION_EXIT=$?
+DECISION_ENV=$(npm run --silent scheduled-decide -- --env 2>> "$LOG_FILE") || DECISION_EXIT=$?
 
 if [ "$DECISION_EXIT" -ne 0 ]; then
   # 終了コード別のスキップ判定
@@ -145,6 +160,9 @@ if [ "$DECISION_EXIT" -ne 0 ]; then
     13)
       log "スキップ: inbox ディレクトリが設定されていないか読み込めません。安全のため動かしません"
       ;;
+    14)
+      log "スキップ: プロセス一覧の取得に失敗しました。安全のため動かしません"
+      ;;
     *)
       log "スキップ: 判断処理で予期せぬ終了コード ($DECISION_EXIT) が返されました。安全のため動かしません"
       ;;
@@ -154,9 +172,9 @@ fi
 
 log "判断結果: 実行可能です"
 
-# 判定 JSON から fillInbox の要否を抽出
+# key-value から各変数を安全に取得
 NEEDS_FILL=false
-if echo "$DECISION_JSON" | grep -q '"fillInbox": true'; then
+if echo "$DECISION_ENV" | grep -q '^NEEDS_FILL=true'; then
   NEEDS_FILL=true
 fi
 
@@ -180,14 +198,18 @@ fi
 # -------------------------------------------------------------
 # 4. パイプラインを実行
 # -------------------------------------------------------------
-log "パイプラインを開始します: npm start -- --headless --exit-on-quota"
+log "パイプラインを開始します: npm start -- --headless --exit-on-quota --no-reveal-login"
 
 if [ "$DRY_RUN" = true ]; then
-  log "[dry-run] npm start -- --headless --exit-on-quota をスキップします"
+  log "[dry-run] npm start -- --headless --exit-on-quota --no-reveal-login をスキップします"
 else
   PIPELINE_EXIT=0
-  npm start -- --headless --exit-on-quota >> "$LOG_FILE" 2>&1 || PIPELINE_EXIT=$?
-  log "パイプラインが終了しました (終了コード: $PIPELINE_EXIT)"
+  npm start -- --headless --exit-on-quota --no-reveal-login >> "$LOG_FILE" 2>&1 || PIPELINE_EXIT=$?
+  if [ "$PIPELINE_EXIT" -eq 15 ]; then
+    log "注意: ログインまたは追加確認が必要です (終了コード: 15)。主人が画面付きモード等でログインを完了してください"
+  else
+    log "パイプラインが終了しました (終了コード: $PIPELINE_EXIT)"
+  fi
 fi
 
 log "=== 定期実行チェックを完了しました ==="

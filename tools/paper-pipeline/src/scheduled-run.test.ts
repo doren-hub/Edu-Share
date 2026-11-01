@@ -5,7 +5,11 @@ import {
   decideScheduledRun,
   EXIT_ALREADY_RUNNING,
   EXIT_INBOX_ERROR,
+  EXIT_LOGIN_REQUIRED,
+  EXIT_PROCESS_CHECK_ERROR,
+  getRunningProcesses,
   isPipelineOrChromeRunning,
+  parseMinInbox,
   shouldFillInbox,
 } from "./scheduled-run.ts";
 import { EXIT_QUOTA, EXIT_QUOTA_UNAVAILABLE, type NotebookQuotaConfig } from "./notebook-quota.ts";
@@ -74,6 +78,33 @@ test("isPipelineOrChromeRunning: カスタム chromeUserDataDir を検出する"
   assert.equal(res.reason, "chrome");
 });
 
+test("getRunningProcesses: 正常時は ok: true と配列を返し、失敗時は ok: false とエラーを返す", () => {
+  const success = getRunningProcesses(() => "node dist/orchestrate.js\nbash\n");
+  assert.equal(success.ok, true);
+  if (success.ok) {
+    assert.equal(success.processes.length, 3);
+  }
+
+  const failure = getRunningProcesses(() => {
+    throw new Error("ps command failed");
+  });
+  assert.equal(failure.ok, false);
+  if (!failure.ok) {
+    assert.match(failure.error, /ps command failed/);
+  }
+});
+
+test("parseMinInbox: 0 以上の整数のみ許可し、小数はエラー、空はフォールバック", () => {
+  assert.equal(parseMinInbox("5"), 5);
+  assert.equal(parseMinInbox("0"), 0);
+  assert.equal(parseMinInbox(""), 5);
+  assert.equal(parseMinInbox(undefined), 5);
+
+  assert.throws(() => parseMinInbox("-1"), /0 以上の整数/);
+  assert.throws(() => parseMinInbox("3.5"), /0 以上の整数/);
+  assert.throws(() => parseMinInbox("abc"), /0 以上の整数/);
+});
+
 test("countInboxPdfs: 隠しファイルを除外して PDF だけ数える (ok: true)", () => {
   const files = [".DS_Store", ".gitkeep", "paper1.pdf", "paper2.PDF", "notes.txt", "doc.docx"];
   const res = countInboxPdfs("/mock/inbox", () => files);
@@ -108,6 +139,19 @@ test("shouldFillInbox: しきい値未満なら true、以上なら false", () =
   assert.equal(shouldFillInbox(6, 5), false);
   assert.equal(shouldFillInbox(2, 3), true);
   assert.equal(shouldFillInbox(3, 3), false);
+});
+
+test("decideScheduledRun: プロセス一覧取得失敗時は skip (process_check_error, exit 14)", async () => {
+  const cfg = mockQuotaConfig();
+  const res = await decideScheduledRun(
+    { ok: false, error: "ps failure" },
+    cfg,
+    "/mock/inbox",
+  );
+  assert.equal(res.action, "skip");
+  assert.equal(res.reason, "process_check_error");
+  assert.equal(res.exitCode, EXIT_PROCESS_CHECK_ERROR);
+  assert.match(res.detail, /プロセス一覧の取得に失敗しました/);
 });
 
 test("decideScheduledRun: パイプライン実行中は skip (already_running, exit 10)", async () => {
@@ -282,8 +326,7 @@ test("decideScheduledRun: 枠が空いていて論文数が足りていれば fi
   }
 });
 
-test("humanPauseMode & NeedVisibleChromeError: ヘッドレス中のログイン壁は promote モードとなり例外で即終了可能", () => {
-  // ヘッドレスモード時は人間待ちを促す promote モードになり、固まらずに NeedVisibleChromeError を上げる
+test("humanPauseMode & NeedVisibleChromeError: ヘッドレス中のログイン壁と EXIT_LOGIN_REQUIRED 定数", () => {
   const mode = humanPauseMode({ headed: false });
   assert.equal(mode, "promote");
 
@@ -294,4 +337,5 @@ test("humanPauseMode & NeedVisibleChromeError: ヘッドレス中のログイン
   );
   assert.equal(err.name, "NeedVisibleChromeError");
   assert.match(err.message, /NotebookLM: ログインまたは追加確認が必要です/);
+  assert.equal(EXIT_LOGIN_REQUIRED, 15);
 });

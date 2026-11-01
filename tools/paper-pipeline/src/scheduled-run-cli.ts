@@ -3,8 +3,8 @@ import { PACKAGE_ROOT, resolvePathMaybe } from "./env.ts";
 import { error as logError, log, warn } from "./log.ts";
 import {
   decideScheduledRun,
-  DEFAULT_MIN_INBOX,
   getRunningProcesses,
+  parseMinInbox,
 } from "./scheduled-run.ts";
 
 function help(): string {
@@ -13,6 +13,7 @@ function help(): string {
 使い方:
   npm run scheduled-decide
   npm run scheduled-decide -- --json
+  npm run scheduled-decide -- --env
 
 終了コード:
   0: パイプライン実行可 (run)
@@ -20,6 +21,7 @@ function help(): string {
   11: 利用枠上限 (skip: quota_paused)
   12: 利用量データ取得不可 (skip: quota_unavailable)
   13: inbox ディレクトリ確認不可 (skip: inbox_error)
+  14: プロセス一覧取得不可 (skip: process_check_error)
   1: 引数エラーまたは予期せぬ失敗
 `;
 }
@@ -31,7 +33,8 @@ async function main(): Promise<void> {
     return;
   }
   const isJson = argv.includes("--json");
-  const filtered = argv.filter((a) => a !== "--json");
+  const isEnv = argv.includes("--env");
+  const filtered = argv.filter((a) => a !== "--json" && a !== "--env");
   const parsed = parseArgv(filtered);
   const cfg = loadNotebookQuotaConfig(parsed);
 
@@ -43,8 +46,7 @@ async function main(): Promise<void> {
     (process.env.CHROME_USER_DATA_DIR ?? ".chrome-profile").trim(),
     PACKAGE_ROOT,
   );
-  const rawMin = (process.env.INBOX_MIN_PAPERS ?? "").trim();
-  const minInbox = rawMin && Number.isFinite(Number(rawMin)) ? Number(rawMin) : DEFAULT_MIN_INBOX;
+  const minInbox = parseMinInbox(process.env.INBOX_MIN_PAPERS);
 
   const processes = getRunningProcesses();
 
@@ -55,6 +57,20 @@ async function main(): Promise<void> {
 
   if (isJson) {
     console.log(JSON.stringify(decision, null, 2));
+  } else if (isEnv) {
+    if (decision.action === "run") {
+      console.log(`ACTION=run`);
+      console.log(`NEEDS_FILL=${decision.fillInbox ? "true" : "false"}`);
+      console.log(`INBOX_COUNT=${decision.inboxCount}`);
+      console.log(`MIN_INBOX=${decision.minInbox}`);
+      console.log(`EXIT_CODE=0`);
+      console.log(`DETAIL=${decision.quotaMessage.replace(/[\r\n]+/g, " ")}`);
+    } else {
+      console.log(`ACTION=skip`);
+      console.log(`REASON=${decision.reason}`);
+      console.log(`EXIT_CODE=${decision.exitCode}`);
+      console.log(`DETAIL=${decision.detail.replace(/[\r\n]+/g, " ")}`);
+    }
   } else {
     if (decision.action === "run") {
       log(`[実行判定] ${decision.quotaMessage}`);

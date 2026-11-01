@@ -36,6 +36,7 @@ import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
 import { formatStudioGenerateArg, formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
 
+import { EXIT_LOGIN_REQUIRED } from "./human.ts";
 import { persistGiveUp, prepareGivenUp, emptyGiveUpTrack, holdWaiting, noteDisconnect, noteFailRound, noteWaiting, type GiveUpTrack } from "./give-up.ts";
 
 const MAX_FAIL_RETRIES = 3;
@@ -366,6 +367,7 @@ async function main(): Promise<void> {
     if (cfg.studioGenerateExplicit) {
       args.push("--generate", formatStudioGenerateArg(cfg.studioGenerate));
     }
+    if (cfg.noRevealLogin) args.push("--no-reveal-login");
     if (cfg.newestFirst) args.push("--newest-first");
     if (cfg.fromStage && cfg.onlyFilename === track.item.filename && !track.fromUsed) {
       args.push("--from", cfg.fromStage);
@@ -379,6 +381,14 @@ async function main(): Promise<void> {
     );
     const code = await runWorker(args);
     await sleep(CHROME_UNLOCK_MS);
+
+    if (code === EXIT_LOGIN_REQUIRED) {
+      logError(
+        `オーケストレータ: ${track.item.filename} でログインまたは追加確認が必要です。--no-reveal-login のためパイプラインを終了します`,
+      );
+      process.exitCode = EXIT_LOGIN_REQUIRED;
+      break;
+    }
 
     if (code === EXIT_QUOTA) {
       const state = loadPaperState(track.item);
