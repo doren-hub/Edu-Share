@@ -19,8 +19,9 @@ macOS の launchd を使って `paper-pipeline` を定期実行（例: 1 時間�
 3. **inbox の未処理論文補充**
    - inbox 内の未処理論文数が設定値（既定 5 件、環境変数 `INBOX_MIN_PAPERS`）より少なければ、`npm run fill-inbox` を実行してライブラリから未処理論文を補充します。
 4. **パイプラインの実行**
-   - `npm start -- --headless --exit-on-quota` を実行します。
+   - `npm start -- --headless --exit-on-quota --no-reveal-login` を実行します。
    - 枠が尽きるか進められる作業がなくなると、`--exit-on-quota` によりリセットを待たずにきりのいいところで終了し、次回の定期実行に備えます。
+   - `--no-reveal-login` により、定期実行中にログインや追加確認が必要になった場合でも画面を開いて永久待機せず、Chrome を閉じて終了コード 15 で安全に終了します。
 
 ---
 
@@ -66,6 +67,8 @@ npm run scheduled-decide -- --json
 - `11`: 利用枠上限（skip: `quota_paused`）
 - `12`: 利用量取得不可（skip: `quota_unavailable`）
 - `13`: inbox 取得不可（skip: `inbox_error`）
+- `14`: プロセス一覧取得不可（skip: `process_check_error`）
+- `1`: 引数エラー（`INBOX_MIN_PAPERS` が不正な場合など）
 
 ---
 
@@ -183,6 +186,7 @@ cat tools/paper-pipeline/logs/scheduled-run.log | tail -n 30
 | `INBOX_MIN_PAPERS` | `5` | inbox の未処理論文がこの件数未満になると `fill-inbox` で補充します |
 | `NOTEBOOK_SHORT_STOP_PERCENT` | `85` | 短期枠の使用率がこの％を超えたら生成を止めます |
 | `NOTEBOOK_WEEKLY_STOP_PERCENT` | `100` | 週枠の使用率がこの％に達したら生成を止めます |
+| `NO_REVEAL_LOGIN` | `0`（`scheduled-run.sh` 経由では `--no-reveal-login` により `1` 相当） | ログイン要求検知時に画面付き Chrome を開かず終了コード 15 で終了します |
 | `SCHEDULED_LOG_FILE` | `logs/scheduled-run.log` | 定期実行ログファイルの出力先パス |
 | `SCHEDULED_LOCK_DIR` | `/tmp/paper-pipeline-scheduled-run.lock` | 二重起動防止用ロックディレクトリのパス |
 
@@ -190,16 +194,21 @@ cat tools/paper-pipeline/logs/scheduled-run.log | tail -n 30
 
 ## 7. ログイン切れ（認証切れ）時の挙動と対処法
 
-定期実行（`--headless`）中に Google / NotebookLM や SciSpace のセッション・Cookie が切れている場合の挙動は以下のとおりです。
+定期実行（`--headless --no-reveal-login`）中に Google / NotebookLM や SciSpace のセッション・Cookie が切れている場合の挙動は以下のとおりです。
 
 1. **検知とログ出力**:
-   - ヘッドレス実行中にログイン画面に到達すると、`human.ts` の `NeedVisibleChromeError` が発生し、ログに `NotebookLM: ログインまたは追加確認が必要です` や `Edu Share: ログイン待ち` などの文言が出力されます。
-2. **タイムアウトによる安全な終了**:
-   - 非対話環境では無期限に待機し続けることはなく、タイムアウト（またはエラー捕捉）によりプロセスはログを出力して終了します。パイプラインがハングして後続の定期実行をブロックし続けることはありません。
+   - ヘッドレス実行中にログイン画面に到達すると、`human.ts` の `NeedVisibleChromeError` が発生します。
+   - `--no-reveal-login`（または環境変数 `NO_REVEAL_LOGIN=1`）が指定されているため、画面付き Chrome は開かずにエラーログを出力し、ブラウザを閉じて終了コード 15（`EXIT_LOGIN_REQUIRED`）で即座に終了します。
+   - 定期実行スクリプト（`scheduled-run.sh`）はこれを受けてログに次の注意を出力します:
+     ```text
+     注意: ログインまたは追加確認が必要です (終了コード: 15)
+     ```
+2. **安全な終了と後続実行の保護**:
+   - 画面を開いて対話待ちでハングすることなく即座に終了し、ロックも確実に解放されるため、後続の定期実行や他プロセスがデッドロックすることはありません。
 3. **主人が行うログイン復旧手順**:
-   - ログにログイン要求が記録されている場合は、主人が手動で画面付きモードを一度起動してログインを済ませてください:
+   - ログに `注意: ログインまたは追加確認が必要です (終了コード: 15)` が記録されている場合は、主人が手動で画面付きモードを一度起動してログインを済ませてください:
      ```bash
      cd tools/paper-pipeline
      npm run worker -- --headed --only <論文名.pdf>
      ```
-   - ログイン情報は専用プロファイル（`tools/paper-pipeline/.chrome-profile/`）に保持されるため、ログイン完了後は通常の定期実行で自動継続されます。
+   - ログイン情報は専用プロファイル（`tools/paper-pipeline/.chrome-profile/`）に保持されるため、ログイン完了後は次回の定期実行で自動継続されます。
