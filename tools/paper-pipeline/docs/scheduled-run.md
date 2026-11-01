@@ -6,25 +6,27 @@ macOS の launchd を使って `paper-pipeline` を定期実行（例: 1 時間�
 
 ## 1. 全体の動作フロー
 
-定期実行スクリプト（`scripts/scheduled-run.sh`）は、起動されると次の順序で安全に判断を行います。
+定期実行スクリプト（`scripts/scheduled-run.sh`）は、起動されると次の順序で安全に判断を行います。すべての判断ロジックは TypeScript CLI（`npm run scheduled-decide`）により一元的に行われ、単体テストで保証されています。
 
-1. **二重起動の防止（ロックとプロセス確認）**
-   - ロックディレクトリ（既定 `/tmp/paper-pipeline-scheduled-run.lock`）を取得します。すでに別のスクリプトが動いている場合は何もせず終了します。
-   - `pgrep` でパイプラインの Node プロセス（`orchestrate`, `cli`, `fill-inbox-cli`）または専用プロファイル（`.chrome-profile`）の Chrome が実行中かを調べ、動いていれば何もせず終了します（専用プロファイルは同時に 1 つしか開けません）。
-2. **Notebook 利用枠の確認（`npm run quota-check`）**
-   - `src/notebook-quota.ts` の判定ロジックにより、taskdesk または利用量ボードの利用量データを確認します。
-   - 短期枠がしきい値（既定 85% 超、`NOTEBOOK_SHORT_STOP_PERCENT`）または週枠の上限（既定 100%、`NOTEBOOK_WEEKLY_STOP_PERCENT`）に達している場合は終了コード 11（`EXIT_QUOTA`）で安全に終了します。
-   - 利用量データが読めない場合も終了コード 12（`EXIT_QUOTA_UNAVAILABLE`）で安全側に倒して終了します。
-3. **inbox の未処理論文数の確認と補充**
-   - inbox 直下の未処理 PDF 件数を確認します。
-   - 設定した件数（既定 5 件、環境変数 `INBOX_MIN_PAPERS`）より少なければ、`npm run fill-inbox` を実行してライブラリから未処理論文を補充します。
+1. **二重起動の防止（ロック取得と原子的一掃）**
+   - ロックディレクトリ（既定 `/tmp/paper-pipeline-scheduled-run.lock`）をアトミックに取得します。
+   - すでに別のスクリプトが動いている場合は何もせず終了します。古いプロセスがクラッシュ等で残した stale lock は `mv` による原子的退避を経て安全に回収されます。
+   - SIGTERM / SIGINT を受信した場合はトラップにより即座にロックを解除して終了コード 143 / 130 で終了します。
+2. **定期実行の判定（`npm run scheduled-decide`）**
+   - **プロセス確認**: パイプラインの Node プロセス（`orchestrate`, `cli`, `fill-inbox-cli`）または専用プロファイル（`.chrome-profile` / `CHROME_USER_DATA_DIR`）の Chrome が実行中かを調べ、動いていればスキップ（終了コード 10）。専用プロファイルは同時に 1 つしか開けません。
+   - **利用枠確認**: `src/notebook-quota.ts` により taskdesk または利用量ボードの利用量データを確認します。短期枠がしきい値（既定 85% 超、`NOTEBOOK_SHORT_STOP_PERCENT`）または週枠の上限（既定 100%、`NOTEBOOK_WEEKLY_STOP_PERCENT`）に達している場合は一時停止スキップ（終了コード 11: `EXIT_QUOTA`）。利用量データが読めない場合も安全側に倒してスキップ（終了コード 12: `EXIT_QUOTA_UNAVAILABLE`）。
+   - **inbox 件数確認**: inbox 内の未処理 PDF 件数を確認します。inbox が未設定または読み込めない場合も安全側に倒してスキップ（終了コード 13）。
+3. **inbox の未処理論文補充**
+   - inbox 内の未処理論文数が設定値（既定 5 件、環境変数 `INBOX_MIN_PAPERS`）より少なければ、`npm run fill-inbox` を実行してライブラリから未処理論文を補充します。
 4. **パイプラインの実行**
    - `npm start -- --headless --exit-on-quota` を実行します。
    - 枠が尽きるか進められる作業がなくなると、`--exit-on-quota` によりリセットを待たずにきりのいいところで終了し、次回の定期実行に備えます。
 
 ---
 
-## 2. 枠確認コマンド (`quota-check`)
+## 2. コマンド一覧
+
+### 2.1 枠確認コマンド (`quota-check`)
 
 NotebookLM の利用枠だけを単体で確認するためのコマンドです。
 
@@ -41,14 +43,29 @@ npm run quota-check -- --notebook-short-stop-percent 80
 npm run quota-check -- --json
 ```
 
-### 終了コード
+終了コード:
+- `0`: 利用可能（枠に空きあり）
+- `11`: 一時停止（`EXIT_QUOTA`: 枠上限到達）
+- `12`: 取得不可（`EXIT_QUOTA_UNAVAILABLE`: 利用量取得失敗）
+- `1`: エラー
 
-| 終了コード | 状態 | 説明 |
-|---|---|---|
-| `0` | 利用可能 | 利用枠に空きがあり、生成を実行できます |
-| `11` | 一時停止 (`EXIT_QUOTA`) | 短期枠がしきい値超、または週枠が上限に達しています |
-| `12` | 取得不可 (`EXIT_QUOTA_UNAVAILABLE`) | taskdesk / 利用量ボードからデータを読めません。安全のため動かしません |
-| `1` | エラー | 引数エラーまたは予期せぬ失敗 |
+### 2.2 判断コマンド (`scheduled-decide`)
+
+プロセス、枠、inbox 件数を総合して、定期実行を開始可能かを判定するコマンドです。
+
+```bash
+cd tools/paper-pipeline
+
+npm run scheduled-decide
+npm run scheduled-decide -- --json
+```
+
+終了コード:
+- `0`: 実行可能（run）
+- `10`: 既存プロセス実行中（skip: `already_running`）
+- `11`: 利用枠上限（skip: `quota_paused`）
+- `12`: 利用量取得不可（skip: `quota_unavailable`）
+- `13`: inbox 取得不可（skip: `inbox_error`）
 
 ---
 
@@ -70,7 +87,7 @@ cd tools/paper-pipeline
 
 ## 4. launchd の登録・解除・管理手順
 
-launchd への登録は管理者が手動で行います。
+launchd への登録は主人が手動で行います。
 
 ### 4.1 設定ファイルの作成
 
@@ -159,7 +176,7 @@ cat tools/paper-pipeline/logs/scheduled-run.log | tail -n 30
 
 ## 6. 設定・環境変数
 
-`.env` または launchd の `EnvironmentVariables` で以下の項目を設定・上書きできます。
+`.env` または launchd の `EnvironmentVariables` で以下の項目を設定・上書きできます（`.env` の読み込みは Node 内で安全に行われ、シェルとしてのコード実行は行われません）。
 
 | 環境変数 | 既定値 | 説明 |
 |---|---|---|
@@ -168,3 +185,21 @@ cat tools/paper-pipeline/logs/scheduled-run.log | tail -n 30
 | `NOTEBOOK_WEEKLY_STOP_PERCENT` | `100` | 週枠の使用率がこの％に達したら生成を止めます |
 | `SCHEDULED_LOG_FILE` | `logs/scheduled-run.log` | 定期実行ログファイルの出力先パス |
 | `SCHEDULED_LOCK_DIR` | `/tmp/paper-pipeline-scheduled-run.lock` | 二重起動防止用ロックディレクトリのパス |
+
+---
+
+## 7. ログイン切れ（認証切れ）時の挙動と対処法
+
+定期実行（`--headless`）中に Google / NotebookLM や SciSpace のセッション・Cookie が切れている場合の挙動は以下のとおりです。
+
+1. **検知とログ出力**:
+   - ヘッドレス実行中にログイン画面に到達すると、`human.ts` の `NeedVisibleChromeError` が発生し、ログに `NotebookLM: ログインまたは追加確認が必要です` や `Edu Share: ログイン待ち` などの文言が出力されます。
+2. **タイムアウトによる安全な終了**:
+   - 非対話環境では無期限に待機し続けることはなく、タイムアウト（またはエラー捕捉）によりプロセスはログを出力して終了します。パイプラインがハングして後続の定期実行をブロックし続けることはありません。
+3. **主人が行うログイン復旧手順**:
+   - ログにログイン要求が記録されている場合は、主人が手動で画面付きモードを一度起動してログインを済ませてください:
+     ```bash
+     cd tools/paper-pipeline
+     npm run worker -- --headed --only <論文名.pdf>
+     ```
+   - ログイン情報は専用プロファイル（`tools/paper-pipeline/.chrome-profile/`）に保持されるため、ログイン完了後は通常の定期実行で自動継続されます。

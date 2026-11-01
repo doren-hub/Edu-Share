@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import {
   countInboxPdfs,
   decideScheduledRun,
+  EXIT_ALREADY_RUNNING,
+  EXIT_INBOX_ERROR,
   isPipelineOrChromeRunning,
   shouldFillInbox,
 } from "./scheduled-run.ts";
-import type { NotebookQuotaConfig } from "./notebook-quota.ts";
+import { EXIT_QUOTA, EXIT_QUOTA_UNAVAILABLE, type NotebookQuotaConfig } from "./notebook-quota.ts";
+import { humanPauseMode, NeedVisibleChromeError } from "./human.ts";
 
 const mockQuotaConfig = (over: Partial<NotebookQuotaConfig> = {}): NotebookQuotaConfig => ({
   ignoreNotebookQuota: false,
@@ -71,17 +74,31 @@ test("isPipelineOrChromeRunning: カスタム chromeUserDataDir を検出する"
   assert.equal(res.reason, "chrome");
 });
 
-test("countInboxPdfs: 隠しファイルを除外して PDF だけ数える", () => {
+test("countInboxPdfs: 隠しファイルを除外して PDF だけ数える (ok: true)", () => {
   const files = [".DS_Store", ".gitkeep", "paper1.pdf", "paper2.PDF", "notes.txt", "doc.docx"];
-  const count = countInboxPdfs("/mock/inbox", () => files);
-  assert.equal(count, 2);
+  const res = countInboxPdfs("/mock/inbox", () => files);
+  assert.equal(res.ok, true);
+  if (res.ok) {
+    assert.equal(res.count, 2);
+  }
 });
 
-test("countInboxPdfs: フォルダが存在しない場合は 0 を返す", () => {
-  const count = countInboxPdfs("/non/existent/path", () => {
+test("countInboxPdfs: 未指定のときは ok: false でエラーを返す（読めないときは動かさない側に倒す）", () => {
+  const res = countInboxPdfs("");
+  assert.equal(res.ok, false);
+  if (!res.ok) {
+    assert.match(res.error, /設定されていません/);
+  }
+});
+
+test("countInboxPdfs: フォルダが存在しない・読めない場合は ok: false でエラーを返す", () => {
+  const res = countInboxPdfs("/non/existent/path", () => {
     throw new Error("ENOENT");
   });
-  assert.equal(count, 0);
+  assert.equal(res.ok, false);
+  if (!res.ok) {
+    assert.match(res.error, /読み込めません/);
+  }
 });
 
 test("shouldFillInbox: しきい値未満なら true、以上なら false", () => {
@@ -93,15 +110,16 @@ test("shouldFillInbox: しきい値未満なら true、以上なら false", () =
   assert.equal(shouldFillInbox(3, 3), false);
 });
 
-test("decideScheduledRun: パイプライン実行中は skip (already_running)", async () => {
+test("decideScheduledRun: パイプライン実行中は skip (already_running, exit 10)", async () => {
   const cfg = mockQuotaConfig();
   const res = await decideScheduledRun(
     ["node dist/orchestrate.js"],
     cfg,
-    3,
+    "/mock/inbox",
   );
   assert.equal(res.action, "skip");
   assert.equal(res.reason, "already_running");
+  assert.equal(res.exitCode, EXIT_ALREADY_RUNNING);
 });
 
 test("decideScheduledRun: 利用枠が一時停止なら skip (quota_paused, exit 11)", async () => {
@@ -119,27 +137,69 @@ test("decideScheduledRun: 利用枠が一時停止なら skip (quota_paused, exi
     ],
   };
   const cfg = mockQuotaConfig();
-  const res = await decideScheduledRun([], cfg, 3, {}, {
+  const res = await decideScheduledRun([], cfg, "/mock/inbox", {}, {
     fetchJson: async () => highShortUsage,
     now: () => Date.parse("2026-11-01T10:00:00+09:00"),
   });
   assert.equal(res.action, "skip");
   assert.equal(res.reason, "quota_paused");
-  assert.equal(res.exitCode, 11);
+  assert.equal(res.exitCode, EXIT_QUOTA);
 });
 
 test("decideScheduledRun: 利用量が読めないなら skip (quota_unavailable, exit 12)", async () => {
   const cfg = mockQuotaConfig();
-  const res = await decideScheduledRun([], cfg, 3, {}, {
+  const res = await decideScheduledRun([], cfg, "/mock/inbox", {}, {
     fetchJson: async () => null,
     readFile: () => null,
   });
   assert.equal(res.action, "skip");
   assert.equal(res.reason, "quota_unavailable");
-  assert.equal(res.exitCode, 12);
+  assert.equal(res.exitCode, EXIT_QUOTA_UNAVAILABLE);
 });
 
-test("decideScheduledRun: 枠が空いていて論文数が足りなければ fillInbox=true で run", async () => {
+test("decideScheduledRun: inbox が未設定または読めないなら skip (inbox_error, exit 13)", async () => {
+  const okUsage = {
+    providers: [
+      {
+        metrics: [
+          {
+            label: "Gemini Notebook (短期枠)",
+            used_percent: 30,
+            reset_at: "2026-11-01 20:00",
+          },
+        ],
+      },
+    ],
+  };
+  const cfg = mockQuotaConfig();
+  // inboxDir が未設定
+  const resEmpty = await decideScheduledRun([], cfg, "", {}, {
+    fetchJson: async () => okUsage,
+  });
+  assert.equal(resEmpty.action, "skip");
+  assert.equal(resEmpty.reason, "inbox_error");
+  assert.equal(resEmpty.exitCode, EXIT_INBOX_ERROR);
+
+  // inboxDir の読み込み失敗
+  const resError = await decideScheduledRun(
+    [],
+    cfg,
+    "/invalid/path",
+    {
+      readDir: () => {
+        throw new Error("EACCES");
+      },
+    },
+    {
+      fetchJson: async () => okUsage,
+    },
+  );
+  assert.equal(resError.action, "skip");
+  assert.equal(resError.reason, "inbox_error");
+  assert.equal(resError.exitCode, EXIT_INBOX_ERROR);
+});
+
+test("decideScheduledRun: 枠が空いていて論文数が足りなければ fillInbox=true で run (exit 0)", async () => {
   const okUsage = {
     providers: [
       {
@@ -159,11 +219,21 @@ test("decideScheduledRun: 枠が空いていて論文数が足りなければ fi
     ],
   };
   const cfg = mockQuotaConfig();
-  const res = await decideScheduledRun([], cfg, 2, { minInbox: 5 }, {
-    fetchJson: async () => okUsage,
-    now: () => Date.parse("2026-11-01T10:00:00+09:00"),
-  });
+  const res = await decideScheduledRun(
+    [],
+    cfg,
+    "/mock/inbox",
+    {
+      minInbox: 5,
+      readDir: () => ["a.pdf", "b.pdf"],
+    },
+    {
+      fetchJson: async () => okUsage,
+      now: () => Date.parse("2026-11-01T10:00:00+09:00"),
+    },
+  );
   assert.equal(res.action, "run");
+  assert.equal(res.exitCode, 0);
   if (res.action === "run") {
     assert.equal(res.fillInbox, true);
     assert.equal(res.inboxCount, 2);
@@ -171,7 +241,7 @@ test("decideScheduledRun: 枠が空いていて論文数が足りなければ fi
   }
 });
 
-test("decideScheduledRun: 枠が空いていて論文数が足りていれば fillInbox=false で run", async () => {
+test("decideScheduledRun: 枠が空いていて論文数が足りていれば fillInbox=false で run (exit 0)", async () => {
   const okUsage = {
     providers: [
       {
@@ -191,13 +261,37 @@ test("decideScheduledRun: 枠が空いていて論文数が足りていれば fi
     ],
   };
   const cfg = mockQuotaConfig();
-  const res = await decideScheduledRun([], cfg, 6, { minInbox: 5 }, {
-    fetchJson: async () => okUsage,
-    now: () => Date.parse("2026-11-01T10:00:00+09:00"),
-  });
+  const res = await decideScheduledRun(
+    [],
+    cfg,
+    "/mock/inbox",
+    {
+      minInbox: 5,
+      readDir: () => ["1.pdf", "2.pdf", "3.pdf", "4.pdf", "5.pdf", "6.pdf"],
+    },
+    {
+      fetchJson: async () => okUsage,
+      now: () => Date.parse("2026-11-01T10:00:00+09:00"),
+    },
+  );
   assert.equal(res.action, "run");
+  assert.equal(res.exitCode, 0);
   if (res.action === "run") {
     assert.equal(res.fillInbox, false);
     assert.equal(res.inboxCount, 6);
   }
+});
+
+test("humanPauseMode & NeedVisibleChromeError: ヘッドレス中のログイン壁は promote モードとなり例外で即終了可能", () => {
+  // ヘッドレスモード時は人間待ちを促す promote モードになり、固まらずに NeedVisibleChromeError を上げる
+  const mode = humanPauseMode({ headed: false });
+  assert.equal(mode, "promote");
+
+  const err = new NeedVisibleChromeError(
+    "NotebookLM",
+    "https://accounts.google.com/signin",
+    "ログイン待ち",
+  );
+  assert.equal(err.name, "NeedVisibleChromeError");
+  assert.match(err.message, /NotebookLM: ログインまたは追加確認が必要です/);
 });

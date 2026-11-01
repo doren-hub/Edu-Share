@@ -9,6 +9,7 @@
     "start": "node dist/orchestrate.js",
     "repair-meta": "npm run build && node dist/orchestrate.js --repair-meta",
     "quota-check": "npm run build && node dist/quota-check-cli.js",
+    "scheduled-decide": "npm run build && node dist/scheduled-run-cli.js",
     "fill-inbox": "npm run build && node dist/fill-inbox-cli.js",
     "worker": "npm run build && node dist/cli.js",
     "typecheck": "tsc --noEmit",

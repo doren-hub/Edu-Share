@@ -1,8 +1,19 @@
+import { execSync } from "node:child_process";
 import { readdirSync } from "node:fs";
-import { type NotebookQuotaConfig } from "./notebook-quota.ts";
-import { checkNotebookQuotaStatus, type QuotaCheckDecision, type QuotaCheckDeps } from "./quota-check.ts";
+import {
+  EXIT_QUOTA,
+  EXIT_QUOTA_UNAVAILABLE,
+  type NotebookQuotaConfig,
+} from "./notebook-quota.ts";
+import {
+  checkNotebookQuotaStatus,
+  type QuotaCheckDeps,
+} from "./quota-check.ts";
 
 export const DEFAULT_MIN_INBOX = 5;
+
+export const EXIT_ALREADY_RUNNING = 10;
+export const EXIT_INBOX_ERROR = 13;
 
 export type RunningCheckResult = {
   running: boolean;
@@ -20,7 +31,6 @@ export function isPipelineOrChromeRunning(
   for (const raw of processes) {
     const cmd = raw.trim();
     if (!cmd) continue;
-    // grep や pgrep コマンド自身の引数は除外
     if (/^(?:grep|pgrep)\b/.test(cmd)) continue;
 
     if (pipelinePattern.test(cmd)) {
@@ -43,17 +53,33 @@ export function isPipelineOrChromeRunning(
   return { running: false };
 }
 
+export type InboxCountResult =
+  | { ok: true; count: number }
+  | { ok: false; error: string };
+
 export function countInboxPdfs(
   inboxDir: string,
   readDir: (path: string) => string[] = (p) => readdirSync(p),
-): number {
+): InboxCountResult {
+  const dir = inboxDir.trim();
+  if (!dir) {
+    return {
+      ok: false,
+      error: "inbox ディレクトリが設定されていません（PAPER_INBOX_DIR）",
+    };
+  }
   try {
-    const files = readDir(inboxDir);
-    return files.filter(
+    const files = readDir(dir);
+    const count = files.filter(
       (n) => n.toLowerCase().endsWith(".pdf") && !n.startsWith("."),
     ).length;
-  } catch {
-    return 0;
+    return { ok: true, count };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      error: `inbox ディレクトリを読み込めません（${dir}）: ${msg}`,
+    };
   }
 }
 
@@ -66,18 +92,25 @@ export type ScheduledRunDecision =
       action: "skip";
       reason: "already_running";
       detail: string;
+      exitCode: typeof EXIT_ALREADY_RUNNING;
     }
   | {
       action: "skip";
       reason: "quota_paused";
       detail: string;
-      exitCode: 11;
+      exitCode: typeof EXIT_QUOTA;
     }
   | {
       action: "skip";
       reason: "quota_unavailable";
       detail: string;
-      exitCode: 12;
+      exitCode: typeof EXIT_QUOTA_UNAVAILABLE;
+    }
+  | {
+      action: "skip";
+      reason: "inbox_error";
+      detail: string;
+      exitCode: typeof EXIT_INBOX_ERROR;
     }
   | {
       action: "run";
@@ -85,15 +118,30 @@ export type ScheduledRunDecision =
       inboxCount: number;
       minInbox: number;
       quotaMessage: string;
+      exitCode: 0;
     };
+
+export function getRunningProcesses(): string[] {
+  try {
+    const out = execSync("ps -axo command", {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.split("\n");
+  } catch {
+    return [];
+  }
+}
 
 export async function decideScheduledRun(
   processes: readonly string[],
   cfg: NotebookQuotaConfig,
-  inboxCount: number,
+  inboxDir: string,
   options: {
     minInbox?: number;
     chromeUserDataDir?: string;
+    readDir?: (path: string) => string[];
   } = {},
   deps: QuotaCheckDeps = {},
 ): Promise<ScheduledRunDecision> {
@@ -109,6 +157,7 @@ export async function decideScheduledRun(
       action: "skip",
       reason: "already_running",
       detail: `すでに ${target} が実行中のため終了します（${running.matched ?? ""}）`,
+      exitCode: EXIT_ALREADY_RUNNING,
     };
   }
 
@@ -119,7 +168,7 @@ export async function decideScheduledRun(
       action: "skip",
       reason: "quota_paused",
       detail: quota.message,
-      exitCode: 11,
+      exitCode: EXIT_QUOTA,
     };
   }
   if (quota.kind === "unavailable") {
@@ -127,18 +176,29 @@ export async function decideScheduledRun(
       action: "skip",
       reason: "quota_unavailable",
       detail: quota.message,
-      exitCode: 12,
+      exitCode: EXIT_QUOTA_UNAVAILABLE,
     };
   }
 
-  // 3. 補充の判定
-  const needsFill = shouldFillInbox(inboxCount, minInbox);
+  // 3. inbox 論文数の確認と補充判定
+  const inboxResult = countInboxPdfs(inboxDir, options.readDir);
+  if (!inboxResult.ok) {
+    return {
+      action: "skip",
+      reason: "inbox_error",
+      detail: `${inboxResult.error}。安全のため実行を見送ります`,
+      exitCode: EXIT_INBOX_ERROR,
+    };
+  }
+
+  const needsFill = shouldFillInbox(inboxResult.count, minInbox);
 
   return {
     action: "run",
     fillInbox: needsFill,
-    inboxCount,
+    inboxCount: inboxResult.count,
     minInbox,
     quotaMessage: quota.message,
+    exitCode: 0,
   };
 }

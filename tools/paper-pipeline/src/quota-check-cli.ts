@@ -33,9 +33,7 @@ async function main(): Promise<void> {
   if (isJson) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    if (result.exitCode === 0) {
-      log(result.message);
-    } else if (result.exitCode === EXIT_QUOTA) {
+    if (result.exitCode === 0 || result.exitCode === EXIT_QUOTA) {
       log(result.message);
     } else {
       warn(result.message);
