@@ -11,7 +11,7 @@ import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts"
 import { PACKAGE_ROOT } from "./env.ts";
 import { addUnregisteredInboxPdfs, hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, type InboxPdf } from "./inbox.ts";
 import { error as logError, log, warn } from "./log.ts";
-import { pickNextJob, type SchedJob, type SchedStatus } from "./schedule.ts";
+import { pickNextJob, type PickResult, type SchedJob, type SchedStatus } from "./schedule.ts";
 import {
   emptyState,
   isCompleted,
@@ -22,7 +22,14 @@ import {
   type StudioStageId,
 } from "./state.ts";
 import { hasHarvestableWork, missingEduUploads } from "./harvest.ts";
-import { currentNotebookQuotaPause, EXIT_QUOTA, waitUntilNotebookQuotaAllows } from "./notebook-quota.ts";
+import {
+  currentNotebookQuotaPause,
+  EXIT_QUOTA,
+  fmtPct,
+  formatJst,
+  waitUntilNotebookQuotaAllows,
+  type NotebookQuotaPause,
+} from "./notebook-quota.ts";
 import { EXIT_WAITING, recheckDelayMs, retryUntilMs } from "./waiting.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
 import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
@@ -165,6 +172,56 @@ function initialStatus(
   return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable };
 }
 
+export type IdleQuotaAction =
+  | { action: "exit"; pause: NotebookQuotaPause; pendingPapers: number }
+  | { action: "wait_quota" }
+  | { action: "sleep"; sleepMs: number; generationBlocked: boolean };
+
+export function decideIdleAction(
+  pick: PickResult,
+  opts: {
+    generationBlocked: boolean;
+    jobs: readonly SchedJob[];
+    exitOnQuota: boolean;
+    pause?: NotebookQuotaPause | null;
+  },
+): IdleQuotaAction | null {
+  if (pick.kind !== "idle") return null;
+  const hasHarvestable = opts.jobs.some(
+    (j) => j.harvestable && (j.status === "ready" || j.status === "waiting"),
+  );
+  if (opts.generationBlocked && !hasHarvestable) {
+    if (opts.exitOnQuota) {
+      const pendingPapers = opts.jobs.filter(
+        (j) => j.status === "ready" || j.status === "waiting",
+      ).length;
+      const pause: NotebookQuotaPause = opts.pause ?? {
+        reason: "short",
+        until: null,
+        untilLabel: "",
+        used: 100,
+        stopPercent: 85,
+      };
+      return { action: "exit", pause, pendingPapers };
+    }
+    return { action: "wait_quota" };
+  }
+  return {
+    action: "sleep",
+    sleepMs: pick.sleepMs,
+    generationBlocked: opts.generationBlocked,
+  };
+}
+
+export function formatExitOnQuotaMessage(
+  pause: NotebookQuotaPause,
+  pendingCount: number,
+): string {
+  const kindLabel = pause.reason === "weekly" ? "週枠" : "短期枠";
+  const resetLabel = pause.untilLabel || (pause.until ? formatJst(pause.until) : "未定");
+  return `オーケストレータ: --exit-on-quota により終了します（枠: ${kindLabel}、使用率: ${fmtPct(pause.used)}%、リセット時刻: ${resetLabel}、途中の論文: ${pendingCount} 件）`;
+}
+
 function orchHelp(): string {
   return `${helpText()}
 呼び出し側:
@@ -185,6 +242,7 @@ function orchHelp(): string {
   npm run repair-meta -- --headed
   npm run worker -- --only paper.pdf
 
+  --exit-on-quota は利用枠が上限に達し進められる作業が無くなったときにリセットを待たず終了コード 11 で終了します（環境変数 NOTEBOOK_EXIT_ON_QUOTA=1 でも可）。
   --retry-given-up は打ち切り済みを再開（--only FILE.pdf 併用ならその論文だけ）。
   --headless はウィンドウなし。ログインや追加確認のときだけ画面を出します。
 `;
@@ -259,6 +317,7 @@ async function main(): Promise<void> {
   const processed: string[] = [];
   const skipped: string[] = [];
   const failed: string[] = [];
+  let exitedOnQuota = false;
 
   while (true) {
     await refreshInbox();
@@ -270,7 +329,18 @@ async function main(): Promise<void> {
       break;
     }
     if (pick.kind === "idle") {
-      if (generationBlocked && !jobs.some((j) => j.harvestable && (j.status === "ready" || j.status === "waiting"))) {
+      const decision = decideIdleAction(pick, {
+        generationBlocked,
+        jobs,
+        exitOnQuota: cfg.exitOnQuota,
+        pause,
+      });
+      if (decision?.action === "exit") {
+        log(formatExitOnQuotaMessage(decision.pause, decision.pendingPapers));
+        exitedOnQuota = true;
+        break;
+      }
+      if (decision?.action === "wait_quota") {
         log("オーケストレータ: 利用量のため生成は止め、他に進められる論文もありません");
         await waitUntilNotebookQuotaAllows(cfg);
         continue;
@@ -424,9 +494,13 @@ async function main(): Promise<void> {
   }
 
   log(
-    `オーケストレータ結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}`,
+    `オーケストレータ結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}${
+      exitedOnQuota ? " / 利用量終了" : ""
+    }`,
   );
-  if (failed.length) {
+  if (exitedOnQuota) {
+    process.exitCode = EXIT_QUOTA;
+  } else if (failed.length) {
     logError(`失敗: ${failed.join(", ")}`);
     process.exitCode = 1;
   }
@@ -445,8 +519,14 @@ export function isMainModule(
 }
 
 if (isMainModule()) {
-  main().catch((e) => {
-    logError(e instanceof Error ? e.stack ?? e.message : String(e));
-    process.exitCode = 1;
-  });
+  main()
+    .then(() => {
+      if (process.exitCode !== undefined && process.exitCode !== 0) {
+        process.exit(process.exitCode);
+      }
+    })
+    .catch((e) => {
+      logError(e instanceof Error ? e.stack ?? e.message : String(e));
+      process.exit(1);
+    });
 }

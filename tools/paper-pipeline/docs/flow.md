@@ -35,7 +35,7 @@ flowchart TD
 
 待ちの再確認間隔: スライド 90s、動画 60s、クイズ/単語帳 20s。同じ論文で MP4 が取れない・SciSpace メタが進まないときは 10 分空ける。Studio がツールバーだけのままなら 15 分は開き直さず、1 時間を過ぎたら開始記録を捨ててキックオフし直す。クールダウン中は Chrome を開かない。
 
-Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短期枠)` / `(週枠)`）を読む。短期枠の利用量が上限（既定 85%、`--notebook-short-stop-percent`）を超えているあいだは Studio 生成を止める。週枠が 100% なら `reset_at` まで待つ。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める。収集・Edu Share はキックオフ済みなら続ける。Chrome をもう一つ開いて Cookie を取り直すことはしない。
+Notebook 利用量は taskdesk / ai-usage-board の JSON（`Gemini Notebook (短期枠)` / `(週枠)`）を読む。短期枠の利用量が上限（既定 85%、`--notebook-short-stop-percent`）を超えているあいだは Studio 生成を止める。週枠が 100% なら `reset_at` まで待つ。そのあいだは SciSpace 掲載・メタと、1 種でもできている生成物の Edu Share 登録を先に進める。収集・Edu Share はキックオフ済みなら続ける。Chrome をもう一つ開いて Cookie を取り直すことはしない。`--exit-on-quota`（環境変数 `NOTEBOOK_EXIT_ON_QUOTA=1`）を指定した場合は、進められる作業がすべて完了した時点でリセットを待たずに終了コード 11（EXIT_QUOTA）で終了する。
 
 同一論文の判定: 処理を始める前（SciSpace 掲載・NotebookLM ノート作成より前）に、PDF の中身から同一論文を判定する（強い順に DOI、arXiv ID、1ページ目題名＋筆頭著者の一致。題名だけでは一致にしない）。照合先は `work/` の既存論文、`duplicates/`、および同じ実行中に inbox にある他の PDF。一致した場合は Studio 生成も Edu Share 登録も行わず、inbox から外して `hold/` へ移動しログを残す（消さない）。キーが一つも取れない PDF は誤って止めず通常どおり処理する。
 

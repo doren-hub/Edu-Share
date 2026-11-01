@@ -90,6 +90,7 @@ npm run repair-meta -- --headed
 - Files の著者省略は年著者行内の `+N More`、または直後の独立した `+N More` 行で判定します（空行は無視）。`collectFilesCardCandidates` は DOM の `innerText` をそのまま収集するため、子要素のチップが別行になる入力にも対応します。掲載誌・TL;DR・本文を越えてチップを探しません。完全な著者で補完したときは直後の古いチップも除去します。これは取得コードに基づく入力契約で、現在の SciSpace 実画面の DOM は未確認です。
 - NotebookLM の Studio は、同じ論文のスライド・動画・クイズ・単語帳がすべて生成待ちか完了になってから次の論文の生成に進みます。動画は数十分かかることがあります。MP4 が取れない・Studio が空・SciSpace メタが進まないときは同じ論文をすぐ開き直さず、間隔を空けます
 - Notebook の短期枠（Gemini Notebook）の使用量が上限を超えているあいだは生成を止めます。既定は 85% で、`--notebook-short-stop-percent 70` のように変えられます（環境変数 `NOTEBOOK_SHORT_STOP_PERCENT` より引数が優先）。ちょうどその％では止めず、超えたら止めます。週枠が 100% のときはリセット日時まで待ちます。値は taskdesk と同じ利用量 JSON をリアルタイムに読みます。止めないときは `--ignore-notebook-quota`
+- `--exit-on-quota`（環境変数 `NOTEBOOK_EXIT_ON_QUOTA=1` でも可）を指定すると、利用量が上限に達した際、進められる作業（SciSpace 掲載・メタ、既存生成物の Edu Share 登録）をすべて済ませた後、枠のリセットを待たずに終了コード 11（EXIT_QUOTA）で終了します。指定しない場合は従来どおりリセット時刻まで待ち続けます
 - 利用量が回復するまでは、SciSpace への PDF 掲載・メタ反映と、1 種でもできている生成物の Edu Share 登録を先に進めます。残りの生成は枠が空いてから再開します
 - 公式 API ではないため、ボタン文言が変わると失敗します。失敗時は論文フォルダの `failures/` にスクリーンショットが残ります
 
