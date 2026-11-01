@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import { notebookLmCsvStatusLine } from "../edushare-form.ts";
-import { emptyState } from "../state.ts";
+import { emptyState, markEduUploaded } from "../state.ts";
 import { ensureIndustry, importNotebookLmCsv, notebookLmCsvCardText, usableEduShareTitle, verifyEduSharePaper } from "./edushare.ts";
 
 // 見出し → 説明 p → 状態 p → input。両欄の親には rounded クラスがある想定。
@@ -48,6 +48,8 @@ function fakePage(quiz: string, vocab: string, blankReads = 0, takeOpens = false
     waitForURL: async () => {
       if (!takeOpens) throw new Error("開始リンクなしでは take へ遷移しない");
     },
+    isClosed: () => false,
+    screenshot: async () => Buffer.from([]),
   } as unknown as Page;
   return { page, sent, navigations };
 }
@@ -282,7 +284,7 @@ test("ensureIndustry: 業界が空になったときは state.industry に「業
   }
 });
 
-test("開始ボタンが無くてもクイズのCSVプールURLが開けば確認を通す", async () => {
+test("開始ボタンが無くてもクイズと単語帳のCSVプールURLが開けば確認を通す", async () => {
   const root = mkdtempSync(join(tmpdir(), "csv-verify-take-"));
   try {
     const state = emptyState({ filename: "paper.pdf", inboxPdfPath: join(root, "paper.pdf"), paperDir: root });
@@ -295,7 +297,66 @@ test("開始ボタンが無くてもクイズのCSVプールURLが開けば確�
     await verifyEduSharePaper(page, { paperDir: root, state, skipSlidesVideo: true });
     assert.ok(state.completed.includes("verify"));
     assert.ok(navigations.some((url) => url.includes("csvPool=quiz")));
+    assert.ok(navigations.some((url) => url.includes("csvPool=vocab")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("CSVプールURLを開けず手元にクイズCSVがあるときはエラーとなり取り込み済みマークを解除する", async () => {
+  const root = mkdtempSync(join(tmpdir(), "csv-verify-quiz-fail-"));
+  try {
+    const state = emptyState({ filename: "paper.pdf", inboxPdfPath: join(root, "paper.pdf"), paperDir: root });
+    state.eduShareTestUrl = "https://example.test/tests/test";
+    state.quizCsvPath = join(root, "quiz.csv");
+    state.vocabCsvPath = join(root, "vocab.csv");
+    writeFileSync(state.quizCsvPath, "csv");
+    writeFileSync(state.vocabCsvPath, "csv");
+    markEduUploaded(state, "nlm-quiz");
+    markEduUploaded(state, "nlm-flashcards");
+    assert.ok(state.eduUploaded?.includes("nlm-quiz"));
+
+    const { page } = fakePage("", "", 0, false);
+    await assert.rejects(
+      async () => {
+        await verifyEduSharePaper(page, { paperDir: root, state, skipSlidesVideo: true });
+      },
+      { message: "Edu Share にクイズ CSV がありません" },
+    );
+    assert.ok(!state.eduUploaded?.includes("nlm-quiz"));
+    const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+    assert.ok(!saved.eduUploaded?.includes("nlm-quiz"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("CSVプールURLを開けず手元に単語帳CSVがあるときはエラーとなり取り込み済みマークを解除する", async () => {
+  const root = mkdtempSync(join(tmpdir(), "csv-verify-vocab-fail-"));
+  try {
+    const state = emptyState({ filename: "paper.pdf", inboxPdfPath: join(root, "paper.pdf"), paperDir: root });
+    state.eduShareTestUrl = "https://example.test/tests/test";
+    state.quizCsvPath = join(root, "quiz.csv");
+    state.vocabCsvPath = join(root, "vocab.csv");
+    writeFileSync(state.quizCsvPath, "csv");
+    writeFileSync(state.vocabCsvPath, "csv");
+    markEduUploaded(state, "nlm-quiz");
+    markEduUploaded(state, "nlm-flashcards");
+    assert.ok(state.eduUploaded?.includes("nlm-flashcards"));
+
+    const { page } = fakePage("取り込み済み（12問）", "", 0, false);
+    await assert.rejects(
+      async () => {
+        await verifyEduSharePaper(page, { paperDir: root, state, skipSlidesVideo: true });
+      },
+      { message: "Edu Share に単語帳 CSV がありません" },
+    );
+    assert.ok(!state.eduUploaded?.includes("nlm-flashcards"));
+    assert.ok(state.eduUploaded?.includes("nlm-quiz"));
+    const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+    assert.ok(!saved.eduUploaded?.includes("nlm-flashcards"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
