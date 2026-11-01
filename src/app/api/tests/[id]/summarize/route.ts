@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { llmRateLimitResponse } from "@/lib/llm-rate-limit";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { extractPdfTextByPage } from "@/lib/pdf-text-by-page";
@@ -71,6 +72,8 @@ export async function POST(
   if (!user) {
     return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
   }
+  const limited = llmRateLimitResponse("summarize", user.id);
+  if (limited) return limited;
 
   let admin;
   try {

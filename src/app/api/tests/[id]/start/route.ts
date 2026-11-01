@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
+import { llmRateLimitResponse } from "@/lib/llm-rate-limit";
 import { startBodySchema as startBodySchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -257,6 +258,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if (!user) {
       return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
     }
+    const limited = llmRateLimitResponse("quizStart", user.id);
+    if (limited) return limited;
 
     const rawBody = await req.json().catch(() => ({}));
     const parsedBody = startBodySchema.safeParse(rawBody);

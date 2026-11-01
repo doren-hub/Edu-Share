@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import ts from "typescript";
 import * as schemas from "./api-input-schemas.ts";
 import * as requestJson from "./request-json.ts";
+import * as rateLimit from "./llm-rate-limit.ts";
+
+beforeEach(() => rateLimit.resetLlmRateLimitForTests());
 
 const require = createRequire(import.meta.url);
 const { NextResponse } = require("next/server.js");
@@ -62,6 +65,7 @@ function fixture(opts: { row?: Partial<Row>; user?: string | null } = {}) {
   const route = loadWithStubs("../app/api/quiz/[sessionId]/submit/route.ts", {
     "next/server": { NextResponse },
     "@/lib/request-json": requestJson,
+    "@/lib/llm-rate-limit": rateLimit,
     "@/lib/api-input-schemas": schemas,
     "@/lib/supabase/server": {
       createClient: async () => ({
