@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -61,7 +62,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 }
 
 /**
- * アップロードしたユーザーのみ。同一 storage パスに PDF を上書きし、チャンクを取り直す。
+ * アップロードしたユーザーのみ。新規キーに PDF を保存し、取り込み成功時に参照を切り替える。
  */
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id: testId } = await ctx.params;
@@ -116,13 +117,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: "PDFのみアップロードできます" }, { status: 400 });
   }
 
-  const { error: pendErr } = await admin
+  const { data: claimed, error: pendErr } = await admin
     .from("tests")
     .update({
       processing_status: "pending",
       processing_error: null,
     })
-    .eq("id", testId);
+    .eq("id", testId)
+    .in("processing_status", ["ready", "failed"])
+    .select("id")
+    .maybeSingle();
   if (pendErr) {
     return NextResponse.json(
       { error: pendErr.message || "状態の更新に失敗しました" },
@@ -130,8 +134,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
+  if (!claimed) {
+    return NextResponse.json({ error: "PDFの取り込みは既に処理中です" }, { status: 409 });
+  }
+
+  // Keep the old object/reference intact on upload, extraction or DB failure.
+  const replacementPath = `${user.id}/${testId}-${randomUUID()}.pdf`;
   try {
-    await putObject(storagePath, file.stream(), "application/pdf");
+    await putObject(replacementPath, file.stream(), "application/pdf");
   } catch (error) {
     const safeError = sanitizeProcessingError(error);
     await admin
@@ -148,7 +158,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   try {
-    await ingestPdfForTest({ testId, storagePath });
+    await ingestPdfForTest({ testId, storagePath: replacementPath });
   } catch (e) {
     const safeError = sanitizeProcessingError(e);
     await admin
