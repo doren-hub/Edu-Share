@@ -21,16 +21,6 @@ export async function POST(req: Request, context: RouteContext) {
     return NextResponse.json({ error: "id が不正です" }, { status: 400 });
   }
 
-  const body = await readBoundedJson(req, API_BODY_LIMITS.paperAsk);
-  if (!body.ok) return body.response;
-  const parsed = bodySchema.safeParse(body.data);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0]?.message ?? "入力が不正です";
-    return NextResponse.json({ error: issue }, { status: 400 });
-  }
-
-  const { question, history } = parsed.data;
-
   // 1. ユーザー認証（ログイン必須）
   const supabase = await createClient();
   const { data: auth } = await supabase.auth.getUser();
@@ -49,6 +39,17 @@ export async function POST(req: Request, context: RouteContext) {
       { status: 429 },
     );
   }
+
+  // 本文より先に認証・回数制限を判定する。不正本文も認証済みなら1回と数える。
+  const body = await readBoundedJson(req, API_BODY_LIMITS.paperAsk);
+  if (!body.ok) return body.response;
+  const parsed = bodySchema.safeParse(body.data);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]?.message ?? "入力が不正です";
+    return NextResponse.json({ error: issue }, { status: 400 });
+  }
+
+  const { question, history } = parsed.data;
 
   // 3. 論文の存在と種別チェック
   const admin = createAdminClient();
