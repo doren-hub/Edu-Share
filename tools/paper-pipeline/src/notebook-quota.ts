@@ -6,6 +6,7 @@ import { log, warn } from "./log.ts";
 export const DEFAULT_SHORT_STOP_PERCENT = 85;
 export const DEFAULT_WEEKLY_STOP_PERCENT = 100;
 export const EXIT_QUOTA = 11;
+export const EXIT_QUOTA_UNAVAILABLE = 12;
 
 const FETCH_TIMEOUT_MS = 1_500;
 const SHORT_POLL_MS = 60_000;

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.edushare.paper-pipeline</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <!-- 作業リポジトリの絶対パスに合わせて置き換えてください -->
+        <string>/PATH/TO/edu-share-app/tools/paper-pipeline/scripts/scheduled-run.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <!-- 作業リポジトリの絶対パスに合わせて置き換えてください -->
+    <string>/PATH/TO/edu-share-app/tools/paper-pipeline</string>
+
+    <!-- 実行間隔（秒）。既定: 3600 秒（1 時間ごと） -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <!-- 登録（load）時に即座に 1 回実行するかどうか -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd 経由の標準出力・標準エラー出力 -->
+    <key>StandardOutPath</key>
+    <string>/PATH/TO/edu-share-app/tools/paper-pipeline/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/PATH/TO/edu-share-app/tools/paper-pipeline/logs/launchd-error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>
