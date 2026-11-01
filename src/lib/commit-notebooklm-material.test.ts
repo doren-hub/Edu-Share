@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
-import { reconcilePaperMaterialObjectPaths } from "./paper-notebooklm-storage.ts";
+import { reconcilePaperMaterialObjectPaths, type PaperMaterialStorageRow } from "./paper-notebooklm-storage.ts";
 import { paperNotebookLmMaterialPresence } from "./paper-notebooklm-materials.ts";
 
 const uploadId = "11111111-1111-4111-8111-111111111111";
@@ -133,7 +133,7 @@ for (const kind of ["slide", "video"] as const) {
     assert.ok(!path.includes("-upload-"));
     assert.equal(f.objects.get(path), "new bytes");
     const column = kind === "slide" ? "notebooklm_slide_pdf_storage_path" : "notebooklm_video_mp4_storage_path";
-    const input = { id: "paper", uploaded_by: "owner", [column]: path };
+    const input: PaperMaterialStorageRow = { id: "paper", uploaded_by: "owner", [column]: path };
     const [reconciled] = await reconcilePaperMaterialObjectPaths(
       { from: () => ({ update: () => { throw new Error("Published path must not change"); } }) },
       [input], async key => ({ exists: f.objects.has(key), size: f.objects.has(key) ? 30_000 : null, contentType: null }),
