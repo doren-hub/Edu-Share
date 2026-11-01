@@ -97,3 +97,20 @@ POST / DELETE のハンドラーは変更せず、既存の `auth.getUser()` と
 ネットワーク非依存のテストで、`src/middleware.ts` の実際の matcher を
 Next.js の `unstable_doesMiddlewareMatch` に渡し、除外対象と周辺パスの境界を確認する。
 実サーバーでの大容量アップロードやメモリ計測は実施せず、本番 Supabase / R2 に接続しない。
+
+## LLM 呼び出しのレート制限（Issue #216）
+
+LLM（Anthropic / Gemini / 埋め込み）を呼ぶ認証済み API は、ログイン確認の直後・本文を
+読む前にユーザー単位で回数を数える。超過時は LLM を呼ばず **429**、`Retry-After`
+ヘッダー（秒）と `{"error": ..., "retryAfterSeconds": n}` を返す。制限値は
+`src/lib/llm-rate-limit.ts` の `LLM_RATE_LIMITS` で一元管理する。
+
+| 対象 | 上限 |
+| --- | --- |
+| POST `/api/tests/:id/start` | 1分あたり10回 |
+| POST `/api/quiz/:sessionId/submit` | 1分あたり10回 |
+| POST `/api/tests/upload/summarize` と `/api/tests/:id/summarize` | 合計で1分あたり5回 |
+| POST `/api/papers/:id/ask`（既存、`paper-ask-rate-limit.ts`） | 1分あたり6回 |
+
+カウンタはプロセス内メモリのため、サーバー再起動でリセットされ、複数インスタンス間では
+共有されない。

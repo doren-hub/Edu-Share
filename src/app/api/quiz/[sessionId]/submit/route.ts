@@ -1,5 +1,6 @@
 import { readBoundedJson, API_BODY_LIMITS } from "@/lib/request-json";
 import { NextResponse } from "next/server";
+import { llmRateLimitResponse } from "@/lib/llm-rate-limit";
 import { quizSubmitSchema as bodySchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -22,6 +23,8 @@ export async function POST(
   if (!user) {
     return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
   }
+  const limited = llmRateLimitResponse("quizSubmit", user.id);
+  if (limited) return limited;
 
   const body = await readBoundedJson(req, API_BODY_LIMITS.quizSubmit);
   if (!body.ok) return body.response;
