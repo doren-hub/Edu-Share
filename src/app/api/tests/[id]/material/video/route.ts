@@ -134,7 +134,7 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
 
   const { data: test, error: fetchErr } = await admin
     .from("tests")
-    .select("id, uploaded_by")
+    .select("id, uploaded_by, notebooklm_video_mp4_storage_path")
     .eq("id", testId)
     .single();
 
@@ -153,17 +153,26 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
 
   const storagePath = notebooklmVideoMp4StoragePath(test.uploaded_by, testId);
   const legacyPath = legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId);
-  await deleteObjects([storagePath, legacyPath]);
 
-  const { error: dbErr } = await admin
-    .from("tests")
-    .update({ notebooklm_video_mp4_storage_path: null })
-    .eq("id", testId);
+  let update = admin.from("tests").update({ notebooklm_video_mp4_storage_path: null })
+    .eq("id", testId).eq("uploaded_by", user.id);
+  const oldPath = test.notebooklm_video_mp4_storage_path;
+  update = oldPath == null ? update.is("notebooklm_video_mp4_storage_path", null) : update.eq("notebooklm_video_mp4_storage_path", oldPath);
+  const { data: changed, error: dbErr } = await update.select("id");
   if (dbErr) {
     return NextResponse.json(
       { error: "データベースの更新に失敗しました", details: dbErr.message },
       { status: 500 },
     );
+  }
+
+  if (!changed?.length) {
+    return NextResponse.json({ error: "教材が変更されました。再読み込みしてください。" }, { status: 409 });
+  }
+  try {
+    await deleteObjects([oldPath, storagePath, legacyPath]);
+  } catch {
+    // The DB reference is already cleared; cleanup is best effort.
   }
 
   return NextResponse.json({ ok: true });

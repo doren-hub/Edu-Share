@@ -49,11 +49,14 @@ export async function POST(
 
   const questions = row.questions_json as StoredQuestion[];
   const answers = parsed.data.answers as AnswerMap;
-  const recordStats = row.answers_json == null;
+  // 提出済みセッションは再採点しない（結果の上書き・統計の二重計上を防ぐ）。
+  if (row.answers_json != null) {
+    return NextResponse.json({ error: "このクイズは提出済みです" }, { status: 409 });
+  }
 
   const graded = await gradeWithClaude({ questions, answers });
 
-  const { error: upErr } = await admin
+  const { data: updated, error: upErr } = await admin
     .from("quiz_sessions")
     .update({
       answers_json: answers,
@@ -62,7 +65,11 @@ export async function POST(
       score_total: graded.scoreTotal,
       feedback_json: graded.feedback,
     })
-    .eq("id", sessionId);
+    .eq("id", sessionId)
+    // 未提出 → 提出済みの遷移を条件付き更新で原子的に行う。並行提出では
+    // 更新できた 1 リクエストだけが結果を保存し、統計を記録する。
+    .is("answers_json", null)
+    .select("id");
 
   if (upErr) {
     return NextResponse.json(
@@ -71,7 +78,11 @@ export async function POST(
     );
   }
 
-  if (recordStats && row.test_id) {
+  if (!updated || updated.length === 0) {
+    return NextResponse.json({ error: "このクイズは提出済みです" }, { status: 409 });
+  }
+
+  if (row.test_id) {
     await recordQuestionPerformanceAfterSubmit({
       admin,
       testId: row.test_id,
