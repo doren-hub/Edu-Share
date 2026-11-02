@@ -38,6 +38,7 @@ export type AppConfig = {
   studioGenerateExplicit: boolean;
   ignoreNotebookQuota: boolean;
   exitOnQuota: boolean;
+  maxWaitingMinutes: number;
   noRevealLogin: boolean;
   newestFirst: boolean;
   notebookQuotaUrls: readonly string[];
@@ -59,6 +60,7 @@ export type CliOverrides = {
   generate?: string[];
   ignoreNotebookQuota?: boolean;
   exitOnQuota?: boolean;
+  maxWaitingMinutes?: number;
   noRevealLogin?: boolean;
   newestFirst?: boolean;
   /** 短期枠の使用量がこの％を超えたら生成を止める */
@@ -94,7 +96,14 @@ export function parseArgv(argv: string[]): CliOverrides {
       out.generate = [...(out.generate ?? []), ...tokens];
     } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
     else if (a === "--exit-on-quota") out.exitOnQuota = true;
-    else if (a === "--no-reveal-login") out.noRevealLogin = true;
+    else if (a === "--max-waiting-minutes" || a === "--waiting-timeout-minutes") {
+      const raw = next();
+      const v = Number(raw);
+      if (!raw || !Number.isFinite(v) || v < 0) {
+        throw new Error(`${a} には 0 以上の数を指定してください`);
+      }
+      out.maxWaitingMinutes = v;
+    } else if (a === "--no-reveal-login") out.noRevealLogin = true;
     else if (a === "--newest-first") out.newestFirst = true;
     else if (a === "--notebook-short-stop-percent") {
       out.notebookShortStopPercent = parseRequiredPercent(
@@ -123,6 +132,20 @@ export function resolveHeaded(
 ): boolean {
   if (overrides.headed !== undefined) return overrides.headed;
   return !envFlagEnabled(headlessEnv);
+}
+
+/** 生成待ちタイムアウト（分）。--exit-on-quota 時は既定 60 分、手動時は既定 0（無効） */
+export function resolveMaxWaitingMinutes(
+  override: number | undefined,
+  exitOnQuota: boolean,
+  envValue: string | undefined = process.env.PAPER_MAX_WAITING_MINUTES,
+): number {
+  if (override !== undefined) return override;
+  if (envValue !== undefined && envValue.trim() !== "") {
+    const parsed = Number(envValue.trim());
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return exitOnQuota ? 60 : 0;
 }
 
 export function loadNotebookQuotaConfig(overrides: CliOverrides = {}): NotebookQuotaConfig {
@@ -185,6 +208,9 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
   const studioSkip = skipStudioStages(studioGenerate);
   const skipSlidesVideo =
     studioSkip.includes("nlm-slides") && studioSkip.includes("nlm-video");
+  const exitOnQuota =
+    overrides.exitOnQuota === true ||
+    envFlagEnabled(process.env.NOTEBOOK_EXIT_ON_QUOTA);
   return {
     inboxDir: resolvePathMaybe(inbox.trim(), cwd),
     workDir: resolvePathMaybe(work.trim(), cwd),
@@ -223,9 +249,8 @@ export function loadConfig(overrides: CliOverrides): AppConfig {
     studioSkip,
     studioGenerateExplicit,
     ...quotaConfig,
-    exitOnQuota:
-      overrides.exitOnQuota === true ||
-      envFlagEnabled(process.env.NOTEBOOK_EXIT_ON_QUOTA),
+    exitOnQuota,
+    maxWaitingMinutes: resolveMaxWaitingMinutes(overrides.maxWaitingMinutes, exitOnQuota),
     noRevealLogin:
       overrides.noRevealLogin === true ||
       envFlagEnabled(process.env.NO_REVEAL_LOGIN),
@@ -290,6 +315,9 @@ npm start は inbox 直下の PDF だけを、1論文ずつ worker で処理し�
   --ignore-notebook-quota  Notebook 利用量による停止をしない
   --exit-on-quota      Notebook 利用枠が上限に達し進められる作業が無くなったときにリセットを待たず終了コード 11 で終了
                        環境変数 NOTEBOOK_EXIT_ON_QUOTA=1 でも可
+  --max-waiting-minutes N
+                       進められる作業がなく生成待ちだけが指定分続いたら終了コード 16 で終了（--exit-on-quota 時は既定 60 分、0 で無効）
+                       環境変数 PAPER_MAX_WAITING_MINUTES でも可
 `;
 }
 

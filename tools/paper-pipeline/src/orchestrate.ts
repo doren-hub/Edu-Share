@@ -30,7 +30,7 @@ import {
   waitUntilNotebookQuotaAllows,
   type NotebookQuotaPause,
 } from "./notebook-quota.ts";
-import { EXIT_WAITING, recheckDelayMs, retryUntilMs } from "./waiting.ts";
+import { EXIT_WAITING, EXIT_WAITING_TIMEOUT, recheckDelayMs, retryUntilMs } from "./waiting.ts";
 import { needsLocalVideoFile } from "./video-file.ts";
 import { needsSciSpaceCardRecapture } from "./scispace-card.ts";
 import { isTargetClosedMessage } from "./browser.ts";
@@ -173,8 +173,16 @@ function initialStatus(
   return { status: "ready", nextCheckAt: 0, kickoffBegun, kickoffSettled, harvestable };
 }
 
+export { EXIT_WAITING_TIMEOUT };
+
+export type WaitingPaperInfo = {
+  filename: string;
+  stage: string;
+};
+
 export type IdleQuotaAction =
   | { action: "exit"; pause: NotebookQuotaPause; pendingPapers: number }
+  | { action: "exit_waiting"; waitingPapers: WaitingPaperInfo[]; elapsedMinutes: number }
   | { action: "wait_quota" }
   | { action: "sleep"; sleepMs: number; generationBlocked: boolean };
 
@@ -185,6 +193,10 @@ export function decideIdleAction(
     jobs: readonly SchedJob[];
     exitOnQuota: boolean;
     pause?: NotebookQuotaPause | null;
+    maxWaitingMinutes?: number;
+    waitingSince?: number;
+    now?: number;
+    getWaitingStage?: (filename: string) => string;
   },
 ): IdleQuotaAction | null {
   if (pick.kind !== "idle") return null;
@@ -207,11 +219,60 @@ export function decideIdleAction(
     }
     return { action: "wait_quota" };
   }
+  const maxWaitingMinutes = opts.maxWaitingMinutes ?? 0;
+  const waitingSince = opts.waitingSince ?? 0;
+  const now = opts.now ?? Date.now();
+  if (maxWaitingMinutes > 0 && waitingSince > 0 && !hasHarvestable) {
+    const elapsedMs = now - waitingSince;
+    if (elapsedMs >= maxWaitingMinutes * 60_000) {
+      const waitingPapers: WaitingPaperInfo[] = opts.jobs
+        .filter((j) => j.status === "waiting")
+        .map((j) => ({
+          filename: j.id,
+          stage: opts.getWaitingStage ? opts.getWaitingStage(j.id) : "不明",
+        }));
+      const elapsedMinutes = Math.max(1, Math.round(elapsedMs / 60_000));
+      return { action: "exit_waiting", waitingPapers, elapsedMinutes };
+    }
+  }
   return {
     action: "sleep",
     sleepMs: pick.sleepMs,
     generationBlocked: opts.generationBlocked,
   };
+}
+
+export function getPaperWaitingStage(state: PaperState): string {
+  return (
+    state.waitingFor ||
+    state.kickoffRetryStage ||
+    (state.completed.includes("nlm-upload") ? "nlm-video" : "nlm-upload")
+  );
+}
+
+export function detectProgress(
+  before: PaperState,
+  after: PaperState,
+  code: number,
+): boolean {
+  if (code === 0) return true;
+  if (after.completed.length > before.completed.length) return true;
+  if (!before.videoMp4Path && Boolean(after.videoMp4Path)) return true;
+  if (!before.slidePdfPath && Boolean(after.slidePdfPath)) return true;
+  if (!before.quizCsvPath && Boolean(after.quizCsvPath)) return true;
+  if (!before.vocabCsvPath && Boolean(after.vocabCsvPath)) return true;
+  return false;
+}
+
+export function formatExitOnWaitingMessage(
+  waitingPapers: WaitingPaperInfo[],
+  elapsedMinutes: number,
+): string {
+  const waitingDesc =
+    waitingPapers.length > 0
+      ? waitingPapers.map((p) => `${p.filename} (${p.stage})`).join(", ")
+      : "なし";
+  return `オーケストレータ: 進められる作業がなく、生成待ちが ${elapsedMinutes} 分続いたため終了します（待機中: ${waitingDesc}）`;
 }
 
 export function formatExitOnQuotaMessage(
@@ -319,7 +380,9 @@ async function main(): Promise<void> {
   const skipped: string[] = [];
   const failed: string[] = [];
   let exitedOnQuota = false;
+  let exitedOnWaitingTimeout = false;
   let loginRequired = false;
+  let waitingSince = 0;
 
   while (true) {
     await refreshInbox();
@@ -331,15 +394,33 @@ async function main(): Promise<void> {
       break;
     }
     if (pick.kind === "idle") {
+      if (waitingSince === 0) {
+        waitingSince = Date.now();
+      }
       const decision = decideIdleAction(pick, {
         generationBlocked,
         jobs,
         exitOnQuota: cfg.exitOnQuota,
         pause,
+        maxWaitingMinutes: cfg.maxWaitingMinutes,
+        waitingSince,
+        getWaitingStage: (filename) => {
+          const t = tracks.get(filename);
+          if (t) {
+            const st = loadPaperState(t.item);
+            return getPaperWaitingStage(st);
+          }
+          return "不明";
+        },
       });
       if (decision?.action === "exit") {
         log(formatExitOnQuotaMessage(decision.pause, decision.pendingPapers));
         exitedOnQuota = true;
+        break;
+      }
+      if (decision?.action === "exit_waiting") {
+        log(formatExitOnWaitingMessage(decision.waitingPapers, decision.elapsedMinutes));
+        exitedOnWaitingTimeout = true;
         break;
       }
       if (decision?.action === "wait_quota") {
@@ -380,8 +461,19 @@ async function main(): Promise<void> {
         ? `オーケストレータ: 利用量待ちのため生成以外を進めます → ${track.item.filename}`
         : `オーケストレータ: worker を呼びます → ${track.item.filename}`,
     );
+    const stateBefore = loadPaperState(track.item);
+
     const code = await runWorker(args);
     await sleep(CHROME_UNLOCK_MS);
+
+    const stateAfter = loadPaperState(track.item);
+    const progressMade = detectProgress(stateBefore, stateAfter, code);
+
+    if (progressMade) {
+      waitingSince = 0;
+    } else if (waitingSince === 0) {
+      waitingSince = Date.now();
+    }
 
     if (code === EXIT_LOGIN_REQUIRED) {
       loginRequired = true;
@@ -408,8 +500,15 @@ async function main(): Promise<void> {
     if (code === EXIT_WAITING) {
       const state = loadPaperState(track.item);
       applyKickoff(job, state, skip, cfg.studioGenerate);
-      const stage = state.waitingFor || "nlm-video";
+      const stage = getPaperWaitingStage(state);
       const cooldownUntil = retryUntilMs(state);
+      const limitHint =
+        cooldownUntil > Date.now() &&
+        state.kickoffRetryStage === stage &&
+        state.lastError &&
+        /日次上限|後で生成/.test(state.lastError)
+          ? `（${state.lastError}）`
+          : "";
       if (generationBlocked || cooldownUntil > Date.now()) {
         holdWaiting(track.giveUp, Date.now());
       } else if (noteWaiting(track.giveUp, stage, Date.now())) {
@@ -436,7 +535,7 @@ async function main(): Promise<void> {
         generationBlocked
           ? `オーケストレータ: ${track.item.filename} は生成待ち。利用量回復までは他の論文の SciSpace / Edu Share を進めます`
           : cooldownUntil > Date.now()
-            ? `オーケストレータ: ${track.item.filename} は ${stage} 開始クールダウン。他の論文の SciSpace / Edu Share を進めます`
+            ? `オーケストレータ: ${track.item.filename} は ${stage} 開始クールダウン${limitHint}。他の論文の SciSpace / Edu Share を進めます`
             : `オーケストレータ: ${track.item.filename} は ${stage} 待ち（指定項目は開始済み）。次の論文の生成へ`,
       );
       continue;
@@ -506,18 +605,25 @@ async function main(): Promise<void> {
 
   log(
     `オーケストレータ結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}${
-      exitedOnQuota ? " / 利用量終了" : loginRequired ? " / ログイン必要" : ""
+      exitedOnQuota
+        ? " / 利用量終了"
+        : exitedOnWaitingTimeout
+          ? " / 生成待ち終了"
+          : loginRequired
+            ? " / ログイン必要"
+            : ""
     }`,
   );
   const exitCode = decideOrchestratorExitCode({
     loginRequired,
     exitedOnQuota,
+    exitedOnWaitingTimeout,
     failedCount: failed.length,
   });
   if (exitCode !== 0) {
     process.exitCode = exitCode;
   }
-  if (!loginRequired && !exitedOnQuota && failed.length) {
+  if (!loginRequired && !exitedOnQuota && !exitedOnWaitingTimeout && failed.length) {
     logError(`失敗: ${failed.join(", ")}`);
   }
 }
@@ -525,10 +631,12 @@ async function main(): Promise<void> {
 export function decideOrchestratorExitCode(opts: {
   loginRequired?: boolean;
   exitedOnQuota?: boolean;
+  exitedOnWaitingTimeout?: boolean;
   failedCount?: number;
 }): number {
   if (opts.loginRequired) return EXIT_LOGIN_REQUIRED;
   if (opts.exitedOnQuota) return EXIT_QUOTA;
+  if (opts.exitedOnWaitingTimeout) return EXIT_WAITING_TIMEOUT;
   if (opts.failedCount && opts.failedCount > 0) return 1;
   return 0;
 }

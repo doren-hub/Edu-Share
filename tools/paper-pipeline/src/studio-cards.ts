@@ -1,3 +1,5 @@
+import { hasStudioStarted, isCompleted, type PaperState } from "./state.ts";
+
 /** Studio 出力カードの相対時刻。1時間超は「昨日」「2日前」になる。 */
 export const STUDIO_RELATIVE_TIME =
   /(?:\d+\s*(?:秒前|分前|時間前|日前|週間前|か月前|ヶ月前)|たった今|昨日|おととい|just now|\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?)\s+ago|yesterday)/i;
@@ -72,7 +74,7 @@ export function detectStudioCardKind(text: string): StudioCardKind {
 }
 
 const EXPLAINER_DURATION =
-  /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明)\b/gi;
+  /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明|短め|ショート|Short|Brief)\b/gi;
 
 export type VideoKickoffScan = {
   durationsSec: number[];
@@ -131,6 +133,43 @@ export function shouldKickoffVideo(scan: VideoKickoffScan): boolean {
 /** 再生成しない既存動画がある。MP4 未保存でも Studio 生成は終わっている。 */
 export function studioVideoGenerationDone(scan: VideoKickoffScan): boolean {
   return scan.durationsSec.length > 0 && !shouldKickoffVideo(scan);
+}
+
+/**
+ * 既存の動画カード（1本だけのショートを含む）をMP4保存対象として採用すべきか判定する。
+ * - 解説動画（>=120s）がある場合は常に採用
+ * - ショートが2本以上ある場合は再生成不要なので採用
+ * - ショートが1本だけでも、生成開始試行済み/失敗クールダウン中/生成完了扱いの場合は採用
+ */
+export function shouldAdoptStudioVideo(
+  scan: VideoKickoffScan,
+  opts?: {
+    videoStarted?: boolean;
+    kickoffFailed?: boolean;
+    completed?: boolean;
+  },
+): boolean {
+  if (scan.explainerCount > 0) return true;
+  if (scan.shortCount >= 2) return true;
+  if (scan.shortCount > 0 && (opts?.videoStarted || opts?.kickoffFailed || opts?.completed)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * PaperState に応じて既存の動画カードを採用すべきか判定する。
+ * スライド等別ステージのキックオフ失敗（kickoffRetryStage !== "nlm-video"）では採用しない。
+ */
+export function shouldAdoptStudioVideoForState(
+  scan: VideoKickoffScan,
+  state?: PaperState,
+): boolean {
+  return shouldAdoptStudioVideo(scan, {
+    videoStarted: state ? hasStudioStarted(state, "nlm-video") : false,
+    kickoffFailed: Boolean(state?.kickoffRetryAt) && state?.kickoffRetryStage === "nlm-video",
+    completed: state ? isCompleted(state, "nlm-video") : false,
+  });
 }
 
 /** 生成タイルではなく、Studio に並んでいるスライド出力か */

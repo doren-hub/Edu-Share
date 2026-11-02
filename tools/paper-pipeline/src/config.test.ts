@@ -38,6 +38,14 @@ test("parseArgv: --exit-on-quota", () => {
   assert.equal(parseArgv(["--exit-on-quota"]).exitOnQuota, true);
 });
 
+test("parseArgv: --max-waiting-minutes / --waiting-timeout-minutes", () => {
+  assert.equal(parseArgv([]).maxWaitingMinutes, undefined);
+  assert.equal(parseArgv(["--max-waiting-minutes", "45"]).maxWaitingMinutes, 45);
+  assert.equal(parseArgv(["--waiting-timeout-minutes", "30"]).maxWaitingMinutes, 30);
+  assert.throws(() => parseArgv(["--max-waiting-minutes", "abc"]), /0 以上の数を指定してください/);
+  assert.throws(() => parseArgv(["--max-waiting-minutes", "-5"]), /0 以上の数を指定してください/);
+});
+
 test("parseArgv: --no-reveal-login", () => {
   assert.equal(parseArgv([]).noRevealLogin, undefined);
   assert.equal(parseArgv(["--no-reveal-login"]).noRevealLogin, true);
@@ -89,6 +97,37 @@ test("loadConfig: exitOnQuota は引数または環境変数 NOTEBOOK_EXIT_ON_QU
     } else {
       delete process.env.NOTEBOOK_EXIT_ON_QUOTA;
     }
+  }
+});
+
+test("loadConfig: maxWaitingMinutes は exitOnQuota 時は既定 60、手動時は既定 0、引数や環境変数を反映", () => {
+  const prevEnv = process.env.PAPER_MAX_WAITING_MINUTES;
+  try {
+    delete process.env.PAPER_MAX_WAITING_MINUTES;
+
+    // 手動実行（exitOnQuota=false）は既定 0（無効）
+    const cfgManual = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work" });
+    assert.equal(cfgManual.maxWaitingMinutes, 0);
+
+    // exitOnQuota=true のときは既定 60 分
+    const cfgQuota = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work", exitOnQuota: true });
+    assert.equal(cfgQuota.maxWaitingMinutes, 60);
+
+    // 引数による明示指定（30 分）
+    const cfgExplicit = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work", exitOnQuota: true, maxWaitingMinutes: 30 });
+    assert.equal(cfgExplicit.maxWaitingMinutes, 30);
+
+    // 引数で 0 を指定して無効化
+    const cfgDisabled = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work", exitOnQuota: true, maxWaitingMinutes: 0 });
+    assert.equal(cfgDisabled.maxWaitingMinutes, 0);
+
+    // 環境変数 PAPER_MAX_WAITING_MINUTES
+    process.env.PAPER_MAX_WAITING_MINUTES = "45";
+    const cfgEnv = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work" });
+    assert.equal(cfgEnv.maxWaitingMinutes, 45);
+  } finally {
+    if (prevEnv !== undefined) process.env.PAPER_MAX_WAITING_MINUTES = prevEnv;
+    else delete process.env.PAPER_MAX_WAITING_MINUTES;
   }
 });
 

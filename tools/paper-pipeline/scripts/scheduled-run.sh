@@ -207,6 +207,8 @@ else
   npm start -- --headless --exit-on-quota --no-reveal-login >> "$LOG_FILE" 2>&1 || PIPELINE_EXIT=$?
   if [ "$PIPELINE_EXIT" -eq 15 ]; then
     log "注意: ログインまたは追加確認が必要です (終了コード: 15)。主人が画面付きモード等でログインを完了してください"
+  elif [ "$PIPELINE_EXIT" -eq 16 ]; then
+    log "生成待ちタイムアウトのため一時終了しました (終了コード: 16)。次回の定期実行で続きから再開します"
   else
     log "パイプラインが終了しました (終了コード: $PIPELINE_EXIT)"
   fi
