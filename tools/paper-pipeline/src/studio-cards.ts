@@ -1,3 +1,5 @@
+import { hasStudioStarted, isCompleted, type PaperState } from "./state.ts";
+
 /** Studio 出力カードの相対時刻。1時間超は「昨日」「2日前」になる。 */
 export const STUDIO_RELATIVE_TIME =
   /(?:\d+\s*(?:秒前|分前|時間前|日前|週間前|か月前|ヶ月前)|たった今|昨日|おととい|just now|\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?)\s+ago|yesterday)/i;
@@ -153,6 +155,21 @@ export function shouldAdoptStudioVideo(
     return true;
   }
   return false;
+}
+
+/**
+ * PaperState に応じて既存の動画カードを採用すべきか判定する。
+ * スライド等別ステージのキックオフ失敗（kickoffRetryStage !== "nlm-video"）では採用しない。
+ */
+export function shouldAdoptStudioVideoForState(
+  scan: VideoKickoffScan,
+  state?: PaperState,
+): boolean {
+  return shouldAdoptStudioVideo(scan, {
+    videoStarted: state ? hasStudioStarted(state, "nlm-video") : false,
+    kickoffFailed: Boolean(state?.kickoffRetryAt) && state?.kickoffRetryStage === "nlm-video",
+    completed: state ? isCompleted(state, "nlm-video") : false,
+  });
 }
 
 /** 生成タイルではなく、Studio に並んでいるスライド出力か */

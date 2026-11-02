@@ -502,9 +502,13 @@ async function main(): Promise<void> {
       applyKickoff(job, state, skip, cfg.studioGenerate);
       const stage = getPaperWaitingStage(state);
       const cooldownUntil = retryUntilMs(state);
-      const limitHint = state.lastError && /日次上限|後で生成/.test(state.lastError)
-        ? `（${state.lastError}）`
-        : "";
+      const limitHint =
+        cooldownUntil > Date.now() &&
+        state.kickoffRetryStage === stage &&
+        state.lastError &&
+        /日次上限|後で生成/.test(state.lastError)
+          ? `（${state.lastError}）`
+          : "";
       if (generationBlocked || cooldownUntil > Date.now()) {
         holdWaiting(track.giveUp, Date.now());
       } else if (noteWaiting(track.giveUp, stage, Date.now())) {

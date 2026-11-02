@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { emptyState } from "./state.ts";
 import {
   FLASHCARD_CARD,
   STUDIO_RELATIVE_TIME,
@@ -20,6 +21,7 @@ import {
   shouldKickoffSlides,
   shouldKickoffVideo,
   shouldAdoptStudioVideo,
+  shouldAdoptStudioVideoForState,
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
   isSlideDeckCardText,
@@ -132,6 +134,31 @@ test("shouldAdoptStudioVideo: 1本だけのショート動画（1:13 等）も�
   // 解説動画がある場合は無条件で採用する
   const explainerScan = scanStudioVideoOutputs(["subscriptions 5:00 · 解説 · 1 件のソース play_arrow"]);
   assert.equal(shouldAdoptStudioVideo(explainerScan), true);
+
+  // 他ステージ（スライド等）のエラーで動画のキックオフ失敗ではない場合（kickoffFailed: false）は採用しない
+  assert.equal(shouldAdoptStudioVideo(scan, { kickoffFailed: false, videoStarted: false, completed: false }), false);
+});
+
+test("shouldAdoptStudioVideoForState: スライド等別ステージのキックオフ失敗では単一ショート動画を採用しない", () => {
+  const card = "videocam 未読 優秀なAIがしれっとデータを破壊する理由 1:13 · 短め · 1 件のソース · 14 時間前 play_arrow more_";
+  const scan = scanStudioVideoOutputs([card]);
+
+  // 初期状態（未開始）
+  const state = emptyState({ filename: "test-paper.pdf", inboxPdfPath: "", paperDir: "" });
+  assert.equal(shouldAdoptStudioVideoForState(scan, state), false);
+
+  // スライドのキックオフ失敗時（kickoffRetryStage === "nlm-slides"）: 動画はまだ試行していないので採用しない
+  state.kickoffRetryAt = new Date(Date.now() + 60_000).toISOString();
+  state.kickoffRetryStage = "nlm-slides";
+  assert.equal(shouldAdoptStudioVideoForState(scan, state), false);
+
+  // クイズのキックオフ失敗時（kickoffRetryStage === "nlm-quiz"）も同様
+  state.kickoffRetryStage = "nlm-quiz";
+  assert.equal(shouldAdoptStudioVideoForState(scan, state), false);
+
+  // 動画のキックオフ失敗時（kickoffRetryStage === "nlm-video"）: 既存の 1 本を採用する
+  state.kickoffRetryStage = "nlm-video";
+  assert.equal(shouldAdoptStudioVideoForState(scan, state), true);
 });
 
 test("studioVideoGenerationDone: タイルだけでは生成完了にしない", () => {

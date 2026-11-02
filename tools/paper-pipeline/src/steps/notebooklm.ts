@@ -50,6 +50,7 @@ import {
   shouldKickoffSlides,
   shouldKickoffVideo,
   shouldAdoptStudioVideo,
+  shouldAdoptStudioVideoForState,
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
   isSlideDeckCardText,
@@ -1331,11 +1332,7 @@ async function peekStudioVideoOutputs(page: Page): Promise<VideoKickoffScan> {
 
 async function studioHasExplainerVideoOutput(page: Page, state?: PaperState): Promise<boolean> {
   const scan = await scanPageVideoOutputs(page);
-  const adopt = shouldAdoptStudioVideo(scan, {
-    videoStarted: state ? hasStudioStarted(state, "nlm-video") : false,
-    kickoffFailed: Boolean(state?.kickoffRetryAt),
-    completed: state ? isCompleted(state, "nlm-video") : false,
-  });
+  const adopt = shouldAdoptStudioVideoForState(scan, state);
   if (adopt) {
     if (scan.explainerCount === 0 && scan.shortCount > 0) {
       log(`既存動画（${formatVideoScan(scan)}）を採用し、MP4 を保存します`);
@@ -2369,6 +2366,7 @@ async function tryKickoffStudio(
     if (!state.kickoffRetryStage || state.kickoffRetryStage === stage) {
       state.kickoffRetryAt = "";
       state.kickoffRetryStage = "";
+      state.lastError = "";
     }
     saveState(state);
     return r;
