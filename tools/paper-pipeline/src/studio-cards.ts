@@ -133,6 +133,28 @@ export function studioVideoGenerationDone(scan: VideoKickoffScan): boolean {
   return scan.durationsSec.length > 0 && !shouldKickoffVideo(scan);
 }
 
+/**
+ * 既存の動画カード（1本だけのショートを含む）をMP4保存対象として採用すべきか判定する。
+ * - 解説動画（>=120s）がある場合は常に採用
+ * - ショートが2本以上ある場合は再生成不要なので採用
+ * - ショートが1本だけでも、生成開始試行済み/失敗クールダウン中/生成完了扱いの場合は採用
+ */
+export function shouldAdoptStudioVideo(
+  scan: VideoKickoffScan,
+  opts?: {
+    videoStarted?: boolean;
+    kickoffFailed?: boolean;
+    completed?: boolean;
+  },
+): boolean {
+  if (scan.explainerCount > 0) return true;
+  if (scan.shortCount >= 2) return true;
+  if (scan.shortCount > 0 && (opts?.videoStarted || opts?.kickoffFailed || opts?.completed)) {
+    return true;
+  }
+  return false;
+}
+
 /** 生成タイルではなく、Studio に並んでいるスライド出力か */
 export function isSlideDeckCardText(text: string): boolean {
   const t = text.replace(/\s+/g, " ").trim();

@@ -226,10 +226,10 @@ export function decideIdleAction(
     const elapsedMs = now - waitingSince;
     if (elapsedMs >= maxWaitingMinutes * 60_000) {
       const waitingPapers: WaitingPaperInfo[] = opts.jobs
-        .filter((j) => j.status === "ready" || j.status === "waiting")
+        .filter((j) => j.status === "waiting")
         .map((j) => ({
           filename: j.id,
-          stage: opts.getWaitingStage ? opts.getWaitingStage(j.id) : "nlm-video",
+          stage: opts.getWaitingStage ? opts.getWaitingStage(j.id) : "不明",
         }));
       const elapsedMinutes = Math.max(1, Math.round(elapsedMs / 60_000));
       return { action: "exit_waiting", waitingPapers, elapsedMinutes };
@@ -240,6 +240,28 @@ export function decideIdleAction(
     sleepMs: pick.sleepMs,
     generationBlocked: opts.generationBlocked,
   };
+}
+
+export function getPaperWaitingStage(state: PaperState): string {
+  return (
+    state.waitingFor ||
+    state.kickoffRetryStage ||
+    (state.completed.includes("nlm-upload") ? "nlm-video" : "nlm-upload")
+  );
+}
+
+export function detectProgress(
+  before: PaperState,
+  after: PaperState,
+  code: number,
+): boolean {
+  if (code === 0) return true;
+  if (after.completed.length > before.completed.length) return true;
+  if (!before.videoMp4Path && Boolean(after.videoMp4Path)) return true;
+  if (!before.slidePdfPath && Boolean(after.slidePdfPath)) return true;
+  if (!before.quizCsvPath && Boolean(after.quizCsvPath)) return true;
+  if (!before.vocabCsvPath && Boolean(after.vocabCsvPath)) return true;
+  return false;
 }
 
 export function formatExitOnWaitingMessage(
@@ -386,9 +408,9 @@ async function main(): Promise<void> {
           const t = tracks.get(filename);
           if (t) {
             const st = loadPaperState(t.item);
-            return st.waitingFor || "nlm-video";
+            return getPaperWaitingStage(st);
           }
-          return "nlm-video";
+          return "不明";
         },
       });
       if (decision?.action === "exit") {
@@ -440,29 +462,12 @@ async function main(): Promise<void> {
         : `オーケストレータ: worker を呼びます → ${track.item.filename}`,
     );
     const stateBefore = loadPaperState(track.item);
-    const completedBefore = stateBefore.completed.length;
-    const videoMp4Before = Boolean(stateBefore.videoMp4Path);
-    const slidePdfBefore = Boolean(stateBefore.slidePdfPath);
-    const quizBefore = Boolean(stateBefore.quizCsvPath);
-    const vocabBefore = Boolean(stateBefore.vocabCsvPath);
 
     const code = await runWorker(args);
     await sleep(CHROME_UNLOCK_MS);
 
     const stateAfter = loadPaperState(track.item);
-    const completedAfter = stateAfter.completed.length;
-    const videoMp4After = Boolean(stateAfter.videoMp4Path);
-    const slidePdfAfter = Boolean(stateAfter.slidePdfPath);
-    const quizAfter = Boolean(stateAfter.quizCsvPath);
-    const vocabAfter = Boolean(stateAfter.vocabCsvPath);
-
-    const progressMade =
-      code === 0 ||
-      completedAfter > completedBefore ||
-      (!videoMp4Before && videoMp4After) ||
-      (!slidePdfBefore && slidePdfAfter) ||
-      (!quizBefore && quizAfter) ||
-      (!vocabBefore && vocabAfter);
+    const progressMade = detectProgress(stateBefore, stateAfter, code);
 
     if (progressMade) {
       waitingSince = 0;
@@ -495,8 +500,11 @@ async function main(): Promise<void> {
     if (code === EXIT_WAITING) {
       const state = loadPaperState(track.item);
       applyKickoff(job, state, skip, cfg.studioGenerate);
-      const stage = state.waitingFor || "nlm-video";
+      const stage = getPaperWaitingStage(state);
       const cooldownUntil = retryUntilMs(state);
+      const limitHint = state.lastError && /日次上限|後で生成/.test(state.lastError)
+        ? `（${state.lastError}）`
+        : "";
       if (generationBlocked || cooldownUntil > Date.now()) {
         holdWaiting(track.giveUp, Date.now());
       } else if (noteWaiting(track.giveUp, stage, Date.now())) {
@@ -523,7 +531,7 @@ async function main(): Promise<void> {
         generationBlocked
           ? `オーケストレータ: ${track.item.filename} は生成待ち。利用量回復までは他の論文の SciSpace / Edu Share を進めます`
           : cooldownUntil > Date.now()
-            ? `オーケストレータ: ${track.item.filename} は ${stage} 開始クールダウン。他の論文の SciSpace / Edu Share を進めます`
+            ? `オーケストレータ: ${track.item.filename} は ${stage} 開始クールダウン${limitHint}。他の論文の SciSpace / Edu Share を進めます`
             : `オーケストレータ: ${track.item.filename} は ${stage} 待ち（指定項目は開始済み）。次の論文の生成へ`,
       );
       continue;

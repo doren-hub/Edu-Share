@@ -42,6 +42,8 @@ test("parseArgv: --max-waiting-minutes / --waiting-timeout-minutes", () => {
   assert.equal(parseArgv([]).maxWaitingMinutes, undefined);
   assert.equal(parseArgv(["--max-waiting-minutes", "45"]).maxWaitingMinutes, 45);
   assert.equal(parseArgv(["--waiting-timeout-minutes", "30"]).maxWaitingMinutes, 30);
+  assert.throws(() => parseArgv(["--max-waiting-minutes", "abc"]), /0 以上の数を指定してください/);
+  assert.throws(() => parseArgv(["--max-waiting-minutes", "-5"]), /0 以上の数を指定してください/);
 });
 
 test("parseArgv: --no-reveal-login", () => {
@@ -102,7 +104,6 @@ test("loadConfig: maxWaitingMinutes は exitOnQuota 時は既定 60、手動時�
   const prevEnv = process.env.PAPER_MAX_WAITING_MINUTES;
   try {
     delete process.env.PAPER_MAX_WAITING_MINUTES;
-    delete process.env.WAITING_TIMEOUT_MINUTES;
 
     // 手動実行（exitOnQuota=false）は既定 0（無効）
     const cfgManual = loadConfig({ inbox: "/tmp/inbox", work: "/tmp/work" });

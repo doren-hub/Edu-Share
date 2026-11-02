@@ -19,6 +19,7 @@ import {
   scanStudioVideoOutputs,
   shouldKickoffSlides,
   shouldKickoffVideo,
+  shouldAdoptStudioVideo,
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
   isSlideDeckCardText,
@@ -108,6 +109,29 @@ test("Issue #236: 「短め」表記の動画カード（1:13 · 短め 等）�
   assert.equal(scan.explainerCount, 0);
   assert.equal(shouldKickoffVideo(scan), false);
   assert.equal(studioVideoGenerationDone(scan), true);
+});
+
+test("shouldAdoptStudioVideo: 1本だけのショート動画（1:13 等）もキックオフ試行後や上限クールダウン中は採用する", () => {
+  const card = "videocam 未読 優秀なAIがしれっとデータを破壊する理由 1:13 · 短め · 1 件のソース · 14 時間前 play_arrow more_";
+  const scan = scanStudioVideoOutputs([card]);
+  assert.equal(scan.shortCount, 1);
+  assert.equal(scan.explainerCount, 0);
+
+  // 初回キックオフ前（未試行）は解説動画の生成を優先するためまだ採用しない
+  assert.equal(shouldAdoptStudioVideo(scan), false);
+
+  // 生成開始済み（videoStarted）なら既存の 1 本を採用する
+  assert.equal(shouldAdoptStudioVideo(scan, { videoStarted: true }), true);
+
+  // キックオフ失敗・上限等のクールダウン中（kickoffFailed）なら既存の 1 本を採用する
+  assert.equal(shouldAdoptStudioVideo(scan, { kickoffFailed: true }), true);
+
+  // 既に完了扱い（completed）なら採用する
+  assert.equal(shouldAdoptStudioVideo(scan, { completed: true }), true);
+
+  // 解説動画がある場合は無条件で採用する
+  const explainerScan = scanStudioVideoOutputs(["subscriptions 5:00 · 解説 · 1 件のソース play_arrow"]);
+  assert.equal(shouldAdoptStudioVideo(explainerScan), true);
 });
 
 test("studioVideoGenerationDone: タイルだけでは生成完了にしない", () => {

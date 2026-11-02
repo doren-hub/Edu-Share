@@ -4,13 +4,16 @@ import assert from "node:assert/strict";
 import {
   decideIdleAction,
   decideOrchestratorExitCode,
+  detectProgress,
   formatExitOnQuotaMessage,
   formatExitOnWaitingMessage,
+  getPaperWaitingStage,
   isMainModule,
   resolveWorkerSpawn,
   EXIT_WAITING_TIMEOUT,
 } from "./orchestrate.ts";
 import type { SchedJob } from "./schedule.ts";
+import { emptyState, type PaperState } from "./state.ts";
 import { EXIT_QUOTA, type NotebookQuotaPause } from "./notebook-quota.ts";
 import { EXIT_LOGIN_REQUIRED } from "./human.ts";
 
@@ -401,5 +404,68 @@ test("formatExitOnWaitingMessage: 待機中の論文と段階、経過時間を�
   assert.ok(msg.includes("60 分"), "経過分を含む");
   assert.ok(msg.includes("2607.07405v2.pdf (nlm-video)"), "論文名と段階を含む");
   assert.ok(msg.includes("2607.27250v1.pdf (nlm-video)"), "論文名と段階を含む");
+});
+
+test("detectProgress: 完了コードや成果物・完了段階の増加を進展と判定し、未変化の待機や失敗は偽を返す", () => {
+  const baseState: PaperState = emptyState({
+    filename: "test.pdf",
+    inboxPdfPath: "/inbox/test.pdf",
+    paperDir: "/work/test",
+  });
+  baseState.completed = ["nlm-upload"];
+
+  // code === 0 は進展
+  assert.equal(detectProgress(baseState, baseState, 0), true);
+
+  // 待機中（EXIT_WAITING）で状態変化なしは進展なし
+  assert.equal(detectProgress(baseState, baseState, 10), false);
+
+  // 失敗（code 1）で状態変化なしは進展なし
+  assert.equal(detectProgress(baseState, baseState, 1), false);
+
+  // 完了段階が増えたときは進展
+  const progressedCompleted: PaperState = {
+    ...baseState,
+    completed: ["nlm-upload", "nlm-slides"],
+  };
+  assert.equal(detectProgress(baseState, progressedCompleted, 10), true);
+
+  // videoMp4Path が新たに保存されたときは進展
+  const progressedVideo: PaperState = {
+    ...baseState,
+    videoMp4Path: "/work/test/video.mp4",
+  };
+  assert.equal(detectProgress(baseState, progressedVideo, 10), true);
+});
+
+test("getPaperWaitingStage: waitingFor, kickoffRetryStage, completed から適切な待機段階を返す", () => {
+  const mk = (over: Partial<PaperState>): PaperState => ({
+    ...emptyState({ filename: "a.pdf", inboxPdfPath: "", paperDir: "" }),
+    ...over,
+  });
+
+  // waitingFor があれば最優先
+  assert.equal(
+    getPaperWaitingStage(mk({ waitingFor: "nlm-quiz" })),
+    "nlm-quiz",
+  );
+
+  // kickoffRetryStage があれば次に優先
+  assert.equal(
+    getPaperWaitingStage(mk({ kickoffRetryStage: "nlm-slides" })),
+    "nlm-slides",
+  );
+
+  // アップロード済みなら nlm-video
+  assert.equal(
+    getPaperWaitingStage(mk({ completed: ["nlm-upload"] })),
+    "nlm-video",
+  );
+
+  // 未アップロードなら nlm-upload
+  assert.equal(
+    getPaperWaitingStage(mk({ completed: [] })),
+    "nlm-upload",
+  );
 });
 

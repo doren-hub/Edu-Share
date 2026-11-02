@@ -97,8 +97,12 @@ export function parseArgv(argv: string[]): CliOverrides {
     } else if (a === "--ignore-notebook-quota") out.ignoreNotebookQuota = true;
     else if (a === "--exit-on-quota") out.exitOnQuota = true;
     else if (a === "--max-waiting-minutes" || a === "--waiting-timeout-minutes") {
-      const v = Number(next());
-      if (Number.isFinite(v) && v >= 0) out.maxWaitingMinutes = v;
+      const raw = next();
+      const v = Number(raw);
+      if (!raw || !Number.isFinite(v) || v < 0) {
+        throw new Error(`${a} には 0 以上の数を指定してください`);
+      }
+      out.maxWaitingMinutes = v;
     } else if (a === "--no-reveal-login") out.noRevealLogin = true;
     else if (a === "--newest-first") out.newestFirst = true;
     else if (a === "--notebook-short-stop-percent") {
@@ -134,7 +138,7 @@ export function resolveHeaded(
 export function resolveMaxWaitingMinutes(
   override: number | undefined,
   exitOnQuota: boolean,
-  envValue: string | undefined = process.env.PAPER_MAX_WAITING_MINUTES ?? process.env.WAITING_TIMEOUT_MINUTES,
+  envValue: string | undefined = process.env.PAPER_MAX_WAITING_MINUTES,
 ): number {
   if (override !== undefined) return override;
   if (envValue !== undefined && envValue.trim() !== "") {

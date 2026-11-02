@@ -49,6 +49,7 @@ import {
   studioText,
   shouldKickoffSlides,
   shouldKickoffVideo,
+  shouldAdoptStudioVideo,
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
   isSlideDeckCardText,
@@ -1330,12 +1331,18 @@ async function peekStudioVideoOutputs(page: Page): Promise<VideoKickoffScan> {
 
 async function studioHasExplainerVideoOutput(page: Page, state?: PaperState): Promise<boolean> {
   const scan = await scanPageVideoOutputs(page);
-  if (scan.explainerCount > 0) return true;
-  if (scan.durationsSec.length > 0) {
-    if (!shouldKickoffVideo(scan) || (state && isCompleted(state, "nlm-video"))) {
+  const adopt = shouldAdoptStudioVideo(scan, {
+    videoStarted: state ? hasStudioStarted(state, "nlm-video") : false,
+    kickoffFailed: Boolean(state?.kickoffRetryAt),
+    completed: state ? isCompleted(state, "nlm-video") : false,
+  });
+  if (adopt) {
+    if (scan.explainerCount === 0 && scan.shortCount > 0) {
       log(`既存動画（${formatVideoScan(scan)}）を採用し、MP4 を保存します`);
-      return true;
     }
+    return true;
+  }
+  if (scan.shortCount > 0) {
     const sec = scan.durationsSec.find((s) => s < 120) ?? 0;
     const mm = Math.floor(sec / 60);
     const ss = String(sec % 60).padStart(2, "0");
@@ -2374,6 +2381,7 @@ async function tryKickoffStudio(
     warn(`${stage} の開始に失敗したので後でやり直します: ${msg}`);
     state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
     state.kickoffRetryStage = stage;
+    state.lastError = msg;
     saveState(state);
     return "skipped";
   }
