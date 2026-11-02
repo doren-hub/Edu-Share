@@ -5,8 +5,10 @@ import {
   decideIdleAction,
   decideOrchestratorExitCode,
   formatExitOnQuotaMessage,
+  formatExitOnWaitingMessage,
   isMainModule,
   resolveWorkerSpawn,
+  EXIT_WAITING_TIMEOUT,
 } from "./orchestrate.ts";
 import type { SchedJob } from "./schedule.ts";
 import { EXIT_QUOTA, type NotebookQuotaPause } from "./notebook-quota.ts";
@@ -260,5 +262,144 @@ test("decideOrchestratorExitCode: loginRequired が最優先で 15 を返し、e
     decideOrchestratorExitCode({ loginRequired: false, exitedOnQuota: false, failedCount: 0 }),
     0,
   );
+
+  // 生成待ちタイムアウト終了時は 16 (EXIT_WAITING_TIMEOUT)
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: false, exitedOnQuota: false, exitedOnWaitingTimeout: true, failedCount: 0 }),
+    EXIT_WAITING_TIMEOUT,
+  );
+  // ログイン切れは生成待ちタイムアウトより優先 (15)
+  assert.equal(
+    decideOrchestratorExitCode({ loginRequired: true, exitedOnQuota: false, exitedOnWaitingTimeout: true, failedCount: 0 }),
+    EXIT_LOGIN_REQUIRED,
+  );
+});
+
+test("decideIdleAction: maxWaitingMinutes 超過かつ収穫可能ジョブなしで終了 (exit_waiting)", () => {
+  const jobs = [
+    makeJob({ id: "paper1.pdf", status: "waiting", harvestable: false }),
+    makeJob({ id: "paper2.pdf", status: "waiting", harvestable: false }),
+    makeJob({ id: "done.pdf", status: "done", harvestable: false }),
+  ];
+
+  const now = Date.now();
+  const waitingSince = now - 65 * 60_000; // 65分前
+
+  const result = decideIdleAction(
+    { kind: "idle", sleepMs: 60_000 },
+    {
+      generationBlocked: false,
+      jobs,
+      exitOnQuota: false,
+      maxWaitingMinutes: 60,
+      waitingSince,
+      now,
+      getWaitingStage: (id) => (id === "paper1.pdf" ? "nlm-video" : "nlm-slides"),
+    },
+  );
+
+  assert.deepEqual(result, {
+    action: "exit_waiting",
+    waitingPapers: [
+      { filename: "paper1.pdf", stage: "nlm-video" },
+      { filename: "paper2.pdf", stage: "nlm-slides" },
+    ],
+    elapsedMinutes: 65,
+  });
+});
+
+test("decideIdleAction: maxWaitingMinutes 未満なら sleep を返す", () => {
+  const jobs = [
+    makeJob({ id: "paper1.pdf", status: "waiting", harvestable: false }),
+  ];
+
+  const now = Date.now();
+  const waitingSince = now - 30 * 60_000; // 30分前（しきい値 60 分未満）
+
+  const result = decideIdleAction(
+    { kind: "idle", sleepMs: 45_000 },
+    {
+      generationBlocked: false,
+      jobs,
+      exitOnQuota: false,
+      maxWaitingMinutes: 60,
+      waitingSince,
+      now,
+    },
+  );
+
+  assert.deepEqual(result, {
+    action: "sleep",
+    sleepMs: 45_000,
+    generationBlocked: false,
+  });
+});
+
+test("decideIdleAction: maxWaitingMinutes 超過でも収穫可能作業が残っていれば exit_waiting せず sleep", () => {
+  const jobs = [
+    makeJob({ id: "waiting.pdf", status: "waiting", harvestable: false }),
+    makeJob({ id: "harvest-ready.pdf", status: "ready", harvestable: true }),
+  ];
+
+  const now = Date.now();
+  const waitingSince = now - 70 * 60_000;
+
+  const result = decideIdleAction(
+    { kind: "idle", sleepMs: 10_000 },
+    {
+      generationBlocked: false,
+      jobs,
+      exitOnQuota: false,
+      maxWaitingMinutes: 60,
+      waitingSince,
+      now,
+    },
+  );
+
+  assert.deepEqual(result, {
+    action: "sleep",
+    sleepMs: 10_000,
+    generationBlocked: false,
+  });
+});
+
+test("decideIdleAction: maxWaitingMinutes が 0（無効）のときは時間超過でも sleep", () => {
+  const jobs = [
+    makeJob({ id: "waiting.pdf", status: "waiting", harvestable: false }),
+  ];
+
+  const now = Date.now();
+  const waitingSince = now - 120 * 60_000;
+
+  const result = decideIdleAction(
+    { kind: "idle", sleepMs: 30_000 },
+    {
+      generationBlocked: false,
+      jobs,
+      exitOnQuota: false,
+      maxWaitingMinutes: 0,
+      waitingSince,
+      now,
+    },
+  );
+
+  assert.deepEqual(result, {
+    action: "sleep",
+    sleepMs: 30_000,
+    generationBlocked: false,
+  });
+});
+
+test("formatExitOnWaitingMessage: 待機中の論文と段階、経過時間を出力する", () => {
+  const msg = formatExitOnWaitingMessage(
+    [
+      { filename: "2607.07405v2.pdf", stage: "nlm-video" },
+      { filename: "2607.27250v1.pdf", stage: "nlm-video" },
+    ],
+    60,
+  );
+  assert.ok(msg.includes("60 分"), "経過分を含む");
+  assert.ok(msg.includes("2607.07405v2.pdf (nlm-video)"), "論文名と段階を含む");
+  assert.ok(msg.includes("2607.27250v1.pdf (nlm-video)"), "論文名と段階を含む");
 });
 

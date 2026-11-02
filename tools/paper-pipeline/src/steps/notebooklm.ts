@@ -1161,6 +1161,11 @@ async function generateStudioItem(
   if (generated) log("Studio: 生成 をクリックしました");
   else {
     await logVisibleButtonNames(page);
+    const hasGenerateLater = await page.getByRole("button", { name: /後で生成|Generate later/i }).first().isVisible({ timeout: 0 }).catch(() => false);
+    if (hasGenerateLater) {
+      warn("Studio: 「後で生成」のみ表示されているため、NotebookLM の日次生成上限などの可能性があります");
+      throw new Error("Studio の生成ボタンを押せませんでした（「後で生成」のみ表示。日次上限などの可能性があります）");
+    }
     throw new Error("Studio の生成ボタンを押せませんでした（カスタマイズ画面の右下「生成」）");
   }
 
@@ -1301,7 +1306,7 @@ async function studioCardTexts(page: Page): Promise<string[]> {
     const card = stamps.nth(i).locator("xpath=ancestor::*[.//button][1]");
     add(await card.innerText({ timeout: 2_000 }).catch(() => ""));
   }
-  const durations = page.getByText(/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明)/);
+  const durations = page.getByText(/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明|短め|ショート|Short|Brief)/i);
   const d = Math.min(await durations.count().catch(() => 0), 8);
   for (let i = 0; i < d; i++) {
     const card = durations.nth(i).locator("xpath=ancestor::*[.//button][1]");
@@ -1323,10 +1328,14 @@ async function peekStudioVideoOutputs(page: Page): Promise<VideoKickoffScan> {
   return scanPageVideoOutputs(page);
 }
 
-async function studioHasExplainerVideoOutput(page: Page): Promise<boolean> {
+async function studioHasExplainerVideoOutput(page: Page, state?: PaperState): Promise<boolean> {
   const scan = await scanPageVideoOutputs(page);
   if (scan.explainerCount > 0) return true;
-  if (scan.shortCount > 0) {
+  if (scan.durationsSec.length > 0) {
+    if (!shouldKickoffVideo(scan) || (state && isCompleted(state, "nlm-video"))) {
+      log(`既存動画（${formatVideoScan(scan)}）を採用し、MP4 を保存します`);
+      return true;
+    }
     const sec = scan.durationsSec.find((s) => s < 120) ?? 0;
     const mm = Math.floor(sec / 60);
     const ss = String(sec % 60).padStart(2, "0");
@@ -1675,7 +1684,8 @@ async function clickExplainerCardOverflow(page: Page): Promise<boolean> {
           const t = (cur.innerText || "").replace(/\\s+/g, " ").trim();
           if (
             t.length <= 280 &&
-            /\\d{1,2}:\\d{2}\\s*·\\s*(解説|Explainer|説明)/.test(t) &&
+            (/\\d{1,2}:\\d{2}\\s*·\\s*(解説|Explainer|説明|短め|ショート|Short|Brief)/i.test(t) ||
+              (/\\b\\d{1,2}:\\d{2}\\b/.test(t) && /play_arrow|videocam/i.test(t))) &&
             !/ソースを削除|ソース名を変更|ソースを追加/.test(t) &&
             !(/\\btablet\\b|スライド資料|Slide deck/i.test(t))
           ) {
@@ -2422,7 +2432,7 @@ export async function collectReadyStudio(
   } else if (!ctx.skipVideoDownload) {
     try {
       await returnToStudioList(page);
-      if (await studioHasExplainerVideoOutput(page)) {
+      if (await studioHasExplainerVideoOutput(page, state)) {
         await dismissPointerBlockers(page);
         log("既存の Studio 動画から MP4 を保存します（再生せず、再生成しません）");
         await downloadStudioVideoMp4(page, videoDest);

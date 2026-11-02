@@ -72,7 +72,7 @@ export function detectStudioCardKind(text: string): StudioCardKind {
 }
 
 const EXPLAINER_DURATION =
-  /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明)\b/gi;
+  /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明|短め|ショート|Short|Brief)\b/gi;
 
 export type VideoKickoffScan = {
   durationsSec: number[];

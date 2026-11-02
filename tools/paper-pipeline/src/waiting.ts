@@ -2,6 +2,8 @@ import type { StageId } from "./state.ts";
 
 /** worker が生成待ちで Chrome を明け渡したときの終了コード */
 export const EXIT_WAITING = 10;
+/** オーケストレータが生成待ちタイムアウトで終了したときの終了コード */
+export const EXIT_WAITING_TIMEOUT = 16;
 
 export class GenerationWaitingError extends Error {
   constructor(readonly stage: StageId) {

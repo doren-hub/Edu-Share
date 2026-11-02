@@ -96,6 +96,20 @@ test("ショートが2本あるときはこれ以上作らない", () => {
   assert.equal(studioVideoGenerationDone(scan), true);
 });
 
+test("Issue #236: 「短め」表記の動画カード（1:13 · 短め 等）も動画出力として認識する", () => {
+  const card1 = "videocam 未読 コーディングAIがルールブックを活かせない理由 0:59 · 短め · 1 件のソース · 11 分前 play_arrow more_";
+  const card2 = "videocam 未読 AIに指示書を読ませても無駄な理由 1:17 · 短め · 1 件のソース · 33 分前 play_arrow more_vert";
+  assert.equal(isExplainerVideoCardText(card1), true);
+  assert.equal(isExplainerVideoCardText(card2), true);
+  assert.deepEqual(listVideoDurationsSec(card1), [59]);
+  assert.deepEqual(listVideoDurationsSec(card2), [77]);
+  const scan = scanStudioVideoOutputs([card1, card2]);
+  assert.equal(scan.shortCount, 2);
+  assert.equal(scan.explainerCount, 0);
+  assert.equal(shouldKickoffVideo(scan), false);
+  assert.equal(studioVideoGenerationDone(scan), true);
+});
+
 test("studioVideoGenerationDone: タイルだけでは生成完了にしない", () => {
   assert.equal(studioVideoGenerationDone(scanStudioVideoOutputs(["動画解説 chevron_forward"])), false);
 });

@@ -21,6 +21,7 @@ macOS の launchd を使って `paper-pipeline` を定期実行（例: 1 時間�
 4. **パイプラインの実行**
    - `npm start -- --headless --exit-on-quota --no-reveal-login` を実行します。
    - 枠が尽きるか進められる作業がなくなると、`--exit-on-quota` によりリセットを待たずにきりのいいところで終了し、次回の定期実行に備えます。
+   - 進められる作業がなく生成待ちだけが一定時間（既定 60 分、`--max-waiting-minutes` または環境変数 `PAPER_MAX_WAITING_MINUTES` で変更可）続いた場合も、きりのいいところで終了コード 16（`EXIT_WAITING_TIMEOUT`）で終了し、次回の定期実行で続きから進みます。
    - `--no-reveal-login` により、定期実行中にログインや追加確認が必要になった場合でも画面を開いて永久待機せず、Chrome を閉じて終了コード 15 で安全に終了します。
 
 ---
