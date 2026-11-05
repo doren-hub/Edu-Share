@@ -3,9 +3,9 @@ import { anthropicModel } from "./anthropic-config.ts";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { jsonrepair } from "jsonrepair";
 import type { AnswerMap, ClientQuestion, StoredQuestion } from "@/lib/types";
-import { csvMcHintTextForStripClient } from "@/lib/notebooklm-csv";
+import { csvMcHintTextForStripClient } from "./notebooklm-csv.ts";
 import type { QuizContextChunk } from "@/lib/quiz-chunk-coverage";
-import { excerptAppearsInJoined } from "@/lib/source-excerpt";
+import { excerptAppearsInJoined } from "./source-excerpt.ts";
 
 /** カンマ区切りで複数指定可（先頭から試し、503 等はリトライ後に次へ）。未設定時は 2.5 のみ。 */
 export function geminiModelCandidates(): string[] {
@@ -103,15 +103,22 @@ function resolveProvider(): LlmProvider {
   );
 }
 
+/** 最小限の API 境界。注入時はキー・プロバイダー設定なしで Anthropic 経路を使う。 */
+export interface QuizAnthropicClient {
+  messages: {
+    create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Pick<Anthropic.Message, "content">>;
+  };
+}
+
 async function generateText(params: {
   system?: string;
   user: string;
   maxTokens: number;
   temperature: number;
-}): Promise<string> {
-  const provider = resolveProvider();
+}, anthropicClient?: QuizAnthropicClient): Promise<string> {
+  const provider = anthropicClient ? "anthropic" : resolveProvider();
   if (provider === "anthropic") {
-    const client = new Anthropic({
+    const client = anthropicClient ?? new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY!.trim(),
     });
     let res;
@@ -384,7 +391,7 @@ export async function generateQuizFromContext(params: {
   contextChunks: QuizContextChunk[];
   documentType: "past_exam" | "paper";
   nonce: string;
-}): Promise<StoredQuestion[]> {
+}, anthropicClient?: QuizAnthropicClient): Promise<StoredQuestion[]> {
   const joined = params.contextChunks
     .map((c, i) => {
       const tag =
@@ -417,7 +424,7 @@ ${joined}`;
     user,
     maxTokens: 8192,
     temperature: 0.9,
-  });
+  }, anthropicClient);
 
   const parsed = extractJsonArray(text);
   if (!Array.isArray(parsed)) throw new Error("Expected JSON array");
@@ -499,7 +506,7 @@ export function stripForClient(questions: StoredQuestion[]): ClientQuestion[] {
 export async function gradeWithClaude(params: {
   questions: StoredQuestion[];
   answers: AnswerMap;
-}): Promise<{
+}, anthropicClient?: QuizAnthropicClient): Promise<{
   scoreMc: number;
   scoreEssay: number;
   scoreTotal: number;
@@ -524,7 +531,7 @@ export async function gradeWithClaude(params: {
     comment: string;
   }> = [];
 
-  const provider = resolveProvider();
+  const provider = anthropicClient ? "anthropic" : resolveProvider();
   const apiLabel = provider === "anthropic" ? "Claude API" : "Gemini API";
 
   for (const q of essays) {
@@ -545,7 +552,7 @@ export async function gradeWithClaude(params: {
         user: prompt,
         maxTokens: 400,
         temperature: 0.2,
-      });
+      }, anthropicClient);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       perEssay.push({
