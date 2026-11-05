@@ -1,8 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { anthropicModel } from "./anthropic-config.ts";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const anthropicModel =
-  process.env.ANTHROPIC_MODEL?.trim() || "claude-3-5-sonnet-20241022";
 
 const geminiRetryMax = Math.min(
   6,
@@ -88,9 +87,8 @@ export async function generateLlmText(params: {
       apiKey: process.env.ANTHROPIC_API_KEY!.trim(),
     });
     const res = await client.messages.create({
-      model: anthropicModel,
+      model: anthropicModel(),
       max_tokens: maxTokens,
-      temperature,
       ...(params.system
         ? { system: params.system, messages: [{ role: "user", content: params.user }] }
         : { messages: [{ role: "user", content: params.user }] }),
