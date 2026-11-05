@@ -354,14 +354,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           { status: 404 },
         );
       }
+      if (src.user_id !== user.id) {
+        return NextResponse.json({ error: "権限がありません" }, { status: 403 });
+      }
       if (src.test_id !== testId) {
         return NextResponse.json(
           { error: "別のテストのセッションです" },
           { status: 400 },
         );
-      }
-      if (src.user_id !== user.id) {
-        return NextResponse.json({ error: "権限がありません" }, { status: 403 });
       }
       const qj = src.questions_json;
       if (!Array.isArray(qj) || qj.length < 1) {

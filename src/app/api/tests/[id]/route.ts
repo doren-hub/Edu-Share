@@ -36,16 +36,6 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
   }
 
-  const body = await readBoundedJson(req, API_BODY_LIMITS.testPatch);
-  if (!body.ok) return body.response;
-  const parsed = patchSchema.safeParse(body.data);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "入力が不正です", details: parsed.error.flatten() },
-      { status: 400 },
-    );
-  }
-
   let admin;
   try {
     admin = createAdminClient();
@@ -71,6 +61,16 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json(
       { error: "このテストの情報を変更できるのはアップロードしたユーザーのみです" },
       { status: 403 },
+    );
+  }
+
+  const body = await readBoundedJson(req, API_BODY_LIMITS.testPatch);
+  if (!body.ok) return body.response;
+  const parsed = patchSchema.safeParse(body.data);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "入力が不正です", details: parsed.error.flatten() },
+      { status: 400 },
     );
   }
 

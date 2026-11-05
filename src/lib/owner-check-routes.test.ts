@@ -1,4 +1,4 @@
-// service role（RLS を迂回）で書き込む API の所有者確認テスト（Issue #219）。
+// service role（RLS を迂回）を使う API の所有者確認テスト（Issue #219・#243）。
 // Supabase・object-storage・取り込みはモックにし、未ログイン 401・他人 403 では
 // DB/R2 への書き込みや削除の関数が呼ばれないこと、本人なら成功することを確かめる。
 import assert from "node:assert/strict";
@@ -113,6 +113,7 @@ function harness(path: string, opts: { user: string | null; rows: Rows; extra?: 
       legacyNotebooklmVideoMp4StoragePath: (u: string, t: string) => `${u}/${t}-video.mp4`,
     },
     "@/lib/paper-industries": paperIndustries,
+    "@/lib/notebooklm": { NOTEBOOKLM_APP_URL: "https://notebook.invalid" },
     ...opts.extra?.(record),
   };
   // 認証・所有者確認を含む共通実装も実コードで読み込む。
@@ -174,6 +175,37 @@ const cases: Case[] = [
     params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-video-upload-${SESSION_ID}.mp4` }),
     ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
   },
+  ...(["slide", "video"] as const).flatMap((kind): Case[] => [
+    {
+      name: `material/${kind} POST`, path: `../app/api/tests/[id]/material/${kind}/route.ts`, method: "POST",
+      params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
+      ownerWrites: ["multipart", "r2:put", "r2:delete", "update:tests"],
+      extra: (record) => ({
+        "@/lib/multipart-file-stream": {
+          processMultipartFileUpload: async (_req: Request, _opts: unknown, upload: (stream: unknown) => Promise<void>) => {
+            await record("multipart")();
+            await upload(new Uint8Array());
+            return { ok: true };
+          },
+        },
+      }),
+    },
+    {
+      name: `material/${kind} DELETE`, path: `../app/api/tests/[id]/material/${kind}/route.ts`, method: "DELETE",
+      params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
+      ownerWrites: ["update:tests", "r2:delete"],
+    },
+  ]),
+  {
+    name: "tests summarize", path: "../app/api/tests/[id]/summarize/route.ts", method: "POST",
+    params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
+    ownerWrites: ["r2:read", "pdf:extract", "llm:summary"],
+    extra: (record) => ({
+      "@/lib/object-storage": { getObjectBytes: record("r2:read", new Uint8Array()) },
+      "@/lib/pdf-text-by-page": { extractPdfTextByPage: record("pdf:extract", ["本文"]) },
+      "@/lib/pdf-summary.ts": { summarizeByLlm: record("llm:summary", "要約") },
+    }),
+  },
   {
     name: "quiz DELETE", path: "../app/api/quiz/[sessionId]/route.ts", method: "DELETE", params: { sessionId: SESSION_ID },
     rows: (o) => ({ quiz_sessions: { id: SESSION_ID, user_id: o } }), request: json({}),
@@ -234,11 +266,85 @@ for (const c of cases) {
     assert.deepEqual(h.calls, []);
   });
 
+  test(`${c.name}: 存在しない ID では外部処理・書き込みをしない`, async () => {
+    const h = harness(c.path, { user: OWNER, rows: {}, extra: c.extra });
+    const res = await call(h);
+    // DELETE は既存の冪等な成功応答を維持する。
+    assert.equal(res.status, c.name === "quiz DELETE" ? 200 : 404);
+    if (c.name === "quiz DELETE") assert.deepEqual(await res.json(), { ok: true, deleted: false });
+    assert.deepEqual(h.writes, []);
+    assert.deepEqual(h.calls, []);
+  });
+
+  if (c.method === "POST" || c.method === "PATCH") {
+    if (!c.name.startsWith("tests start")) {
+      test(`${c.name}: 未認証・他人の不正な本文を解析しない`, async () => {
+        for (const user of [null, OTHER]) {
+          const h = run(user);
+          const req = new Request("https://unused.invalid/x", { method: c.method, body: "{" });
+          const res = await h.route[c.method](req, { params: Promise.resolve(c.params) });
+          assert.equal(res.status, user === null ? 401 : 403);
+          assert.equal(req.bodyUsed, false);
+          assert.deepEqual(h.writes, []);
+          assert.deepEqual(h.calls, []);
+        }
+      });
+    }
+  }
+
   test(`${c.name}: 本人なら成功する`, async () => {
     const h = run(OWNER);
     const res = await call(h);
     assert.equal(res.status, 200, await res.clone().text());
     assert.deepEqual(h.writes, c.ownerWrites);
+    assert.deepEqual(h.calls, []);
+  });
+}
+
+for (const name of ["tests PATCH", "quiz submit"]) {
+  test(`${name}: 本人の不正な JSON は所有者確認後に拒否する`, async () => {
+    const c = cases.find((c) => c.name === name)!;
+    const h = harness(c.path, { user: OWNER, rows: c.rows(OWNER), extra: c.extra });
+    const req = new Request("https://unused.invalid/x", { method: c.method, body: "{" });
+    const res = await h.route[c.method](req, { params: Promise.resolve(c.params) });
+    assert.equal(res.status, 400);
+    assert.equal(req.bodyUsed, true);
+    assert.deepEqual(h.writes, []);
+    assert.deepEqual(h.calls, []);
+  });
+}
+
+test("再出題: 他人のセッションは教材との関連検査より先に拒否する", async () => {
+  const c = cases.find((c) => c.name.startsWith("tests start"))!;
+  const rows = c.rows(OTHER);
+  rows.quiz_sessions = { ...rows.quiz_sessions, test_id: "another-test" };
+  const h = harness(c.path, { user: OWNER, rows, extra: c.extra });
+  const res = await h.route.POST(c.request(), { params: Promise.resolve(c.params) });
+  assert.equal(res.status, 403);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.calls, []);
+});
+
+test("再出題: 共有教材でも本人のセッションなら利用できる", async () => {
+  const c = cases.find((c) => c.name.startsWith("tests start"))!;
+  const h = harness(c.path, { user: OTHER, rows: c.rows(OTHER), extra: c.extra });
+  const res = await h.route.POST(c.request(), { params: Promise.resolve(c.params) });
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.deepEqual(h.writes, c.ownerWrites);
+  assert.deepEqual(h.calls, []);
+});
+
+for (const [path, method, status] of [
+  ["../app/api/tests/[id]/pdf/route.ts", "GET", 307],
+  ["../app/api/tests/[id]/notebooklm/prepare/route.ts", "POST", 200],
+] as const) {
+  test(`${path}: 共有 PDF はログイン済みの他ユーザーも閲覧できる`, async () => {
+    const h = harness(path, { user: OTHER, rows: { tests: testRow(OWNER) } });
+    const res = await h.route[method](new Request("https://unused.invalid/x", { method }), {
+      params: Promise.resolve({ id: TEST_ID }),
+    });
+    assert.equal(res.status, status);
+    assert.deepEqual(h.writes, []);
     assert.deepEqual(h.calls, []);
   });
 }
