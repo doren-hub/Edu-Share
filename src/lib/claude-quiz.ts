@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { untrustedDocumentInstruction, wrapUntrustedDocument } from "./untrusted-document.ts";
 import { anthropicModel } from "./anthropic-config.ts";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { jsonrepair } from "jsonrepair";
@@ -402,13 +403,14 @@ export async function generateQuizFromContext(params: {
   const joinedForValidate = joined.replace(/---\s*抜粋\s*\d+\s*---\s*/g, "\n");
 
   const system = `あなたは教材設計の専門家です。与えられた抜粋のみを根拠に、日本語のテスト問題を生成します。
+${untrustedDocumentInstruction}
 厳守:
 - 参考文献・文献一覧・References / Bibliography に相当する段落からは設問を作らない。本文のみを根拠にする（該当箇所が抜粋に含まれていても無視する）。
 - 抜粋に無い事実を捏造しない（不足なら「抜粋の範囲では判断できない」系の設問にする）
 - 選択式は4択、正解は1つ。correctIndexは0始まり。
 - 記述式は短答〜中程度（200字以内想定）で採点可能な明確な問い。
 - 設問タイプをランダムにミックス（毎回バラつかせる）。合計6〜9問。
-- 各設問に必須フィールド sourceExcerpt を付ける。値は「抜粋」ブロック（--- 抜粋 N --- 以降の本文）から、設問の根拠となった部分を**改変せずに連続コピー**した文字列（最低16文字。可能なら80文字以上推奨）。空白の増減のみ可。
+- 各設問に必須フィールド sourceExcerpt を付ける。値は JSON を復号した「抜粋」ブロック（--- 抜粋 N --- 以降の本文）から、設問の根拠となった部分を**改変せずに連続コピー**した文字列（最低16文字。可能なら80文字以上推奨）。空白の増減のみ可。
 - 出力はJSON配列のみ（前後に説明文を付けない）。各要素は次のいずれかの形:
   {"id":"q1","type":"multiple_choice","sourceExcerpt":"（抜粋からの原文コピー）","prompt":"...","options":["A","B","C","D"],"correctIndex":0}
   {"id":"e1","type":"essay","sourceExcerpt":"（抜粋からの原文コピー）","prompt":"...","referenceAnswer":"採点用の模範解答（短く）"}`;
@@ -417,7 +419,7 @@ export async function generateQuizFromContext(params: {
 session_entropy: ${params.nonce}
 
 抜粋:
-${joined}`;
+${wrapUntrustedDocument(joined)}`;
 
   const text = await generateText({
     system,
@@ -542,13 +544,12 @@ export async function gradeWithClaude(params: {
     const prompt = `次の記述式問題を採点してください。0〜10の整数点。簡潔な講評（日本語1〜3文）。
 出力はJSONのみ: {"score":0,"comment":"..."}
 
-問題: ${q.prompt}
-模範解答（参考）: ${q.referenceAnswer ?? "（なし）"}
-受験者の回答: ${answerText || "（未回答）"}`;
+${wrapUntrustedDocument(`問題: ${q.prompt}\n模範解答（参考）: ${q.referenceAnswer ?? "（なし）"}\n受験者の回答: ${answerText || "（未回答）"}`)}`;
 
     let text: string;
     try {
       text = await generateText({
+        system: untrustedDocumentInstruction,
         user: prompt,
         maxTokens: 400,
         temperature: 0.2,

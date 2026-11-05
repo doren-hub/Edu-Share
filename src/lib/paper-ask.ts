@@ -1,4 +1,5 @@
 import { jsonrepair } from "jsonrepair";
+import { untrustedDocumentInstruction, wrapUntrustedDocument } from "./untrusted-document.ts";
 
 export type PaperAskChunk = {
   id: string;
@@ -108,6 +109,7 @@ export function buildPaperAskPrompt(params: {
 
   const system = [
     "あなたは学術論文の内容について質問に答える専門アシスタントです。",
+    untrustedDocumentInstruction,
     "以下の規則を厳格に遵守してください：",
     "1. 回答の根拠は、提供された【論文の本文チャンク】の記述のみに限られます。外部の知識や推測を絶対に混ぜないでください。",
     "2. 質問された内容が論文の本文チャンクに書かれていない場合は、必ず「論文には書かれていません」と答えてください。",
@@ -142,7 +144,7 @@ export function buildPaperAskPrompt(params: {
 
   const user = [
     "【論文の本文チャンク】",
-    chunkBlocks,
+    wrapUntrustedDocument(chunkBlocks),
     "",
     historyBlocks,
     "【質問】",
