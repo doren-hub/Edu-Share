@@ -26,13 +26,6 @@ export async function POST(
   const limited = llmRateLimitResponse("quizSubmit", user.id);
   if (limited) return limited;
 
-  const body = await readBoundedJson(req, API_BODY_LIMITS.quizSubmit);
-  if (!body.ok) return body.response;
-  const parsed = bodySchema.safeParse(body.data);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "入力が不正です" }, { status: 400 });
-  }
-
   const admin = createAdminClient();
   const { data: row, error } = await admin
     .from("quiz_sessions")
@@ -45,6 +38,13 @@ export async function POST(
   }
   if (row.user_id !== user.id) {
     return NextResponse.json({ error: "権限がありません" }, { status: 403 });
+  }
+
+  const body = await readBoundedJson(req, API_BODY_LIMITS.quizSubmit);
+  if (!body.ok) return body.response;
+  const parsed = bodySchema.safeParse(body.data);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "入力が不正です" }, { status: 400 });
   }
 
   const questions = row.questions_json as StoredQuestion[];
