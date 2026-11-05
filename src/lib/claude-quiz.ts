@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { anthropicModel } from "./anthropic-config.ts";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { jsonrepair } from "jsonrepair";
 import type { AnswerMap, ClientQuestion, StoredQuestion } from "@/lib/types";
@@ -6,8 +7,6 @@ import { csvMcHintTextForStripClient } from "@/lib/notebooklm-csv";
 import type { QuizContextChunk } from "@/lib/quiz-chunk-coverage";
 import { excerptAppearsInJoined } from "@/lib/source-excerpt";
 
-const anthropicModel =
-  process.env.ANTHROPIC_MODEL?.trim() || "claude-3-5-sonnet-20241022";
 /** カンマ区切りで複数指定可（先頭から試し、503 等はリトライ後に次へ）。未設定時は 2.5 のみ。 */
 export function geminiModelCandidates(): string[] {
   const raw = process.env.GEMINI_MODEL?.trim();
@@ -118,9 +117,8 @@ async function generateText(params: {
     let res;
     try {
       res = await client.messages.create({
-        model: anthropicModel,
+        model: anthropicModel(),
         max_tokens: params.maxTokens,
-        temperature: params.temperature,
         ...(params.system
           ? { system: params.system, messages: [{ role: "user", content: params.user }] }
           : { messages: [{ role: "user", content: params.user }] }),
@@ -128,7 +126,7 @@ async function generateText(params: {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(
-        `Claude API の呼び出しに失敗しました（モデル名・APIキー・利用枠を確認）。model=${anthropicModel} / ${msg}`,
+        `Claude API の呼び出しに失敗しました（モデル名・APIキー・利用枠を確認）。model=${anthropicModel()} / ${msg}`,
       );
     }
     return res.content

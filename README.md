@@ -108,7 +108,7 @@ cp .env.example .env.local
 
 ### 3. LLM
 
-`ANTHROPIC_API_KEY` か `GEMINI_API_KEY` のどちらか一方を設定します。両方ある場合は Anthropic が使われ、Gemini を優先したいときは `LLM_PROVIDER=gemini` を指定します。モデル名や再試行回数の指定は [.env.example](.env.example) のコメントを参照してください。
+`ANTHROPIC_API_KEY` か `GEMINI_API_KEY` のどちらか一方を設定します。両方ある場合は Anthropic が使われ、Gemini を優先したいときは `LLM_PROVIDER=gemini` を指定します。Anthropic の既定モデルは `claude-sonnet-5-5` です。`src/lib/anthropic-config.ts` で設定を一元管理し、出題・記述採点・テキスト生成から共通で使います。`ANTHROPIC_MODEL` にモデル名を指定すると上書きできます（前後の空白は除去、未設定・空文字・空白のみなら既定値）。Anthropic には `temperature` を送信しません（Sonnet 5.5 では非対応）。モデル名や再試行回数の指定は [.env.example](.env.example) のコメントを参照してください。
 
 `OPENAI_API_KEY` は任意です。未設定のときはベクトル検索を行わず、チャンクをランダムに選んで出題します。
 
