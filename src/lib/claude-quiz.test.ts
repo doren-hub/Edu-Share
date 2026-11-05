@@ -15,11 +15,13 @@ const quizParams = {
   nonce: "test-nonce",
 };
 const questions: StoredQuestion[] = [
-  { id: "q1", type: "multiple_choice", prompt: "正解は？", options: ["A", "B"], correctIndex: 1 },
+  { id: "q1", type: "multiple_choice", prompt: "正解は？", options: ["A", "B", "C", "D"], correctIndex: 1 },
   { id: "e1", type: "essay", prompt: "光合成を説明", referenceAnswer: excerpt },
 ];
 
-function fakeClient(replies: Array<string | Error>) {
+type ReplyContent = Awaited<ReturnType<QuizAnthropicClient["messages"]["create"]>>["content"];
+
+function fakeClient(replies: Array<string | Error | ReplyContent>) {
   const calls: Parameters<QuizAnthropicClient["messages"]["create"]>[0][] = [];
   const client: QuizAnthropicClient = {
     messages: {
@@ -28,6 +30,7 @@ function fakeClient(replies: Array<string | Error>) {
         assert.ok(replies.length, "unexpected API call");
         const reply = replies.shift()!;
         if (reply instanceof Error) throw reply;
+        if (Array.isArray(reply)) return { content: reply };
         // 複数の text ブロックを結合する実経路も通す。
         const split = Math.floor(reply.length / 2);
         return { content: [
@@ -148,4 +151,66 @@ test("採点: PDF由来の設問・模範解答と受験者回答を資料とし
   const user = String(f.calls[0].messages[0].content);
   const data = JSON.parse(user.slice(user.indexOf('{"untrusted_document":')));
   assert.equal(data.untrusted_document, `問題: ${hostile}\n模範解答（参考）: ${hostile}\n受験者の回答: ${hostile}`);
+});
+
+function toolReply(input: unknown, name = "submit_quiz"): ReplyContent {
+  return [
+    { type: "text", text: "設問を提出します", citations: null },
+    { type: "tool_use", id: "tool-test", name, input },
+  ];
+}
+
+test("出題: 強制ツールの入力を優先し、両形式と原文・ページを検証する", async () => {
+  const valid = questions.map((q) => ({ ...q, sourceExcerpt: excerpt }));
+  const f = fakeClient([toolReply({ questions: valid })]);
+  assert.deepEqual(await generateQuizFromContext(quizParams, f.client),
+    valid.map((q) => ({ ...q, sourcePdfPage: 3 })));
+  assert.deepEqual(f.calls[0].tool_choice, { type: "tool", name: "submit_quiz" });
+  const tool = f.calls[0].tools![0];
+  assert.ok("input_schema" in tool);
+  const schema = tool.input_schema;
+  assert.equal(schema.type, "object");
+  assert.deepEqual(schema.required, ["questions"]);
+  assert.ok(schema.properties && typeof schema.properties === "object" && "questions" in schema.properties);
+});
+
+test("出題: ツールとテキスト予備経路で同じ不正な設問を除外し、正解を丸めない", async () => {
+  const valid = { ...questions[0], sourceExcerpt: excerpt };
+  const invalid = [
+    { ...valid, id: "fraction", correctIndex: 1.5 },
+    { ...valid, id: "negative", correctIndex: -1 },
+    { ...valid, id: "overflow", correctIndex: 4 },
+    { ...valid, id: "string-index", correctIndex: "1" },
+    { ...valid, id: "few-options", options: ["A", "B"] },
+    { ...valid, id: "blank-option", options: ["A", "B", "C", " "] },
+    { ...valid, id: "blank-prompt", prompt: " " },
+    { ...valid, id: " " },
+    { ...valid, id: "source", sourceExcerpt: "教材に存在しない根拠として捏造された文章です。" },
+    { ...valid, id: "short-source", sourceExcerpt: "光合成" },
+    { ...valid, id: "wrong-type", type: "unknown" },
+    { ...questions[1], sourceExcerpt: excerpt, referenceAnswer: 42 },
+    null,
+  ];
+  for (const reply of [toolReply({ questions: [valid, ...invalid, valid] }), JSON.stringify([valid, ...invalid, valid])]) {
+    const f = fakeClient([reply]);
+    assert.deepEqual(await generateQuizFromContext(quizParams, f.client), [{ ...valid, sourcePdfPage: 3 }]);
+  }
+});
+
+test("出題: 不正なツール入力・名前・複数呼び出しをテキストで救済しない", async () => {
+  for (const reply of [
+    toolReply(null), toolReply({}), toolReply({ questions: {} }),
+    toolReply({ questions: [] }, "wrong_tool"),
+    [...toolReply({ questions: [] }), ...toolReply({ questions: [] })],
+  ]) {
+    reply.push({ type: "text", text: JSON.stringify([{ ...questions[0], sourceExcerpt: excerpt }]), citations: null });
+    await assert.rejects(generateQuizFromContext(quizParams, fakeClient([reply]).client), /ツール/);
+  }
+});
+
+test("採点: 出題ツールを付けずに従来のテキスト採点を維持する", async () => {
+  const f = fakeClient(['{"score":5,"comment":"ok"}']);
+  await gradeWithClaude({ questions, answers: {} }, f.client);
+  assert.equal(f.calls[0].tools, undefined);
+  assert.equal(f.calls[0].tool_choice, undefined);
 });
