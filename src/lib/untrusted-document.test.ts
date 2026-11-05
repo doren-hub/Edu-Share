@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { wrapUntrustedDocument } from "./untrusted-document.ts";
@@ -39,4 +40,14 @@ test("論文Q&A: 全チャンクを包装し、質問は資料の外に置く", 
   for (const chunk of chunks) assert.ok(data.untrusted_document.includes(chunk.content));
   assert.ok(!data.untrusted_document.includes("何を述べていますか？"));
   assert.ok(prompt.user.includes("【質問】\n何を述べていますか？"));
+});
+
+// ルートが独自の未包装プロンプトへ戻る回帰を検出する。DB/R2を呼び出さない。
+test("両方のPDF要約APIが検証済みの共通モデル境界を使う", () => {
+  for (const route of ["upload", "[id]"]) {
+    const source = readFileSync(new URL(`../app/api/tests/${route}/summarize/route.ts`, import.meta.url), "utf8");
+    assert.match(source, /import \{ summarizeByLlm \} from "@\/lib\/pdf-summary\.ts"/);
+    assert.match(source, /await summarizeByLlm\(raw\)/);
+    assert.doesNotMatch(source, /generateLlmText|generateContent|messages\.create|function summarizeByLlm/);
+  }
 });

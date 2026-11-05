@@ -1,5 +1,5 @@
-import { untrustedDocumentInstruction, wrapUntrustedDocument } from "./untrusted-document.ts";
 import Anthropic from "@anthropic-ai/sdk";
+import { untrustedDocumentInstruction, wrapUntrustedDocument } from "./untrusted-document.ts";
 import { anthropicModel } from "./anthropic-config.ts";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { jsonrepair } from "jsonrepair";
