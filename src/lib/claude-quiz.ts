@@ -3,6 +3,7 @@ import { untrustedDocumentInstruction, wrapUntrustedDocument } from "./untrusted
 import { anthropicModel } from "./anthropic-config.ts";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { jsonrepair } from "jsonrepair";
+import { generatedQuestionSchema, quizTool } from "./quiz-output-schema.ts";
 import type { AnswerMap, ClientQuestion, StoredQuestion } from "@/lib/types";
 import { csvMcHintTextForStripClient } from "./notebooklm-csv.ts";
 import type { QuizContextChunk } from "@/lib/quiz-chunk-coverage";
@@ -111,12 +112,13 @@ export interface QuizAnthropicClient {
   };
 }
 
-async function generateText(params: {
+async function generateResponse(params: {
   system?: string;
   user: string;
   maxTokens: number;
   temperature: number;
-}, anthropicClient?: QuizAnthropicClient): Promise<string> {
+  quiz?: boolean;
+}, anthropicClient?: QuizAnthropicClient): Promise<{ text: string; toolInput?: unknown }> {
   const provider = anthropicClient ? "anthropic" : resolveProvider();
   if (provider === "anthropic") {
     const client = anthropicClient ?? new Anthropic({
@@ -127,6 +129,7 @@ async function generateText(params: {
       res = await client.messages.create({
         model: anthropicModel(),
         max_tokens: params.maxTokens,
+        ...(params.quiz ? { tools: [quizTool], tool_choice: { type: "tool" as const, name: quizTool.name } } : {}),
         ...(params.system
           ? { system: params.system, messages: [{ role: "user", content: params.user }] }
           : { messages: [{ role: "user", content: params.user }] }),
@@ -137,18 +140,33 @@ async function generateText(params: {
         `Claude API の呼び出しに失敗しました（モデル名・APIキー・利用枠を確認）。model=${anthropicModel()} / ${msg}`,
       );
     }
-    return res.content
+    if (params.quiz) {
+      const tools = res.content.filter((b) => b.type === "tool_use");
+      if (tools.length) {
+        if (tools.length !== 1 || tools[0]!.name !== quizTool.name) {
+          throw new Error("LLM の出題ツール応答が不正です");
+        }
+        return { text: "", toolInput: tools[0]!.input };
+      }
+    }
+    return { text: res.content
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("")
-      .trim();
+      .trim() };
   }
 
-  return callGeminiText({
+  return { text: await callGeminiText({
     system: params.system,
     user: params.user,
     maxTokens: params.maxTokens,
     temperature: params.temperature,
-  });
+  }) };
+}
+
+async function generateText(params: {
+  system?: string; user: string; maxTokens: number; temperature: number;
+}, anthropicClient?: QuizAnthropicClient): Promise<string> {
+  return (await generateResponse(params, anthropicClient)).text;
 }
 
 export async function callGeminiText(params: {
@@ -291,6 +309,14 @@ function extractJsonArray(text: string): unknown {
   push(fromBracket);
   push(stripJsonNoise(t));
 
+  // Valid JSON never needs repair; only malformed legacy text reaches it.
+  for (const raw of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* Try the next extraction before repairing. */ }
+  }
+
   const suffixes = ["", "]", "}]", '"}]', '"]}', '"}]}', '"]}]}', '"}}]'];
 
   let lastPrimary = "";
@@ -327,40 +353,6 @@ function extractJsonArray(text: string): unknown {
   const hint = lastRepair || lastPrimary || "unknown";
   throw new Error(
     `LLM の JSON の解析に失敗しました（${hint}）。応答の先頭 200 文字: ${preview}`,
-  );
-}
-
-function isMcq(x: unknown): x is {
-  id: string;
-  type: "multiple_choice";
-  prompt: string;
-  options: string[];
-  correctIndex: number;
-} {
-  if (!x || typeof x !== "object") return false;
-  const o = x as Record<string, unknown>;
-  return (
-    o.type === "multiple_choice" &&
-    typeof o.id === "string" &&
-    typeof o.prompt === "string" &&
-    Array.isArray(o.options) &&
-    o.options.every((t) => typeof t === "string") &&
-    typeof o.correctIndex === "number"
-  );
-}
-
-function isEssay(x: unknown): x is {
-  id: string;
-  type: "essay";
-  prompt: string;
-  referenceAnswer?: string;
-} {
-  if (!x || typeof x !== "object") return false;
-  const o = x as Record<string, unknown>;
-  return (
-    o.type === "essay" &&
-    typeof o.id === "string" &&
-    typeof o.prompt === "string"
   );
 }
 
@@ -411,7 +403,7 @@ ${untrustedDocumentInstruction}
 - 記述式は短答〜中程度（200字以内想定）で採点可能な明確な問い。
 - 設問タイプをランダムにミックス（毎回バラつかせる）。合計6〜9問。
 - 各設問に必須フィールド sourceExcerpt を付ける。値は JSON を復号した「抜粋」ブロック（--- 抜粋 N --- 以降の本文）から、設問の根拠となった部分を**改変せずに連続コピー**した文字列（最低16文字。可能なら80文字以上推奨）。空白の増減のみ可。
-- 出力はJSON配列のみ（前後に説明文を付けない）。各要素は次のいずれかの形:
+- 出題ツールがある場合は submit_quiz の questions に設問配列を渡す。ツールがない場合はJSON配列のみ（前後に説明文を付けない）。各要素は次のいずれかの形:
   {"id":"q1","type":"multiple_choice","sourceExcerpt":"（抜粋からの原文コピー）","prompt":"...","options":["A","B","C","D"],"correctIndex":0}
   {"id":"e1","type":"essay","sourceExcerpt":"（抜粋からの原文コピー）","prompt":"...","referenceAnswer":"採点用の模範解答（短く）"}`;
 
@@ -421,39 +413,48 @@ session_entropy: ${params.nonce}
 抜粋:
 ${wrapUntrustedDocument(joined)}`;
 
-  const text = await generateText({
+  const response = await generateResponse({
+    quiz: true,
     system,
     user,
     maxTokens: 8192,
     temperature: 0.9,
   }, anthropicClient);
 
-  const parsed = extractJsonArray(text);
+  // A present but invalid tool payload must never be rescued by accompanying text.
+  let parsed: unknown;
+  if ("toolInput" in response) {
+    const input = response.toolInput;
+    if (!input || typeof input !== "object" || !("questions" in input) || !Array.isArray(input.questions)) {
+      throw new Error("LLM の出題ツール入力に questions 配列がありません");
+    }
+    parsed = input.questions;
+  } else {
+    // Gemini and legacy text-only responses retain the repair fallback.
+    parsed = extractJsonArray(response.text);
+  }
   if (!Array.isArray(parsed)) throw new Error("Expected JSON array");
 
   const out: StoredQuestion[] = [];
-  for (const item of parsed) {
-    if (isMcq(item)) {
-      const opts = item.options.map((s) => s.trim()).filter(Boolean);
-      if (opts.length < 2) continue;
-      const rawEx = (item as { sourceExcerpt?: unknown }).sourceExcerpt;
-      const sourceExcerpt =
-        typeof rawEx === "string" ? rawEx.replace(/\s+/g, " ").trim() : "";
-      if (!excerptAppearsInJoined(sourceExcerpt, joinedForValidate)) continue;
-      const idx = Math.min(Math.max(0, item.correctIndex), opts.length - 1);
+  const ids = new Set<string>();
+  for (const rawItem of parsed) {
+    const validation = generatedQuestionSchema.safeParse(rawItem);
+    if (!validation.success) continue;
+    const item = validation.data;
+    if (ids.has(item.id)) continue;
+    const sourceExcerpt = item.sourceExcerpt.replace(/\s+/g, " ").trim();
+    if (!excerptAppearsInJoined(sourceExcerpt, joinedForValidate)) continue;
+    ids.add(item.id);
+    if (item.type === "multiple_choice") {
       out.push({
         id: item.id,
         type: "multiple_choice",
         prompt: item.prompt,
-        options: opts,
-        correctIndex: idx,
+        options: item.options,
+        correctIndex: item.correctIndex,
         sourceExcerpt,
       });
-    } else if (isEssay(item)) {
-      const rawEx = (item as { sourceExcerpt?: unknown }).sourceExcerpt;
-      const sourceExcerpt =
-        typeof rawEx === "string" ? rawEx.replace(/\s+/g, " ").trim() : "";
-      if (!excerptAppearsInJoined(sourceExcerpt, joinedForValidate)) continue;
+    } else {
       out.push({
         id: item.id,
         type: "essay",
