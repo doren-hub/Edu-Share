@@ -118,12 +118,20 @@ async function generateResponse(params: {
   maxTokens: number;
   temperature: number;
   quiz?: boolean;
+  cacheableDocument?: string;
 }, anthropicClient?: QuizAnthropicClient): Promise<{ text: string; toolInput?: unknown }> {
   const provider = anthropicClient ? "anthropic" : resolveProvider();
   if (provider === "anthropic") {
     const client = anthropicClient ?? new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY!.trim(),
     });
+    // キャッシュはブロック末尾までの prefix に一致するため、nonce より前に資料を置く。
+    const content: string | Anthropic.TextBlockParam[] = params.cacheableDocument
+      ? [
+          { type: "text", text: params.cacheableDocument, cache_control: { type: "ephemeral" } },
+          { type: "text", text: params.user },
+        ]
+      : params.user;
     let res;
     try {
       res = await client.messages.create({
@@ -131,8 +139,8 @@ async function generateResponse(params: {
         max_tokens: params.maxTokens,
         ...(params.quiz ? { tools: [quizTool], tool_choice: { type: "tool" as const, name: quizTool.name } } : {}),
         ...(params.system
-          ? { system: params.system, messages: [{ role: "user", content: params.user }] }
-          : { messages: [{ role: "user", content: params.user }] }),
+          ? { system: params.system, messages: [{ role: "user", content }] }
+          : { messages: [{ role: "user", content }] }),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -157,7 +165,7 @@ async function generateResponse(params: {
 
   return { text: await callGeminiText({
     system: params.system,
-    user: params.user,
+    user: params.cacheableDocument ? `${params.user}\n\n${params.cacheableDocument}` : params.user,
     maxTokens: params.maxTokens,
     temperature: params.temperature,
   }) };
@@ -408,13 +416,12 @@ ${untrustedDocumentInstruction}
   {"id":"e1","type":"essay","sourceExcerpt":"（抜粋からの原文コピー）","prompt":"...","referenceAnswer":"採点用の模範解答（短く）"}`;
 
   const user = `document_type: ${params.documentType}
-session_entropy: ${params.nonce}
-
-抜粋:
-${wrapUntrustedDocument(joined)}`;
+session_entropy: ${params.nonce}`;
+  const cacheableDocument = `抜粋:\n${wrapUntrustedDocument(joined)}`;
 
   const response = await generateResponse({
     quiz: true,
+    cacheableDocument,
     system,
     user,
     maxTokens: 8192,
