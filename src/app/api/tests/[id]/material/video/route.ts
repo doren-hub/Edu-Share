@@ -142,7 +142,7 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
 
   const { data: test, error: fetchErr } = await admin
     .from("tests")
-    .select("id, uploaded_by, notebooklm_video_mp4_storage_path")
+    .select("id, uploaded_by, pdf_storage_path, notebooklm_video_mp4_storage_path")
     .eq("id", testId)
     .single();
 
@@ -178,7 +178,8 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ error: "教材が変更されました。再読み込みしてください。" }, { status: 409 });
   }
   try {
-    await deleteObjects([oldPath, storagePath, legacyPath]);
+    // Never remove the source paper, even if a material key aliases it.
+    await deleteObjects([oldPath, storagePath, legacyPath].filter(key => key !== test.pdf_storage_path));
   } catch {
     // The DB reference is already cleared; cleanup is best effort.
   }
