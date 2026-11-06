@@ -10,7 +10,7 @@ import { PayloadTooLargeError } from "./object-storage.ts";
 
 function fixture(kind: "slide" | "video", opts: {
   oldPath?: string | null; dbError?: boolean; hiddenSuccess?: boolean; conflict?: boolean;
-  storageError?: boolean; tooLarge?: boolean; cleanupError?: boolean;
+  storageError?: boolean; tooLarge?: boolean; cleanupError?: boolean; concurrent?: boolean;
 } = {}) {
   const ext = kind === "slide" ? "pdf" : "mp4";
   const column = `notebooklm_${kind}_${ext}_storage_path`;
@@ -20,6 +20,9 @@ function fixture(kind: "slide" | "video", opts: {
   const objects = new Map([[fixed, "fixed"], [legacy, "legacy"], ["original.pdf", "original"]]);
   if (oldPath) objects.set(oldPath, "previous");
   let published = oldPath;
+  let reads = 0;
+  let releaseReads: () => void;
+  const bothRead = new Promise<void>(resolve => { releaseReads = resolve; });
   const events: string[] = [];
   const writes: string[] = [];
   const stubs: Record<string, unknown> = {
@@ -32,7 +35,14 @@ function fixture(kind: "slide" | "video", opts: {
       const query = {
         eq: (key: string, value: unknown) => { guards[key] = value; return query; },
         is: (key: string, value: unknown) => { guards[key] = value; return query; },
-        single: async () => ({ data: { id: "paper", uploaded_by: "owner", pdf_storage_path: "original.pdf", [column]: published }, error: null }),
+        single: async () => {
+          const snapshot = published;
+          if (opts.concurrent) {
+            if (++reads === 2) releaseReads!();
+            await bothRead;
+          }
+          return { data: { id: "paper", uploaded_by: "owner", pdf_storage_path: "original.pdf", [column]: snapshot }, error: null };
+        },
         update: (value: Record<string, string>) => { update = value; return query; },
         select: (_columns: string): any => {
           if (!update) return query;
@@ -77,10 +87,16 @@ function fixture(kind: "slide" | "video", opts: {
   });
   return {
     objects, events, oldPath, fixed, legacy, writes, published: () => published,
-    run: (invalid = false, malformed = false) => {
+    run: async (invalid = false, malformed = false) => {
       const form = new FormData();
       form.set("file", new File(["new material"], invalid ? "bad.txt" : `material.${ext}`, { type: invalid ? "text/plain" : kind === "slide" ? "application/pdf" : "video/mp4" }));
-      const req = malformed ? new Request("https://app.invalid", { method: "POST", headers: { "content-type": "multipart/form-data" }, body: "bad" }) : new Request("https://app.invalid", { method: "POST", body: form });
+      // Materialize the client payload before simulating an incoming server request.
+      // Cancelling Node's lazily encoded FormData body can reject after a test ends.
+      const encoded = new Response(form);
+      const bytes = await encoded.arrayBuffer();
+      const req = malformed ? new Request("https://app.invalid", { method: "POST", headers: { "content-type": "multipart/form-data" }, body: "bad" }) : new Request("https://app.invalid", {
+        method: "POST", headers: { "content-type": encoded.headers.get("content-type")! }, body: bytes,
+      });
       return exports.POST(req, { params: Promise.resolve({ id: "paper" }) }) as Promise<Response>;
     },
   };
@@ -128,7 +144,7 @@ for (const kind of ["slide", "video"] as const) {
     assert.equal(f.objects.has(f.oldPath!), true);
   });
   test(`${kind}: concurrent requests use distinct keys and losing request cannot remove winner`, async () => {
-    const f = fixture(kind);
+    const f = fixture(kind, { concurrent: true });
     const responses = await Promise.all([f.run(), f.run()]);
     assert.deepEqual(responses.map(r => r.status).sort(), [200, 409]);
     assert.equal(new Set(f.writes).size, 2);
