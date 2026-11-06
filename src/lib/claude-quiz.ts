@@ -40,8 +40,20 @@ export function isTransientGeminiError(e: unknown): boolean {
   );
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 type LlmProvider = "anthropic" | "gemini";
@@ -260,7 +272,7 @@ export async function callGeminiText(params: {
         lastMsg = e instanceof Error ? e.message : String(e);
         const retry = isTransientGeminiError(e) && attempt < geminiRetryMax - 1;
         if (retry) {
-          await sleep(700 * 2 ** attempt);
+          await sleep(700 * 2 ** attempt, params.signal);
           continue;
         }
         break;
