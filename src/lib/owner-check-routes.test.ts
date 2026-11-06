@@ -18,9 +18,47 @@ const SESSION_ID = "44444444-4444-4444-8444-444444444444";
 
 type Rows = Record<string, Record<string, unknown> | null>;
 const WRITE_OPS = new Set(["insert", "update", "upsert", "delete"]);
+const FILTER_METHODS = new Set([
+  "eq", "neq", "gt", "gte", "lt", "lte", "is", "in",
+  "contains", "containedBy", "like", "ilike", "match", "not", "or", "filter",
+]);
 
-/** テーブルごとの固定行を返し、書き込み系の呼び出しを writes に記録する簡易クライアント。 */
-function fakeAdmin(rows: Rows, writes: string[]) {
+type QueryCondition = {
+  table: string;
+  op: string;
+  method: string;
+  args: unknown[];
+};
+
+type ExpectedCondition = {
+  table?: string;
+  op?: string;
+  method: string;
+  args: unknown[];
+};
+
+function assertConditionsInclude(
+  actualConditions: QueryCondition[],
+  expectedConditions: ExpectedCondition[],
+  context: string,
+) {
+  for (const expected of expectedConditions) {
+    const found = actualConditions.some((actual) =>
+      (!expected.table || actual.table === expected.table) &&
+      (!expected.op || actual.op === expected.op) &&
+      actual.method === expected.method &&
+      actual.args.length === expected.args.length &&
+      actual.args.every((arg, i) => arg === expected.args[i]),
+    );
+    assert.ok(
+      found,
+      `${context}: 期待するクエリ条件 ${JSON.stringify(expected)} が実行されていません。実際の条件: ${JSON.stringify(actualConditions)}`,
+    );
+  }
+}
+
+/** テーブルごとの固定行を返し、書き込み系呼び出しを writes、クエリ条件を conditions に記録する簡易クライアント。 */
+function fakeAdmin(rows: Rows, writes: string[], conditions: QueryCondition[] = []) {
   return {
     rpc: async (name: string) => { writes.push(`rpc:${name}`); return { data: null, error: null }; },
     from: (table: string) => {
@@ -37,11 +75,13 @@ function fakeAdmin(rows: Rows, writes: string[]) {
           if (prop === "maybeSingle") {
             return async () => (op === "select" && !rows[table] ? { data: null, error: null } : result(true));
           }
-          return (..._args: unknown[]) => {
+          return (...args: unknown[]) => {
             const name = String(prop);
             if (WRITE_OPS.has(name)) {
               op = name;
               writes.push(`${name}:${table}`);
+            } else if (FILTER_METHODS.has(name)) {
+              conditions.push({ table, op, method: name, args });
             }
             return builder;
           };
@@ -83,6 +123,7 @@ const paperIndustries = await importPure("./paper-industries.ts");
 function harness(path: string, opts: { user: string | null; rows: Rows; extra?: Extra }) {
   const writes: string[] = [];
   const calls: string[] = [];
+  const conditions: QueryCondition[] = [];
   const record = (name: string, value: unknown = undefined) => async (..._a: unknown[]) => { writes.push(name); return value; };
   const stubs: Record<string, unknown> = {
     "next/server": { NextResponse },
@@ -95,7 +136,7 @@ function harness(path: string, opts: { user: string | null; rows: Rows; extra?: 
         from: () => { throw new Error("RLS クライアントでの書き込みは想定外"); },
       }),
     },
-    "@/lib/supabase/admin": { createAdminClient: () => fakeAdmin(opts.rows, writes) },
+    "@/lib/supabase/admin": { createAdminClient: () => fakeAdmin(opts.rows, writes, conditions) },
     "@/lib/object-storage": {
       deleteObjects: record("r2:delete"),
       copyObject: record("r2:copy"),
@@ -119,7 +160,7 @@ function harness(path: string, opts: { user: string | null; rows: Rows; extra?: 
   // 認証・所有者確認を含む共通実装も実コードで読み込む。
   stubs["@/lib/commit-notebooklm-material"] = loadModule("./commit-notebooklm-material.ts", stubs, calls);
   const route = loadModule(path, stubs, calls) as Record<string, (req: Request, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>>;
-  return { route, writes, calls };
+  return { route, writes, calls, conditions };
 }
 
 const testRow = (owner: string) => ({
@@ -154,6 +195,8 @@ type Case = {
   rejectsMalformedJsonAfterOwnerCheck?: boolean;
   /** 再出題元セッションの所有者確認を検証するケースか */
   reuseSessionCase?: boolean;
+  /** 本人成功時の書き込み（update/delete）に含まれるべきクエリ条件 */
+  expectedConditions?: ExpectedCondition[];
 };
 
 const json = (body: unknown) => () => new Request("https://unused.invalid/x", { method: "POST", body: JSON.stringify(body) });
@@ -163,6 +206,9 @@ const cases: Case[] = [
     name: "tests PATCH", path: "../app/api/tests/[id]/route.ts", method: "PATCH", params: { id: TEST_ID },
     rows: (o) => ({ tests: testRow(o) }), request: json({ title: "新しいタイトル" }),
     ownerWrites: ["update:tests"],
+    expectedConditions: [
+      { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+    ],
     assertsOwnerBeforeBody: true,
     rejectsMalformedJsonAfterOwnerCheck: true,
   },
@@ -170,24 +216,38 @@ const cases: Case[] = [
     name: "tests DELETE", path: "../app/api/tests/[id]/route.ts", method: "DELETE", params: { id: TEST_ID },
     rows: (o) => ({ tests: testRow(o) }), request: json({}),
     ownerWrites: ["r2:delete", "delete:tests"],
+    expectedConditions: [
+      { table: "tests", op: "delete", method: "eq", args: ["id", TEST_ID] },
+    ],
   },
   {
     name: "tests/pdf POST", path: "../app/api/tests/[id]/pdf/route.ts", method: "POST", params: { id: TEST_ID },
     rows: (o) => ({ tests: testRow(o) }),
     request: () => new Request("https://unused.invalid/x", { method: "POST", body: pdfForm() }),
     ownerWrites: ["update:tests", "r2:put", "ingest"],
+    expectedConditions: [
+      { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+    ],
     assertsOwnerBeforeBody: true,
   },
   {
     name: "material/slide commit", path: "../app/api/tests/[id]/material/slide/commit/route.ts", method: "POST",
     params: { id: TEST_ID }, rows: (o) => ({ tests: { ...testRow(o), pdf_storage_path: null } }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-slide-upload-${SESSION_ID}.pdf` }),
     ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
+    expectedConditions: [
+      { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+      { table: "tests", op: "update", method: "eq", args: ["uploaded_by", OWNER] },
+    ],
     assertsOwnerBeforeBody: true,
   },
   {
     name: "material/video commit", path: "../app/api/tests/[id]/material/video/commit/route.ts", method: "POST",
     params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-video-upload-${SESSION_ID}.mp4` }),
     ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
+    expectedConditions: [
+      { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+      { table: "tests", op: "update", method: "eq", args: ["uploaded_by", OWNER] },
+    ],
     assertsOwnerBeforeBody: true,
   },
   ...(["slide", "video"] as const).flatMap((kind): Case[] => [
@@ -195,6 +255,9 @@ const cases: Case[] = [
       name: `material/${kind} POST`, path: `../app/api/tests/[id]/material/${kind}/route.ts`, method: "POST",
       params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
       ownerWrites: ["multipart", "r2:put", "r2:delete", "update:tests"],
+      expectedConditions: [
+        { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+      ],
       assertsOwnerBeforeBody: true,
       extra: (record) => ({
         "@/lib/multipart-file-stream": {
@@ -210,6 +273,9 @@ const cases: Case[] = [
       name: `material/${kind} DELETE`, path: `../app/api/tests/[id]/material/${kind}/route.ts`, method: "DELETE",
       params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
       ownerWrites: ["update:tests", "r2:delete"],
+      expectedConditions: [
+        { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+      ],
     },
   ]),
   {
@@ -227,6 +293,9 @@ const cases: Case[] = [
     name: "quiz DELETE", path: "../app/api/quiz/[sessionId]/route.ts", method: "DELETE", params: { sessionId: SESSION_ID },
     rows: (o) => ({ quiz_sessions: { id: SESSION_ID, user_id: o } }), request: json({}),
     ownerWrites: ["delete:quiz_sessions"],
+    expectedConditions: [
+      { table: "quiz_sessions", op: "delete", method: "eq", args: ["id", SESSION_ID] },
+    ],
     idempotentMissing: true,
   },
   {
@@ -239,6 +308,9 @@ const cases: Case[] = [
     }),
     request: json({ answers: { q1: 0 } }),
     ownerWrites: ["llm:grade", "update:quiz_sessions", "stats"],
+    expectedConditions: [
+      { table: "quiz_sessions", op: "update", method: "eq", args: ["id", SESSION_ID] },
+    ],
     assertsOwnerBeforeBody: true,
     rejectsMalformedJsonAfterOwnerCheck: true,
     extra: (record) => ({
@@ -321,8 +393,35 @@ for (const c of cases) {
     assert.equal(res.status, 200, await res.clone().text());
     assert.deepEqual(h.writes, c.ownerWrites);
     assert.deepEqual(h.calls, []);
+    if (c.expectedConditions) {
+      assertConditionsInclude(h.conditions, c.expectedConditions, c.name);
+    }
   });
 }
+
+test("クエリ条件検証: 必要な条件（uploaded_by や id）が欠落した退行を検出できる", () => {
+  const recorded: QueryCondition[] = [
+    { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+  ];
+  assert.throws(
+    () =>
+      assertConditionsInclude(
+        recorded,
+        [{ table: "tests", op: "update", method: "eq", args: ["uploaded_by", OWNER] }],
+        "regression check",
+      ),
+    /uploaded_by/,
+  );
+  assert.throws(
+    () =>
+      assertConditionsInclude(
+        [],
+        [{ table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] }],
+        "regression check",
+      ),
+    /id/,
+  );
+});
 
 for (const c of cases.filter((c) => c.rejectsMalformedJsonAfterOwnerCheck)) {
   test(`${c.name}: 本人の不正な JSON は所有者確認後に拒否する`, async () => {
@@ -337,6 +436,15 @@ for (const c of cases.filter((c) => c.rejectsMalformedJsonAfterOwnerCheck)) {
 }
 
 const reuseCase = cases.find((c) => c.reuseSessionCase)!;
+
+test("再出題: 参照元セッションが存在しない場合は 404 で書き込まない", async () => {
+  const h = harness(reuseCase.path, { user: OWNER, rows: { tests: testRow(OWNER) }, extra: reuseCase.extra });
+  const res = await h.route.POST(reuseCase.request(), { params: Promise.resolve(reuseCase.params) });
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "参照元のセッションが見つかりません" });
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.calls, []);
+});
 
 test("再出題: 他人のセッションは教材との関連検査より先に拒否する", async () => {
   const rows = reuseCase.rows(OTHER);
@@ -366,6 +474,16 @@ for (const [path, method, status] of [
       params: Promise.resolve({ id: TEST_ID }),
     });
     assert.equal(res.status, status);
+    assert.deepEqual(h.writes, []);
+    assert.deepEqual(h.calls, []);
+  });
+
+  test(`${path}: 存在しない ID では 404 で外部処理を行わない`, async () => {
+    const h = harness(path, { user: OWNER, rows: {} });
+    const res = await h.route[method](new Request("https://unused.invalid/x", { method }), {
+      params: Promise.resolve({ id: TEST_ID }),
+    });
+    assert.equal(res.status, 404);
     assert.deepEqual(h.writes, []);
     assert.deepEqual(h.calls, []);
   });
