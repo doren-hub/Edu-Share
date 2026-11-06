@@ -212,3 +212,23 @@ R2 は差し替えごとに新しいキーを使います。失敗時の新規�
 
 復旧によって R2 オブジェクトは削除しません。中断した新規キーや旧キーの回収は別途調査が必要です。
 復旧理由と処理エラーは別管理で、後続の取り込みが成功しても監査履歴は保持されます。
+
+## PDF 復旧監査表の権限補正（044）
+
+`044_pdf_recovery_audit_acl.sql` は 041 適用済み環境の監査表と ID シーケンスの ACL を補正します。
+Supabase の default privileges によって作成時に service_role へ ALL が付与されていると、
+041 の `GRANT SELECT, INSERT` だけでは UPDATE／DELETE 等が残るためです。
+PUBLIC、anon、authenticated、service_role の既存権限をこの二つのオブジェクトに限って取り消し、
+service_role に表の SELECT／INSERT とシーケンスの USAGE／SELECT のみを再付与します。
+スキーマ全体の default privileges や他の表の ACL、既存の監査行は変更しません。
+
+anon／authenticated は監査表の読み書きができません。service_role は復旧 RPC での追記と
+監査確認ができますが、UPDATE／DELETE／TRUNCATE とシーケンスの setval は拒否されます。
+RLS を迂回できる service_role にもオブジェクト ACL は適用されます。
+これは運用ロール向けの追記専用方針であり、表所有者・superuser による変更まで防ぐものではありません。
+監査の訂正は既存行の変更・削除ではなく理由を添えた追記で行います。
+
+所有者が 041 以降の既存環境へ 044 の個別 SQL を適用してください（再適用可能）。
+開発エージェントは本番に接続・適用せず、組み込み PostgreSQL で、広い default privileges の
+有無、通常ユーザーの INSERT／UPDATE／DELETE 拒否、service_role の復旧 RPC・追記・参照成功と
+変更・削除拒否を検証しています。
