@@ -83,7 +83,9 @@ test("042 SQL + mocked R2: references, active uploads, fence, tombstones, delete
     `);
     const migration = readFileSync(new URL("../../supabase/migrations/042_pdf_object_gc.sql", import.meta.url), "utf8");
     await db.exec(migration);
-    await db.exec(migration);
+    const sharedGuard = readFileSync(new URL("../../supabase/migrations/043_pdf_gc_shared_guard.sql", import.meta.url), "utf8");
+    await db.exec(sharedGuard);
+    await db.exec(sharedGuard);
     const sqlRpc: GcDependencies["rpc"] = async (name, args) => {
       const params = Object.values(args);
       const placeholders = params.map((_, i) => `$${i + 1}`).join(",");
@@ -140,7 +142,7 @@ test("042 SQL + mocked R2: references, active uploads, fence, tombstones, delete
     present = true;
     assert.equal((await collectOrphanPdfs(deps, execute)).deleted, 1);
     // Permanent tombstones survive successful deletion, retries and migration rerun.
-    await db.exec(migration);
+    await db.exec(sharedGuard);
     await assert.rejects(db.query("insert into tests(id,pdf_storage_path) values($1,$2)", [id, key]), /key retired/);
     for (const role of ["anon", "authenticated"]) {
       await db.exec(`set role ${role}`);
@@ -155,4 +157,50 @@ test("042 SQL + mocked R2: references, active uploads, fence, tombstones, delete
     await assert.rejects(db.exec("update pdf_gc_guard set active_run=null"), /permission denied/);
     await db.exec("reset role");
   } finally { await db.close(); }
+});
+
+
+test("large inventory prefilters locally, stops including exclusions, and resumes without skipping candidates", async () => {
+  const inventory = Array.from({ length: 25_000 }, (_, i) => ({
+    ...obj, key: `${String(i).padStart(8, "0")}${user.slice(8)}/${id}${i % 1000 === 0 ? ".pdf" : ".mp4"}`,
+  }));
+  const { deps, calls } = mock();
+  let pulled = 0;
+  deps.list = async function* (after) {
+    for (const item of inventory) {
+      if (after && item.key <= after) continue;
+      pulled++;
+      yield item;
+    }
+  };
+  const first = await collectOrphanPdfs(deps);
+  assert.equal(first.scanned, 10_000);
+  assert.equal(pulled, 10_000);
+  assert.equal(first.limited, true);
+  assert.equal(first.resumeAfter, inventory[9999].key);
+  assert.equal(calls.length, 10); // 9,990 non-PDF keys need no DB RPC
+  const second = await collectOrphanPdfs(deps, { startAfter: first.resumeAfter! });
+  const third = await collectOrphanPdfs(deps, { startAfter: second.resumeAfter! });
+  assert.equal(third.scanned, 5000);
+  assert.equal(third.limited, false);
+  assert.equal(third.resumeAfter, null);
+  assert.equal(pulled, 25_000);
+  assert.equal(calls.length, 25);
+});
+
+test("bounds are validated before I/O; recent entries avoid RPC; execute limit releases fence", async () => {
+  const { deps, calls } = mock();
+  for (const maxObjects of [0, -1, 1.5, NaN, 100001]) {
+    await assert.rejects(collectOrphanPdfs(deps, { maxObjects }), /maxObjects/);
+  }
+  for (const value of ["0", "-1", "1.5", "1e3", "100001", "NaN"]) {
+    assert.throws(() => parseGcArguments(["--max-objects", value]), /integer/);
+  }
+  assert.equal(parseGcArguments(["--start-after", key, "--max-objects", "1"]).startAfter, key);
+  assert.deepEqual(calls, []);
+  deps.list = async function* () { yield { ...obj, lastModified: new Date().toISOString() }; yield obj; };
+  const result = await collectOrphanPdfs(deps, { ...execute, maxObjects: 1 });
+  assert.equal(result.scanned, 1);
+  assert.equal(result.resumeAfter, key);
+  assert.deepEqual(calls, ["begin_pdf_gc", "end_pdf_gc"]);
 });
