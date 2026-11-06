@@ -668,13 +668,13 @@ ${wrapUntrustedDocument(`問題: ${q.prompt}\n模範解答（参考）: ${q.refe
       const start = text.indexOf("{");
       const end = text.lastIndexOf("}");
       const rawObj = text.slice(start, end + 1);
-      let json: { score?: number; comment?: string };
+      let json: { score?: unknown; comment?: string };
       try {
-        json = JSON.parse(rawObj) as { score?: number; comment?: string };
+        json = JSON.parse(rawObj) as { score?: unknown; comment?: string };
       } catch {
-        json = JSON.parse(jsonrepair(rawObj)) as { score?: number; comment?: string };
+        json = JSON.parse(jsonrepair(rawObj)) as { score?: unknown; comment?: string };
       }
-      if (params.failOnError && (!Number.isFinite(Number(json.score)) || json.score == null)) {
+      if (params.failOnError && (typeof json.score !== "number" || !Number.isFinite(json.score))) {
         throw new Error("採点結果に有効な点数がありません");
       }
       const s = Math.min(10, Math.max(0, Math.round(Number(json.score ?? 0))));
