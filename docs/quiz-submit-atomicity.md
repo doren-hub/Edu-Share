@@ -24,3 +24,32 @@ PGlite はクライアントから重ねた呼び出しを直列実行するた�
 本番 Supabase/R2、資格情報、ネットワーク、コンテナーは使用しない。
 
 採点前の排他制御と040のデプロイ手順は[採点処理権](quiz-grading-claim.md)を参照。
+
+## 統計payloadの整合性（Issue #262）
+
+`045_quiz_attempt_integrity.sql` は既存のトークン付きRPCを置換する追加
+マイグレーション。既存データを書き換えず、本番への適用はこの作業では行わない。
+生成済み `apply_all_migrations.sql` にも同じ定義を含める。
+
+保存の条件付きUPDATEが返す `test_id` と `questions_json` を照合元とする。
+テスト付きセッションではpayloadは配列であり、設問と同数・同順で、各要素の
+`question_key`・`question_type` が対応する設問に一致する必要がある。
+キーはTypeScriptの `makeQuestionPerformanceKey` と同じ入力・SHA-256先頭48桁で
+DBが再計算する（ECMAScriptのtrim対象文字も揃える）。`correct` はJSON boolean、
+`prompt_excerpt` はJSON stringを要求する。正誤の再採点は行わない。
+空・SQL NULL・JSON null・欠落要素・余分な要素・別テストや別設問のキーは例外にし、
+結果・lease解除・先行する統計更新をすべてロールバックする。
+
+同じ内容の設問はIDが異なっても同じキーになる。従来の互換仕様として重複を許可し、
+設問の出現ごとにattemptsを1、正解した出現ごとにcorrect_countを1加算する。
+重複排除は行わない。同一キーの出現同士を入れ替えてもキー・型だけでは区別しない。
+集約行のprompt_excerptは最後の出現の値になる。
+
+テスト付き・設問0件なら空配列のみを許可し、結果だけを保存する。
+`test_id` なしなら従来どおり統計payloadを無視し、結果だけを保存する。
+所有者・未提出・有効な処理権tokenの条件は維持し、条件に合わない呼出しはfalseを返す。
+
+`quiz-attempt-integrity.test.ts` は隔離PGliteで実SQLを実行し、通常提出、Unicodeを
+含むキー生成、重複加算、空・欠落・不正payload、関連test_id変更、途中障害の全件
+rollback、既存カウンターの保護、提出済み結果の不変、所有者・token・権限、
+再適用と設問0件・test_idなしの動作を検証する。
