@@ -108,7 +108,7 @@ function resolveProvider(): LlmProvider {
 /** 最小限の API 境界。注入時はキー・プロバイダー設定なしで Anthropic 経路を使う。 */
 export interface QuizAnthropicClient {
   messages: {
-    create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Pick<Anthropic.Message, "content"> & Partial<Pick<Anthropic.Message, "stop_reason">>>;
+    create(params: Anthropic.MessageCreateParamsNonStreaming, options?: { signal?: AbortSignal }): Promise<Pick<Anthropic.Message, "content"> & Partial<Pick<Anthropic.Message, "stop_reason">>>;
   };
 }
 
@@ -122,7 +122,7 @@ export interface QuizGeminiClient {
       temperature?: number;
     };
   }): {
-    generateContent(prompt: string): Promise<{
+    generateContent(prompt: string, options?: { signal?: AbortSignal }): Promise<{
       response: {
         text(): string;
       };
@@ -147,7 +147,9 @@ async function generateResponse(params: {
   temperature: number;
   quiz?: boolean;
   cacheableDocument?: string;
+  signal?: AbortSignal;
 }, client?: QuizAnthropicClient | QuizGeminiClient): Promise<{ text: string; toolInput?: unknown }> {
+  params.signal?.throwIfAborted();
   const provider = isAnthropicClient(client)
     ? "anthropic"
     : isGeminiClient(client)
@@ -173,8 +175,9 @@ async function generateResponse(params: {
         ...(params.system
           ? { system: params.system, messages: [{ role: "user", content }] }
           : { messages: [{ role: "user", content }] }),
-      });
+      }, { signal: params.signal });
     } catch (e) {
+      params.signal?.throwIfAborted();
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(
         `Claude API の呼び出しに失敗しました（モデル名・APIキー・利用枠を確認）。model=${anthropicModel()} / ${msg}`,
@@ -205,11 +208,12 @@ async function generateResponse(params: {
     user: params.cacheableDocument ? `${params.user}\n\n${params.cacheableDocument}` : params.user,
     maxTokens: params.maxTokens,
     temperature: params.temperature,
+    signal: params.signal,
   }, gemini) };
 }
 
 async function generateText(params: {
-  system?: string; user: string; maxTokens: number; temperature: number;
+  system?: string; user: string; maxTokens: number; temperature: number; signal?: AbortSignal;
 }, client?: QuizAnthropicClient | QuizGeminiClient): Promise<string> {
   return (await generateResponse(params, client)).text;
 }
@@ -219,6 +223,7 @@ export async function callGeminiText(params: {
   user: string;
   maxTokens?: number;
   temperature?: number;
+  signal?: AbortSignal;
 }, geminiClient?: QuizGeminiClient): Promise<string> {
   let genAI: QuizGeminiClient;
   if (geminiClient) {
@@ -246,10 +251,12 @@ export async function callGeminiText(params: {
     });
 
     for (let attempt = 0; attempt < geminiRetryMax; attempt++) {
+      params.signal?.throwIfAborted();
       try {
-        const result = await model.generateContent(params.user);
+        const result = await model.generateContent(params.user, { signal: params.signal });
         return result.response.text().trim();
       } catch (e) {
+        params.signal?.throwIfAborted();
         lastMsg = e instanceof Error ? e.message : String(e);
         const retry = isTransientGeminiError(e) && attempt < geminiRetryMax - 1;
         if (retry) {
@@ -576,6 +583,8 @@ export function stripForClient(questions: StoredQuestion[]): ClientQuestion[] {
 export async function gradeWithClaude(params: {
   questions: StoredQuestion[];
   answers: AnswerMap;
+  signal?: AbortSignal;
+  failOnError?: boolean;
 }, client?: QuizAnthropicClient | QuizGeminiClient): Promise<{
   scoreMc: number;
   scoreEssay: number;
@@ -601,6 +610,7 @@ export async function gradeWithClaude(params: {
     comment: string;
   }> = [];
 
+  params.signal?.throwIfAborted();
   const provider = isAnthropicClient(client)
     ? "anthropic"
     : isGeminiClient(client)
@@ -609,6 +619,7 @@ export async function gradeWithClaude(params: {
   const apiLabel = provider === "anthropic" ? "Claude API" : "Gemini API";
 
   for (const q of essays) {
+    params.signal?.throwIfAborted();
     essayMax += 10;
     const ans = params.answers[q.id];
     const answerText = typeof ans === "string" ? ans : "";
@@ -625,8 +636,12 @@ ${wrapUntrustedDocument(`問題: ${q.prompt}\n模範解答（参考）: ${q.refe
         user: prompt,
         maxTokens: 400,
         temperature: 0.2,
+        signal: params.signal,
       }, client);
+      params.signal?.throwIfAborted();
     } catch (e) {
+      params.signal?.throwIfAborted();
+      if (params.failOnError) throw e;
       const msg = e instanceof Error ? e.message : String(e);
       perEssay.push({
         id: q.id,
@@ -647,6 +662,9 @@ ${wrapUntrustedDocument(`問題: ${q.prompt}\n模範解答（参考）: ${q.refe
       } catch {
         json = JSON.parse(jsonrepair(rawObj)) as { score?: number; comment?: string };
       }
+      if (params.failOnError && (!Number.isFinite(Number(json.score)) || json.score == null)) {
+        throw new Error("採点結果に有効な点数がありません");
+      }
       const s = Math.min(10, Math.max(0, Math.round(Number(json.score ?? 0))));
       essayPoints += s;
       perEssay.push({
@@ -655,7 +673,8 @@ ${wrapUntrustedDocument(`問題: ${q.prompt}\n模範解答（参考）: ${q.refe
         max: 10,
         comment: String(json.comment ?? ""),
       });
-    } catch {
+    } catch (e) {
+      if (params.failOnError) throw e;
       perEssay.push({
         id: q.id,
         score: 0,

@@ -436,3 +436,35 @@ test("診断: 採点の max_tokens は出題診断に混ぜない", async (t) =>
   assert.equal(warn.mock.callCount(), 0);
   assert.equal(info.mock.callCount(), 0);
 });
+
+
+test("採点: 提出用strictモードではAPI障害・形式不正を確定せず再試行できる", async () => {
+  for (const reply of [new Error("failure"), "invalid json", '{"comment":"missing score"}']) {
+    const f = fakeClient([reply]);
+    await assert.rejects(gradeWithClaude({ questions, answers: {}, failOnError: true }, f.client));
+    assert.equal(f.calls.length, 1);
+  }
+});
+
+test("採点: 両プロバイダーに中断signalを渡し、中断後に後続の設問を採点しない", async () => {
+  for (const provider of ["anthropic", "gemini"]) {
+    const controller = new AbortController();
+    let calls = 0;
+    const reply = async (options?: { signal?: AbortSignal }) => {
+      calls++;
+      assert.equal(options?.signal, controller.signal);
+      controller.abort(new Error("deadline"));
+      throw controller.signal.reason;
+    };
+    const client: QuizAnthropicClient | QuizGeminiClient = provider === "anthropic"
+      ? { messages: { create: async (_params, options) => reply(options) } }
+      : { getGenerativeModel: () => ({ generateContent: async (_prompt, options) => reply(options) }) };
+    await assert.rejects(gradeWithClaude({
+      questions: [questions[1], { ...questions[1], id: "e2" }], answers: {},
+      signal: controller.signal, failOnError: true,
+    }, client), /deadline/);
+    assert.equal(calls, 1);
+    await assert.rejects(gradeWithClaude({ questions, answers: {}, signal: controller.signal }, client), /deadline/);
+    assert.equal(calls, 1);
+  }
+});
