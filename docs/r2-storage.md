@@ -54,3 +54,7 @@ npm run storage:migrate:r2 -- --from-work-dir ~/Developer/edu-share-papers/work 
 ```
 
 このモードは Supabase 側を削除しません（`--delete-source` とは併用不可）。パイプラインを通さず画面から上げたファイルは対象外です。プロジェクトを再開した後に `npm run storage:migrate:r2 -- --delete-source` を実行すると、R2 に同じサイズで存在するものはコピーを省略して Supabase 側だけ削除します。
+
+## 未参照の元 PDF の回収
+
+差し替え・失敗・テスト削除後に残る元 PDF は [安全な回収手順](pdf-object-gc.md) を参照してください。既定は dry-run です。実削除は所有者の別途承認と writer の停止が必要です。
