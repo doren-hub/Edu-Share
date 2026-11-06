@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { uploadFormSchema as uploadFormSchema } from "@/lib/api-input-schemas";
 import type { User } from "@supabase/supabase-js";
@@ -342,6 +343,7 @@ export async function POST(req: Request) {
     }
   }
 
+  const processingToken = randomUUID();
   const insertRow = {
     id: testId,
     title: titleFinal,
@@ -364,6 +366,8 @@ export async function POST(req: Request) {
     paper_authors: document_type === "paper" ? paperAuthorsResolved : null,
     uploaded_by: user.id,
     processing_status: "pending",
+    pdf_processing_token: processingToken,
+    pdf_processing_started_at: new Date().toISOString(),
     pdf_filename: pdfFilename,
   };
 
@@ -394,7 +398,8 @@ export async function POST(req: Request) {
   try {
     await putObject(storagePath, file.stream(), "application/pdf");
   } catch (error) {
-    await admin.from("tests").delete().eq("id", testId);
+    await admin.from("tests").delete().eq("id", testId)
+      .eq("processing_status", "pending").eq("pdf_processing_token", processingToken);
     return NextResponse.json(
       {
         error: "R2へのアップロードに失敗しました",
@@ -405,16 +410,20 @@ export async function POST(req: Request) {
   }
 
   try {
-    await ingestPdfForTest({ testId, storagePath });
+    await ingestPdfForTest({ testId, storagePath, processingToken });
   } catch (e) {
     const safeError = sanitizeProcessingError(e);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
+        pdf_processing_token: null,
+        pdf_processing_started_at: null,
         processing_error: safeError,
       })
-      .eq("id", testId);
+      .eq("id", testId)
+      .eq("processing_status", "pending")
+      .eq("pdf_processing_token", processingToken);
 
     return NextResponse.json(
       {

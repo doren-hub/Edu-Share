@@ -9,6 +9,7 @@ import { stripReferencesSection } from "@/lib/strip-references-section";
 export async function ingestPdfForTest(params: {
   testId: string;
   storagePath: string;
+  processingToken: string;
 }): Promise<void> {
   const admin = createAdminClient();
   const buf = Buffer.from(await getObjectBytes(params.storagePath));
@@ -71,6 +72,7 @@ export async function ingestPdfForTest(params: {
   }));
   const { error } = await admin.rpc("replace_test_pdf_chunks", {
     p_test_id: params.testId,
+    p_processing_token: params.processingToken,
     p_storage_path: params.storagePath,
     p_chunks: rows,
     p_processing_error: chunks.length === 0
