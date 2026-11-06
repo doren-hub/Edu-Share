@@ -9,23 +9,38 @@ const uploadId = "11111111-1111-4111-8111-111111111111";
 function fixture(kind: "slide" | "video", options: {
   size?: number | null; type?: string | null; exists?: boolean; etag?: string | null;
   originalSize?: number; dbError?: boolean; conflict?: boolean; copyError?: boolean;
-  cleanupError?: boolean; user?: string | null; oldPath?: string | null; deletion?: boolean;
+  cleanupError?: boolean; user?: string | null; oldPath?: string | null; deletion?: boolean; sourcePath?: string | null;
 } = {}) {
   const extension = kind === "slide" ? "pdf" : "mp4";
   const column = `notebooklm_${kind}_${extension}_storage_path`;
   const path = `owner/paper-notebooklm-${kind}-upload-${uploadId}.${extension}`;
   const oldPath = options.oldPath === undefined ? `owner/old.${extension}` : options.oldPath;
   const objects = new Map<string, string>([[path, "new bytes"], [oldPath ?? "unused", "old bytes"]]);
+  const fixed = `fixed-${kind}.${extension}`;
+  const legacy = `legacy-${kind}.${extension}`;
+  const sourcePath = options.sourcePath === undefined ? "original.pdf" : options.sourcePath;
+  if (options.deletion) {
+    objects.set(fixed, "fixed bytes");
+    objects.set(legacy, "legacy bytes");
+    if (sourcePath) objects.set(sourcePath, "source bytes");
+  }
+  const deletedKeys: (string | null)[] = [];
+  let selectedColumns: string[] = [];
   const events: string[] = [];
   const signs: unknown[][] = [];
   let published = oldPath;
   let pending: Record<string, string>;
   const guards: unknown[][] = [];
   const query = {
-    select: () => pending ? Promise.resolve({ data: options.conflict ? [] : [{ id: "paper" }], error: options.dbError ? { message: "unavailable" } : null }) : query,
+    select: (columns: string) => {
+      if (!pending) selectedColumns = columns.split(",").map(column => column.trim());
+      return pending ? Promise.resolve({ data: options.conflict ? [] : [{ id: "paper" }], error: options.dbError ? { message: "unavailable" } : null }) : query;
+    },
     eq: (...args: unknown[]) => { guards.push(args); return query; },
     is: (...args: unknown[]) => { guards.push(args); return query; },
-    single: async () => ({ data: { id: "paper", uploaded_by: "owner", pdf_storage_path: "original.pdf", [column]: oldPath }, error: null }),
+    single: async () => ({ data: Object.fromEntries(Object.entries({
+      id: "paper", uploaded_by: "owner", pdf_storage_path: sourcePath, [column]: oldPath,
+    }).filter(([key]) => selectedColumns.includes(key))), error: null }),
     update: (data: Record<string, string>) => {
       events.push("db"); pending = data;
       if (!options.dbError && !options.conflict) published = data[column];
@@ -62,6 +77,7 @@ function fixture(kind: "slide" | "video", options: {
         objects.set(destination, objects.get(source)!);
       },
       deleteObjects: async (keys: (string | null)[]) => {
+        deletedKeys.push(...keys);
         events.push("cleanup");
         if (options.cleanupError) throw new Error("delete unavailable");
         for (const key of keys) if (key) objects.delete(key);
@@ -75,7 +91,7 @@ function fixture(kind: "slide" | "video", options: {
     assert.ok(Object.hasOwn(stubs, name), `Unexpected dependency: ${name}`); return stubs[name];
   });
   return {
-    path, oldPath, objects, events, signs, guards, published: () => published,
+    path, oldPath, fixed, legacy, sourcePath, deletedKeys, objects, events, signs, guards, published: () => published,
     run: (body: unknown = { action: "commit", path }) => {
       const req = new Request("https://app.invalid", { method: "POST", body: JSON.stringify(body) });
       const ctx = { params: Promise.resolve({ id: "paper" }) };
@@ -90,16 +106,49 @@ for (const kind of ["slide", "video"] as const) {
     assert.equal((await success.run()).status, 200);
     assert.equal(success.published(), null);
     assert.equal(success.objects.has(success.oldPath!), false);
+    assert.equal(success.objects.has(success.fixed), false);
+    assert.equal(success.objects.has(success.legacy), false);
+    assert.equal(success.objects.get(success.sourcePath!), "source bytes");
     assert.deepEqual(success.events, ["db", "cleanup"]);
     const cleanupFailure = fixture(kind, { deletion: true, cleanupError: true });
     assert.equal((await cleanupFailure.run()).status, 200);
     assert.equal(cleanupFailure.published(), null);
+    assert.equal(cleanupFailure.objects.get(cleanupFailure.oldPath!), "old bytes");
+    assert.equal(cleanupFailure.objects.get(cleanupFailure.sourcePath!), "source bytes");
     for (const failure of [{ dbError: true }, { conflict: true }]) {
       const f = fixture(kind, { deletion: true, ...failure });
       assert.equal((await f.run()).status, failure.dbError ? 500 : 409);
       assert.equal(f.objects.get(f.oldPath!), "old bytes");
       assert.deepEqual(f.events, ["db"]);
     }
+  });
+
+  for (const alias of ["old", "fixed", "legacy"] as const) {
+    test(`${kind}: deletion protects source PDF aliasing ${alias} key`, async () => {
+      const baseline = fixture(kind, { deletion: true });
+      const sourcePath = alias === "old" ? baseline.oldPath! : baseline[alias];
+      const f = fixture(kind, { deletion: true, sourcePath });
+      assert.equal((await f.run()).status, 200);
+      assert.equal(f.published(), null);
+      assert.equal(f.objects.get(sourcePath), "source bytes");
+      assert.ok(!f.deletedKeys.includes(sourcePath));
+      for (const key of [f.oldPath!, f.fixed, f.legacy]) {
+        if (key !== sourcePath) assert.equal(f.objects.has(key), false);
+      }
+      assert.deepEqual(f.events, ["db", "cleanup"]);
+      assert.deepEqual(f.guards, [["id", "paper"], ["id", "paper"], ["uploaded_by", "owner"], [
+        `notebooklm_${kind}_${kind === "slide" ? "pdf" : "mp4"}_storage_path`, f.oldPath,
+      ]]);
+    });
+  }
+
+  test(`${kind}: deletion without source or material reference retains cleanup behavior`, async () => {
+    const f = fixture(kind, { deletion: true, sourcePath: null, oldPath: null });
+    assert.equal((await f.run()).status, 200);
+    assert.equal(f.published(), null);
+    assert.equal(f.objects.has(f.fixed), false);
+    assert.equal(f.objects.has(f.legacy), false);
+    assert.ok(f.guards.some(args => args[1] === null));
   });
 
   test(`${kind}: prepare uses unique staging keys and signs exact length`, async () => {
