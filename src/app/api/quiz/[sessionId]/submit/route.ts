@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readBoundedJson, API_BODY_LIMITS } from "@/lib/request-json";
 import { NextResponse } from "next/server";
 import { llmRateLimitResponse } from "@/lib/llm-rate-limit";
@@ -54,37 +55,63 @@ export async function POST(
     return NextResponse.json({ error: "このクイズは提出済みです" }, { status: 409 });
   }
 
-  const graded = await gradeWithClaude({ questions, answers });
-
-  // 結果と統計を同一トランザクションで確定する。RPC が失敗すれば未提出のまま再試行できる。
-  const { data: updated, error: upErr } = await admin.rpc("submit_quiz_with_performance", {
-    p_session_id: sessionId,
-    p_user_id: user.id,
-    p_answers: answers,
-    p_score_mc: graded.scoreMc,
-    p_score_essay: graded.scoreEssay,
-    p_score_total: graded.scoreTotal,
-    p_feedback: graded.feedback,
-    p_attempts: row.test_id ? buildQuestionPerformanceAttempts({
-      testId: row.test_id, questions, answers, feedback: graded.feedback,
-    }) : [],
+  const token = randomUUID();
+  const { data: claimed, error: claimError } = await admin.rpc("claim_quiz_grading", {
+    p_session_id: sessionId, p_user_id: user.id, p_token: token,
   });
-
-  if (upErr) {
-    return NextResponse.json(
-      { error: upErr.message || "採点結果の保存に失敗しました" },
-      { status: 500 },
-    );
+  if (claimError) {
+    return NextResponse.json({ error: "採点の開始に失敗しました" }, { status: 500 });
+  }
+  if (!claimed) {
+    return NextResponse.json({ error: "このクイズは採点中または提出済みです" }, { status: 409 });
   }
 
-  if (!updated) {
-    return NextResponse.json({ error: "このクイズは提出済みです" }, { status: 409 });
-  }
+  // 3分のDB leaseより短い2分で採点を打ち切る。中断した旧処理の保存はtokenで拒否する。
+  const signal = AbortSignal.timeout(120_000);
+  try {
+    const graded = await gradeWithClaude({ questions, answers, signal, failOnError: true });
+    signal.throwIfAborted();
 
-  return NextResponse.json({
-    scoreTotal: graded.scoreTotal,
-    scoreMc: graded.scoreMc,
-    scoreEssay: graded.scoreEssay,
-    feedback: graded.feedback,
-  });
+    // 結果と統計を同一トランザクションで確定する。RPC が失敗すれば未提出のまま再試行できる。
+    const { data: updated, error: upErr } = await admin.rpc("submit_quiz_with_performance", {
+      p_session_id: sessionId,
+      p_grading_token: token,
+      p_user_id: user.id,
+      p_answers: answers,
+      p_score_mc: graded.scoreMc,
+      p_score_essay: graded.scoreEssay,
+      p_score_total: graded.scoreTotal,
+      p_feedback: graded.feedback,
+      p_attempts: row.test_id ? buildQuestionPerformanceAttempts({
+        testId: row.test_id, questions, answers, feedback: graded.feedback,
+      }) : [],
+    });
+
+    if (upErr) {
+      return NextResponse.json(
+        { error: upErr.message || "採点結果の保存に失敗しました" },
+        { status: 500 },
+      );
+    }
+
+    if (!updated) {
+      return NextResponse.json({ error: "採点の処理権が失効しました。再試行してください" }, { status: 409 });
+    }
+
+    return NextResponse.json({
+      scoreTotal: graded.scoreTotal,
+      scoreMc: graded.scoreMc,
+      scoreEssay: graded.scoreEssay,
+      feedback: graded.feedback,
+    });
+  } catch {
+    return NextResponse.json({ error: "採点に失敗しました。再試行してください" }, { status: 500 });
+  } finally {
+    // 保存成功後や、期限切れ後の新所有者には影響しない。解放失敗時もleaseで回復できる。
+    try {
+      await admin.rpc("release_quiz_grading", {
+        p_session_id: sessionId, p_user_id: user.id, p_token: token,
+      });
+    } catch { /* 通信障害・プロセス中断時は期限切れで回復する。 */ }
+  }
 }
