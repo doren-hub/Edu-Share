@@ -117,10 +117,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: "PDFのみアップロードできます" }, { status: 400 });
   }
 
+  const processingToken = randomUUID();
   const { data: claimed, error: pendErr } = await admin
     .from("tests")
     .update({
       processing_status: "pending",
+      pdf_processing_token: processingToken,
+      pdf_processing_started_at: new Date().toISOString(),
       processing_error: null,
     })
     .eq("id", testId)
@@ -148,9 +151,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       .from("tests")
       .update({
         processing_status: "failed",
+        pdf_processing_token: null,
+        pdf_processing_started_at: null,
         processing_error: safeError,
       })
-      .eq("id", testId);
+      .eq("id", testId)
+      .eq("processing_status", "pending")
+      .eq("pdf_processing_token", processingToken);
     return NextResponse.json(
       { error: safeError || "R2へのアップロードに失敗しました" },
       { status: 500 },
@@ -158,16 +165,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   try {
-    await ingestPdfForTest({ testId, storagePath: replacementPath });
+    await ingestPdfForTest({ testId, storagePath: replacementPath, processingToken });
   } catch (e) {
     const safeError = sanitizeProcessingError(e);
     await admin
       .from("tests")
       .update({
         processing_status: "failed",
+        pdf_processing_token: null,
+        pdf_processing_started_at: null,
         processing_error: safeError,
       })
-      .eq("id", testId);
+      .eq("id", testId)
+      .eq("processing_status", "pending")
+      .eq("pdf_processing_token", processingToken);
     return NextResponse.json(
       {
         error: "PDFの取り込みに失敗しました",

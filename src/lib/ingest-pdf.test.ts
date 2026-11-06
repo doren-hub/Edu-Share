@@ -48,7 +48,7 @@ function ingestion(options: { embeddingFailure?: boolean; rpcFailure?: boolean; 
     "@/lib/sanitize-pdf-text": { sanitizeExtractedPdfText: (s: string) => s },
     "@/lib/strip-references-section": { stripReferencesSection: (s: string) => s },
   });
-  return { run: () => ingestPdfForTest({ testId: "test", storagePath: "new.pdf" }), events, payload: () => payload };
+  return { run: () => ingestPdfForTest({ testId: "test", storagePath: "new.pdf", processingToken: "token" }), events, payload: () => payload };
 }
 
 test("embedding failure never reaches replacement; all batches precede one atomic RPC", async () => {
@@ -60,6 +60,7 @@ test("embedding failure never reaches replacement; all batches precede one atomi
   assert.deepEqual(success.events, ["embed", "embed", "embed", "replace_test_pdf_chunks"]);
   assert.equal(success.payload().p_chunks.length, 85);
   assert.equal(success.payload().p_storage_path, "new.pdf");
+  assert.equal(success.payload().p_processing_token, "token");
 });
 
 test("replacement error propagates without an insert retry; empty extraction retains notice", async () => {
@@ -165,3 +166,177 @@ test("concurrent replacement gets 409; failure preserves old PDF and releases pe
   assert.equal(path, "old.pdf");
   assert.equal(state, "failed");
 });
+
+test("recovery fences stale success and failure, preserves PDF/chunks, audits and checks generation", async () => {
+  const db = new PGlite();
+  const id = "11111111-1111-4111-8111-111111111111";
+  const oldToken = "22222222-2222-4222-8222-222222222222";
+  const newToken = "33333333-3333-4333-8333-333333333333";
+  const started = "2026-11-06T00:00:00.000Z";
+  try {
+    await db.exec(`
+      create role anon; create role authenticated; create role service_role;
+      create table tests(id uuid primary key, pdf_storage_path text, processing_status text, processing_error text);
+      create table document_chunks(test_id uuid references tests(id), chunk_index int, content text not null, pdf_page int, embedding text);
+      insert into tests values ('${id}', 'old.pdf', 'pending', null);
+      insert into document_chunks values ('${id}', 0, 'old', 1, null);
+    `);
+    for (const file of ["037_atomic_pdf_chunks.sql", "041_pdf_processing_recovery.sql"]) {
+      await db.exec(readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), "utf8")
+        .replace("c.embedding::vector", "c.embedding::text"));
+    }
+    const recover = (token: string | null, time: string | null, confirmed = true, reason = "worker stopped: incident 226") =>
+      db.query("select recover_test_pdf_processing($1,$2,$3,$4,$5,$6)", [id, token, time, "operator", reason, confirmed]);
+    const finish = (token: string) => db.query("select replace_test_pdf_chunks($1,$2,$3,$4::jsonb,null)",
+      [id, "new.pdf", token, JSON.stringify([{ chunk_index: 0, content: "new" }])]);
+    const failure = (token: string) => db.query(`update tests set processing_status='failed', processing_error='delayed',
+      pdf_processing_token=null, pdf_processing_started_at=null
+      where id=$1 and processing_status='pending' and pdf_processing_token=$2 returning id`, [id, token]);
+    const assertOld = async () => {
+      assert.deepEqual((await db.query("select content from document_chunks")).rows, [{ content: "old" }]);
+      assert.equal((await db.query<any>("select pdf_storage_path from tests")).rows[0].pdf_storage_path, "old.pdf");
+    };
+    // Legacy pending has no invented timestamp/token. Recovery still requires confirmation.
+    await assert.rejects(recover(null, null, false), /confirmation/);
+    await assert.rejects(recover(null, null, true, " "), /required/);
+    await recover(null, null);
+    await assertOld();
+    await assert.rejects(db.query("select replace_test_pdf_chunks($1,'late.pdf','[]'::jsonb,null)", [id]), /does not exist/);
+    await db.query("update tests set processing_status='pending', pdf_processing_token=$1, pdf_processing_started_at=$2", [oldToken, started]);
+    await assert.rejects(recover(newToken, started), /generation changed/);
+    await assert.rejects(recover(oldToken, "2026-11-05T00:00:00Z"), /generation changed/);
+    await recover(oldToken, started);
+    await assert.rejects(finish(oldToken), /not pending/);
+    assert.deepEqual((await failure(oldToken)).rows, []);
+    await assertOld();
+    await db.query("update tests set processing_status='pending', pdf_processing_token=$1, pdf_processing_started_at=$2", [newToken, started]);
+    await assert.rejects(recover(oldToken, started), /generation changed/);
+    await assert.rejects(finish(oldToken), /not pending/);
+    assert.deepEqual((await failure(oldToken)).rows, []);
+    await assertOld();
+    await finish(newToken);
+    assert.deepEqual((await failure(oldToken)).rows, []);
+    const row = (await db.query<any>("select * from tests")).rows[0];
+    assert.equal(row.processing_status, "ready");
+    assert.equal(row.pdf_processing_token, null);
+    assert.equal(row.pdf_processing_started_at, null);
+    assert.equal(row.pdf_storage_path, "new.pdf");
+    assert.deepEqual((await db.query("select content from document_chunks")).rows, [{ content: "new" }]);
+    assert.equal((await db.query<any>("select count(*)::int as n from pdf_processing_recoveries")).rows[0].n, 2);
+    for (const role of ["anon", "authenticated"]) {
+      await db.exec(`set role ${role}`);
+      await assert.rejects(recover(newToken, started), { code: "42501" });
+      await assert.rejects(finish(newToken), { code: "42501" });
+      await assert.rejects(db.query("select * from pdf_processing_recoveries"), { code: "42501" });
+      await db.exec("reset role");
+    }
+  } finally { await db.close(); }
+});
+
+for (const failAt of ["upload", "ingest"]) {
+  test(`late replacement ${failAt} failure cannot overwrite a recovered/new generation`, async () => {
+    const row: any = { id: "test", processing_status: "ready", pdf_storage_path: "old.pdf" };
+    const admin = { from: () => {
+      const filters: [string, unknown][] = [];
+      let update: any;
+      const apply = () => {
+        if (filters.every(([key, value]) => Array.isArray(value) ? value.includes(row[key]) : row[key] === value)) {
+          Object.assign(row, update);
+          return { data: { id: row.id }, error: null };
+        }
+        return { data: null, error: null };
+      };
+      const chain: any = {
+        select: () => chain,
+        eq: (key: string, value: unknown) => { filters.push([key, value]); return chain; },
+        in: (key: string, value: unknown) => { filters.push([key, value]); return chain; },
+        update: (value: unknown) => { update = value; return chain; },
+        single: async () => ({ data: { uploaded_by: "owner", pdf_storage_path: row.pdf_storage_path } }),
+        maybeSingle: async () => apply(),
+        then: (resolve: (v: unknown) => void) => resolve(apply()),
+      };
+      return chain;
+    } };
+    const lateFailure = async () => {
+      assert.equal(row.pdf_processing_token, "old-token");
+      assert.ok(row.pdf_processing_started_at);
+      // Recovery fences old-token, then a new request claims this row.
+      Object.assign(row, { processing_status: "pending", pdf_processing_token: "new-token", processing_error: null });
+      throw new Error("old worker failed late");
+    };
+    const { POST } = load("../app/api/tests/[id]/pdf/route.ts", {
+      "node:crypto": { randomUUID: () => "old-token" },
+      "next/server": { NextResponse },
+      "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "owner" } } }) } }) },
+      "@/lib/supabase/admin": { createAdminClient: () => admin },
+      "@/lib/object-storage": { putObject: failAt === "upload" ? lateFailure : async () => {} },
+      "@/lib/ingest-pdf": { ingestPdfForTest: async (params: any) => {
+        assert.equal(params.processingToken, "old-token");
+        await lateFailure();
+      } },
+      "@/lib/sanitize-processing-error": { sanitizeProcessingError: () => "safe error" },
+    });
+    const form = new FormData(); form.set("file", new File(["pdf"], "new.pdf", { type: "application/pdf" }));
+    const response = await POST(new Request("https://unused.invalid", { method: "POST", body: form }), { params: Promise.resolve({ id: "test" }) });
+    assert.equal(response.status, 500);
+    assert.equal(row.processing_status, "pending");
+    assert.equal(row.pdf_processing_token, "new-token");
+    assert.equal(row.processing_error, null);
+    assert.equal(row.pdf_storage_path, "old.pdf");
+  });
+}
+
+for (const failAt of ["upload", "ingest"]) {
+  test(`late initial ${failAt} failure cannot delete or fail the new generation`, async () => {
+    const row: any = {};
+    let affected = 0;
+    const admin = { from: (table: string) => {
+      const filters: [string, unknown][] = [];
+      let update: any;
+      const chain: any = {
+        select: () => chain,
+        eq: (key: string, value: unknown) => { filters.push([key, value]); return chain; },
+        insert: (value: unknown) => { Object.assign(row, value); return chain; },
+        update: (value: unknown) => { update = value; return chain; },
+        delete: () => { update = { deleted: true }; return chain; },
+        maybeSingle: async () => ({ data: { id: "owner" } }),
+        single: async () => ({ data: { id: row.id } }),
+        then: (resolve: (v: unknown) => void) => {
+          assert.equal(table, "tests");
+          if (filters.every(([key, value]) => row[key] === value)) {
+            affected++; Object.assign(row, update);
+          }
+          resolve({ error: null });
+        },
+      };
+      return chain;
+    } };
+    const lateFailure = async () => {
+      assert.equal(row.pdf_processing_token, "old-token");
+      assert.ok(row.pdf_processing_started_at);
+      Object.assign(row, { processing_status: "pending", pdf_processing_token: "new-token" });
+      throw new Error("late error");
+    };
+    const { POST } = load("../app/api/tests/upload/route.ts", {
+      "node:crypto": { randomUUID: () => "old-token" },
+      "next/server": { NextResponse },
+      "@/lib/api-input-schemas": { uploadFormSchema: { safeParse: () => ({ success: true, data: { document_type: "past_exam", title: "test" } }) } },
+      "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "owner" } } }) } }) },
+      "@/lib/supabase/admin": { createAdminClient: () => admin },
+      "@/lib/object-storage": { putObject: failAt === "upload" ? lateFailure : async () => {} },
+      "@/lib/ingest-pdf": { ingestPdfForTest: async (params: any) => {
+        assert.equal(params.processingToken, "old-token"); await lateFailure();
+      } },
+      "@/lib/sanitize-processing-error": { sanitizeProcessingError: () => "safe error" },
+      "@/lib/paper-authors": {}, "@/lib/paper-industries": {}, "@/lib/picklist-parse": {},
+      "@/lib/picklist-merge": {}, "@/lib/supabase/picklist-table": {}, "@/lib/pdf-filename": {},
+    });
+    const form = new FormData(); form.set("file", new File(["pdf"], "new.pdf", { type: "application/pdf" }));
+    const response = await POST(new Request("https://unused.invalid", { method: "POST", body: form }));
+    assert.equal(response.status, 500);
+    assert.equal(affected, 0);
+    assert.equal(row.processing_status, "pending");
+    assert.equal(row.pdf_processing_token, "new-token");
+    assert.equal(row.deleted, undefined);
+  });
+}
