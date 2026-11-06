@@ -402,7 +402,7 @@ test("診断: ツール・テキストの除外を理由別に一度ずつ数え
 test("診断: max_tokens は少数・空・解析不能の応答でも本文なしで記録する", async (t) => {
   const info = t.mock.method(console, "info", () => {});
   const warn = t.mock.method(console, "warn", () => {});
-  const valid = { ...questions[0], sourceExcerpt: excerpt };
+  const valid = { ...questions[1], sourceExcerpt: excerpt };
   const replies: Array<{ content: ReplyContent; count: number | null }> = [
     { content: toolReply({ questions: [valid] }), count: 1 },
     { content: toolReply({ questions: [] }), count: 0 },
