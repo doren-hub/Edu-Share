@@ -112,6 +112,34 @@ export interface QuizAnthropicClient {
   };
 }
 
+/** 最小限の API 境界。注入時はキー・プロバイダー設定なしで Gemini 経路を使う。 */
+export interface QuizGeminiClient {
+  getGenerativeModel(params: {
+    model: string;
+    systemInstruction?: string;
+    generationConfig?: {
+      maxOutputTokens?: number;
+      temperature?: number;
+    };
+  }): {
+    generateContent(prompt: string): Promise<{
+      response: {
+        text(): string;
+      };
+    }>;
+  };
+}
+
+export type QuizLlmClient = QuizAnthropicClient | QuizGeminiClient;
+
+function isAnthropicClient(client: unknown): client is QuizAnthropicClient {
+  return typeof client === "object" && client !== null && "messages" in client;
+}
+
+function isGeminiClient(client: unknown): client is QuizGeminiClient {
+  return typeof client === "object" && client !== null && "getGenerativeModel" in client;
+}
+
 async function generateResponse(params: {
   system?: string;
   user: string;
@@ -119,10 +147,14 @@ async function generateResponse(params: {
   temperature: number;
   quiz?: boolean;
   cacheableDocument?: string;
-}, anthropicClient?: QuizAnthropicClient): Promise<{ text: string; toolInput?: unknown }> {
-  const provider = anthropicClient ? "anthropic" : resolveProvider();
+}, client?: QuizAnthropicClient | QuizGeminiClient): Promise<{ text: string; toolInput?: unknown }> {
+  const provider = isAnthropicClient(client)
+    ? "anthropic"
+    : isGeminiClient(client)
+      ? "gemini"
+      : resolveProvider();
   if (provider === "anthropic") {
-    const client = anthropicClient ?? new Anthropic({
+    const anthropic = isAnthropicClient(client) ? client : new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY!.trim(),
     });
     // キャッシュはブロック末尾までの prefix に一致するため、nonce より前に資料を置く。
@@ -134,7 +166,7 @@ async function generateResponse(params: {
       : params.user;
     let res;
     try {
-      res = await client.messages.create({
+      res = await anthropic.messages.create({
         model: anthropicModel(),
         max_tokens: params.maxTokens,
         ...(params.quiz ? { tools: [quizTool], tool_choice: { type: "tool" as const, name: quizTool.name } } : {}),
@@ -163,18 +195,19 @@ async function generateResponse(params: {
       .trim() };
   }
 
+  const gemini = isGeminiClient(client) ? client : undefined;
   return { text: await callGeminiText({
     system: params.system,
     user: params.cacheableDocument ? `${params.user}\n\n${params.cacheableDocument}` : params.user,
     maxTokens: params.maxTokens,
     temperature: params.temperature,
-  }) };
+  }, gemini) };
 }
 
 async function generateText(params: {
   system?: string; user: string; maxTokens: number; temperature: number;
-}, anthropicClient?: QuizAnthropicClient): Promise<string> {
-  return (await generateResponse(params, anthropicClient)).text;
+}, client?: QuizAnthropicClient | QuizGeminiClient): Promise<string> {
+  return (await generateResponse(params, client)).text;
 }
 
 export async function callGeminiText(params: {
@@ -182,14 +215,19 @@ export async function callGeminiText(params: {
   user: string;
   maxTokens?: number;
   temperature?: number;
-}): Promise<string> {
-  const k = geminiKey();
-  if (!k) {
-    throw new Error(
-      "GEMINI_API_KEY（または GOOGLE_API_KEY）が未設定かサンプルのままです。Google AI Studio でキーを発行し .env.local に設定し、開発サーバーを再起動してください。",
-    );
+}, geminiClient?: QuizGeminiClient): Promise<string> {
+  let genAI: QuizGeminiClient;
+  if (geminiClient) {
+    genAI = geminiClient;
+  } else {
+    const k = geminiKey();
+    if (!k) {
+      throw new Error(
+        "GEMINI_API_KEY（または GOOGLE_API_KEY）が未設定かサンプルのままです。Google AI Studio でキーを発行し .env.local に設定し、開発サーバーを再起動してください。",
+      );
+    }
+    genAI = new GoogleGenerativeAI(k);
   }
-  const genAI = new GoogleGenerativeAI(k);
   const models = geminiModelCandidates();
   let lastMsg = "";
 
@@ -392,7 +430,7 @@ export async function generateQuizFromContext(params: {
   contextChunks: QuizContextChunk[];
   documentType: "past_exam" | "paper";
   nonce: string;
-}, anthropicClient?: QuizAnthropicClient): Promise<StoredQuestion[]> {
+}, client?: QuizAnthropicClient | QuizGeminiClient): Promise<StoredQuestion[]> {
   const joined = params.contextChunks
     .map((c, i) => {
       const tag =
@@ -426,7 +464,7 @@ session_entropy: ${params.nonce}`;
     user,
     maxTokens: 8192,
     temperature: 0.9,
-  }, anthropicClient);
+  }, client);
 
   // A present but invalid tool payload must never be rescued by accompanying text.
   let parsed: unknown;
@@ -516,7 +554,7 @@ export function stripForClient(questions: StoredQuestion[]): ClientQuestion[] {
 export async function gradeWithClaude(params: {
   questions: StoredQuestion[];
   answers: AnswerMap;
-}, anthropicClient?: QuizAnthropicClient): Promise<{
+}, client?: QuizAnthropicClient | QuizGeminiClient): Promise<{
   scoreMc: number;
   scoreEssay: number;
   scoreTotal: number;
@@ -541,7 +579,11 @@ export async function gradeWithClaude(params: {
     comment: string;
   }> = [];
 
-  const provider = anthropicClient ? "anthropic" : resolveProvider();
+  const provider = isAnthropicClient(client)
+    ? "anthropic"
+    : isGeminiClient(client)
+      ? "gemini"
+      : resolveProvider();
   const apiLabel = provider === "anthropic" ? "Claude API" : "Gemini API";
 
   for (const q of essays) {
@@ -561,7 +603,7 @@ ${wrapUntrustedDocument(`問題: ${q.prompt}\n模範解答（参考）: ${q.refe
         user: prompt,
         maxTokens: 400,
         temperature: 0.2,
-      }, anthropicClient);
+      }, client);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       perEssay.push({

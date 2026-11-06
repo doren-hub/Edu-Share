@@ -5,8 +5,10 @@ import {
   generateQuizFromContext,
   gradeWithClaude,
   type QuizAnthropicClient,
+  type QuizGeminiClient,
 } from "./claude-quiz.ts";
 import type { StoredQuestion } from "./types.ts";
+import { wrapUntrustedDocument } from "./untrusted-document.ts";
 
 const excerpt = "光合成では光エネルギーを使って二酸化炭素と水から有機物を作ります。";
 const quizParams = {
@@ -245,4 +247,116 @@ test("出題: 同じ資料は nonce が変わっても同じキャッシュ pref
   assert.equal(blocks[1].cache_control, undefined);
   assert.ok(repeated[1].type === "text" && repeated[1].text.includes("session_entropy: another-nonce"));
   assert.ok(repeated[1].type === "text" && repeated[1].text.includes("document_type: paper"));
+});
+
+function fakeGeminiClient(replies: Array<string | Error>) {
+  const calls: Array<{
+    model: string;
+    systemInstruction?: string;
+    generationConfig?: { maxOutputTokens?: number; temperature?: number };
+    prompt: string;
+  }> = [];
+
+  const client: QuizGeminiClient = {
+    getGenerativeModel(params) {
+      return {
+        async generateContent(prompt: string) {
+          calls.push({ ...params, prompt });
+          assert.ok(replies.length, "unexpected API call");
+          const reply = replies.shift()!;
+          if (reply instanceof Error) throw reply;
+          return {
+            response: {
+              text: () => reply,
+            },
+          };
+        },
+      };
+    },
+  };
+  return { client, calls };
+}
+
+test("出題: Gemini 経路に渡る文字列が document_type、session_entropy、空行、抜粋:、JSON包装資料の順序と改行を維持する", async () => {
+  const valid = questions.map((q) => ({ ...q, sourceExcerpt: excerpt }));
+  const f = fakeGeminiClient([JSON.stringify(valid)]);
+
+  const result = await generateQuizFromContext(quizParams, f.client);
+  assert.equal(result.length, valid.length);
+  assert.equal(f.calls.length, 1);
+
+  const prompt = f.calls[0].prompt;
+
+  // 1. 各要素の順序と改行構造（document_type、session_entropy、空行、抜粋:、JSON包装資料）を固定
+  const [line1, line2, line3, line4, ...rest] = prompt.split("\n");
+  assert.equal(line1, `document_type: ${quizParams.documentType}`);
+  assert.equal(line2, `session_entropy: ${quizParams.nonce}`);
+  assert.equal(line3, ""); // 空行
+  assert.equal(line4, "抜粋:");
+
+  const expectedJoined = `--- 抜粋 1 (PDF p.3) ---\n${excerpt}`;
+  const expectedPrompt = [
+    `document_type: ${quizParams.documentType}`,
+    `session_entropy: ${quizParams.nonce}`,
+    "",
+    "抜粋:",
+    wrapUntrustedDocument(expectedJoined),
+  ].join("\n");
+  assert.equal(prompt, expectedPrompt);
+
+  // 2. JSON包装の正当性と資料内容の完全性
+  const jsonLine = rest.join("\n");
+  const parsed = JSON.parse(jsonLine);
+  assert.equal(typeof parsed.untrusted_document, "string");
+  assert.ok(parsed.untrusted_document.includes(excerpt));
+  assert.ok(parsed.untrusted_document.includes("--- 抜粋 1 (PDF p.3) ---"));
+
+  // 3. システム指示と生成オプション
+  assert.match(String(f.calls[0].systemInstruction), /教材設計/);
+  assert.deepEqual(f.calls[0].generationConfig, {
+    maxOutputTokens: 8192,
+    temperature: 0.9,
+  });
+});
+
+test("出題: 複数抜粋の Gemini 送信時も順序・改行・JSON包装を維持する", async () => {
+  const excerpt1 = "第1抜粋の本文として十分な長さを持つ日本語の文章です。";
+  const excerpt2 = "第2抜粋の本文として十分な長さを持つ日本語の文章です。";
+  const chunks = [
+    { content: excerpt1, pdfPage: 1 },
+    { content: excerpt2, pdfPage: 5 },
+  ];
+  const valid = [{ ...questions[0], sourceExcerpt: excerpt1 }];
+  const f = fakeGeminiClient([JSON.stringify(valid)]);
+
+  const params = {
+    contextChunks: chunks,
+    documentType: "past_exam" as const,
+    nonce: "gemini-nonce-456",
+  };
+  const result = await generateQuizFromContext(params, f.client);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].sourcePdfPage, 1);
+
+  const expectedJoined =
+    `--- 抜粋 1 (PDF p.1) ---\n${excerpt1}\n\n--- 抜粋 2 (PDF p.5) ---\n${excerpt2}`;
+  const expectedPrompt = [
+    "document_type: past_exam",
+    "session_entropy: gemini-nonce-456",
+    "",
+    "抜粋:",
+    wrapUntrustedDocument(expectedJoined),
+  ].join("\n");
+
+  assert.equal(f.calls[0].prompt, expectedPrompt);
+});
+
+test("採点: Gemini 経路でも模範解答と回答を包装し、テキスト採点を実行する", async () => {
+  const f = fakeGeminiClient(['{"score":8,"comment":"良い解答です"}']);
+  const result = await gradeWithClaude({ questions, answers: { q1: 1, e1: "光を使います" } }, f.client);
+  assert.equal(result.scoreEssay, 80);
+  assert.equal(f.calls.length, 1);
+  assert.ok(f.calls[0].prompt.includes('{"score":0,"comment":"..."}'));
+  assert.ok(f.calls[0].prompt.includes("光合成を説明"));
+  assert.ok(f.calls[0].prompt.includes("光を使います"));
 });
