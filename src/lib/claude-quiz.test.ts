@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { anthropicModel } from "./anthropic-config.ts";
 import {
+  callGeminiText,
   generateQuizFromContext,
   gradeWithClaude,
   type QuizAnthropicClient,
@@ -467,4 +468,107 @@ test("採点: 両プロバイダーに中断signalを渡し、中断後に後続
     await assert.rejects(gradeWithClaude({ questions, answers: {}, signal: controller.signal }, client), /deadline/);
     assert.equal(calls, 1);
   }
+});
+
+
+test("Gemini: バックオフ中の中断で即座に失敗し、再試行・次モデルを開始しない", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const controller = new AbortController();
+  const clear = t.mock.method(globalThis, "clearTimeout");
+  const add = t.mock.method(controller.signal, "addEventListener");
+  const remove = t.mock.method(controller.signal, "removeEventListener");
+  const previousModels = process.env.GEMINI_MODEL;
+  process.env.GEMINI_MODEL = "first-model,second-model";
+  t.after(() => {
+    if (previousModels === undefined) delete process.env.GEMINI_MODEL;
+    else process.env.GEMINI_MODEL = previousModels;
+  });
+  let calls = 0;
+  const client: QuizGeminiClient = { getGenerativeModel: () => ({
+    async generateContent() { calls++; throw new Error("503 overloaded"); },
+  }) };
+  const pending = callGeminiText({ user: "test", signal: controller.signal }, client);
+  // API の失敗後にバックオフへ入る。タイマーは進めない。
+  await Promise.resolve();
+  assert.equal(add.mock.callCount(), 1);
+  const reason = new Error("deadline");
+  const rejected = assert.rejects(pending, (e) => e === reason);
+  controller.abort(reason);
+  await rejected;
+  assert.equal(clear.mock.callCount(), 1);
+  assert.equal(remove.mock.callCount(), 1);
+  assert.equal(remove.mock.calls[0].arguments[1], add.mock.calls[0].arguments[1]);
+  t.mock.timers.tick(100_000);
+  assert.equal(calls, 1);
+});
+
+test("Gemini: 中断済み signal は API・待機を開始せず失敗する", async (t) => {
+  const controller = new AbortController();
+  const reason = new Error("already aborted");
+  controller.abort(reason);
+  const add = t.mock.method(controller.signal, "addEventListener");
+  let calls = 0;
+  const client: QuizGeminiClient = { getGenerativeModel: () => ({
+    async generateContent() { calls++; throw new Error("503 overloaded"); },
+  }) };
+  await assert.rejects(callGeminiText({ user: "test", signal: controller.signal }, client), (e) => e === reason);
+  assert.equal(calls, 0);
+  assert.equal(add.mock.callCount(), 0);
+});
+
+test("Gemini: 通常の指数バックオフを維持し、完了後は中断リスナーを外す", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const signal of [undefined, new AbortController().signal]) {
+    const add = signal ? t.mock.method(signal, "addEventListener") : undefined;
+    const remove = signal ? t.mock.method(signal, "removeEventListener") : undefined;
+    let calls = 0;
+    const client: QuizGeminiClient = { getGenerativeModel: () => ({
+      async generateContent() {
+        calls++;
+        if (calls < 3) throw new Error("503 overloaded");
+        return { response: { text: () => " success " } };
+      },
+    }) };
+    const pending = callGeminiText({ user: "test", signal }, client);
+    await Promise.resolve();
+    t.mock.timers.tick(699);
+    assert.equal(calls, 1);
+    t.mock.timers.tick(1);
+    // 次の再試行とバックオフ開始まで microtask を進める。
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.equal(calls, 2);
+    t.mock.timers.tick(1399);
+    assert.equal(calls, 2);
+    t.mock.timers.tick(1);
+    assert.equal(await pending, "success");
+    assert.equal(calls, 3);
+    if (add && remove) {
+      assert.equal(add.mock.callCount(), 2);
+      assert.equal(remove.mock.callCount(), 2);
+      for (let i = 0; i < 2; i++) {
+        assert.equal(remove.mock.calls[i].arguments[1], add.mock.calls[i].arguments[1]);
+      }
+    }
+  }
+});
+
+
+test("Gemini: API 失敗後、待機開始直前に中断されてもタイマーを作らない", async (t) => {
+  const controller = new AbortController();
+  const reason = new Error("deadline before backoff");
+  const timer = t.mock.method(globalThis, "setTimeout");
+  const add = t.mock.method(controller.signal, "addEventListener");
+  const transientError = new Error();
+  Object.defineProperty(transientError, "message", { get() {
+    controller.abort(reason);
+    return "503 overloaded";
+  } });
+  let calls = 0;
+  const client: QuizGeminiClient = { getGenerativeModel: () => ({
+    async generateContent() { calls++; throw transientError; },
+  }) };
+  await assert.rejects(callGeminiText({ user: "test", signal: controller.signal }, client), (e) => e === reason);
+  assert.equal(calls, 1);
+  assert.equal(timer.mock.callCount(), 0);
+  assert.equal(add.mock.callCount(), 0);
 });
