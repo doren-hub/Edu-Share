@@ -307,7 +307,7 @@ const cases: Case[] = [
       },
     }),
     request: json({ answers: { q1: 0 } }),
-    ownerWrites: ["llm:grade", "rpc:submit_quiz_with_performance"],
+    ownerWrites: ["rpc:claim_quiz_grading", "llm:grade", "rpc:submit_quiz_with_performance", "rpc:release_quiz_grading"],
     assertsOwnerBeforeBody: true,
     rejectsMalformedJsonAfterOwnerCheck: true,
     extra: (record) => ({
