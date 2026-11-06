@@ -230,26 +230,25 @@ const cases: Case[] = [
     ],
     assertsOwnerBeforeBody: true,
   },
-  {
-    name: "material/slide commit", path: "../app/api/tests/[id]/material/slide/commit/route.ts", method: "POST",
-    params: { id: TEST_ID }, rows: (o) => ({ tests: { ...testRow(o), pdf_storage_path: null } }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-slide-upload-${SESSION_ID}.pdf` }),
-    ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
-    expectedConditions: [
-      { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
-      { table: "tests", op: "update", method: "eq", args: ["uploaded_by", OWNER] },
-    ],
-    assertsOwnerBeforeBody: true,
-  },
-  {
-    name: "material/video commit", path: "../app/api/tests/[id]/material/video/commit/route.ts", method: "POST",
-    params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-video-upload-${SESSION_ID}.mp4` }),
-    ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
-    expectedConditions: [
-      { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
-      { table: "tests", op: "update", method: "eq", args: ["uploaded_by", OWNER] },
-    ],
-    assertsOwnerBeforeBody: true,
-  },
+  ...(["slide", "video"] as const).flatMap((kind): Case[] => {
+    const column = kind === "slide" ? "notebooklm_slide_pdf_storage_path" : "notebooklm_video_mp4_storage_path";
+    const extension = kind === "slide" ? "pdf" : "mp4";
+    const existingPath = `${OWNER}/${TEST_ID}-notebooklm-${kind}-${SESSION_ID}.${extension}`;
+    return ([null, existingPath] as const).map((oldPath): Case => ({
+      name: `material/${kind} commit（${oldPath === null ? "初回登録" : "置換"}）`,
+      path: `../app/api/tests/[id]/material/${kind}/commit/route.ts`, method: "POST",
+      params: { id: TEST_ID },
+      rows: (o) => ({ tests: { ...testRow(o), pdf_storage_path: null, [column]: oldPath } }),
+      request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-${kind}-upload-${SESSION_ID}.${extension}` }),
+      ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
+      expectedConditions: [
+        { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
+        { table: "tests", op: "update", method: "eq", args: ["uploaded_by", OWNER] },
+        { table: "tests", op: "update", method: oldPath === null ? "is" : "eq", args: [column, oldPath] },
+      ],
+      assertsOwnerBeforeBody: true,
+    }));
+  }),
   ...(["slide", "video"] as const).flatMap((kind): Case[] => [
     {
       name: `material/${kind} POST`, path: `../app/api/tests/[id]/material/${kind}/route.ts`, method: "POST",
