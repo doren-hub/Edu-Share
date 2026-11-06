@@ -5,7 +5,7 @@ import { quizSubmitSchema as bodySchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { gradeWithClaude } from "@/lib/claude-quiz";
-import { recordQuestionPerformanceAfterSubmit } from "@/lib/question-performance";
+import { buildQuestionPerformanceAttempts } from "@/lib/question-performance";
 import type { AnswerMap, StoredQuestion } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -56,20 +56,19 @@ export async function POST(
 
   const graded = await gradeWithClaude({ questions, answers });
 
-  const { data: updated, error: upErr } = await admin
-    .from("quiz_sessions")
-    .update({
-      answers_json: answers,
-      score_mc: graded.scoreMc,
-      score_essay: graded.scoreEssay,
-      score_total: graded.scoreTotal,
-      feedback_json: graded.feedback,
-    })
-    .eq("id", sessionId)
-    // 未提出 → 提出済みの遷移を条件付き更新で原子的に行う。並行提出では
-    // 更新できた 1 リクエストだけが結果を保存し、統計を記録する。
-    .is("answers_json", null)
-    .select("id");
+  // 結果と統計を同一トランザクションで確定する。RPC が失敗すれば未提出のまま再試行できる。
+  const { data: updated, error: upErr } = await admin.rpc("submit_quiz_with_performance", {
+    p_session_id: sessionId,
+    p_user_id: user.id,
+    p_answers: answers,
+    p_score_mc: graded.scoreMc,
+    p_score_essay: graded.scoreEssay,
+    p_score_total: graded.scoreTotal,
+    p_feedback: graded.feedback,
+    p_attempts: row.test_id ? buildQuestionPerformanceAttempts({
+      testId: row.test_id, questions, answers, feedback: graded.feedback,
+    }) : [],
+  });
 
   if (upErr) {
     return NextResponse.json(
@@ -78,19 +77,8 @@ export async function POST(
     );
   }
 
-  if (!updated || updated.length === 0) {
+  if (!updated) {
     return NextResponse.json({ error: "このクイズは提出済みです" }, { status: 409 });
-  }
-
-  if (row.test_id) {
-    await recordQuestionPerformanceAfterSubmit({
-      admin,
-      testId: row.test_id,
-      userId: user.id,
-      questions,
-      answers,
-      feedback: graded.feedback,
-    });
   }
 
   return NextResponse.json({

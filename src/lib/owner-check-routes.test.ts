@@ -60,7 +60,7 @@ function assertConditionsInclude(
 /** テーブルごとの固定行を返し、書き込み系呼び出しを writes、クエリ条件を conditions に記録する簡易クライアント。 */
 function fakeAdmin(rows: Rows, writes: string[], conditions: QueryCondition[] = []) {
   return {
-    rpc: async (name: string) => { writes.push(`rpc:${name}`); return { data: null, error: null }; },
+    rpc: async (name: string) => { writes.push(`rpc:${name}`); return { data: true, error: null }; },
     from: (table: string) => {
       let op = "select";
       const result = (single = false) => op === "select"
@@ -307,15 +307,12 @@ const cases: Case[] = [
       },
     }),
     request: json({ answers: { q1: 0 } }),
-    ownerWrites: ["llm:grade", "update:quiz_sessions", "stats"],
-    expectedConditions: [
-      { table: "quiz_sessions", op: "update", method: "eq", args: ["id", SESSION_ID] },
-    ],
+    ownerWrites: ["llm:grade", "rpc:submit_quiz_with_performance"],
     assertsOwnerBeforeBody: true,
     rejectsMalformedJsonAfterOwnerCheck: true,
     extra: (record) => ({
       "@/lib/claude-quiz": { gradeWithClaude: record("llm:grade", { scoreMc: 1, scoreEssay: 0, scoreTotal: 1, feedback: {} }) },
-      "@/lib/question-performance": { recordQuestionPerformanceAfterSubmit: record("stats") },
+      "@/lib/question-performance": { buildQuestionPerformanceAttempts: () => [] },
     }),
   },
   {
