@@ -1,5 +1,4 @@
 import { createHash } from "crypto";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AnswerMap, StoredQuestion } from "@/lib/types";
 
 const ESSAY_PASS_SCORE = 6;
@@ -66,17 +65,15 @@ export function essayScoreFromFeedback(
   return null;
 }
 
-export async function recordQuestionPerformanceAfterSubmit(params: {
-  admin: SupabaseClient;
+export function buildQuestionPerformanceAttempts(params: {
   testId: string;
-  userId: string;
   questions: StoredQuestion[];
   answers: AnswerMap;
   feedback: unknown;
-}): Promise<void> {
-  const { admin, testId, userId, questions, answers, feedback } = params;
+}) {
+  const { testId, questions, answers, feedback } = params;
 
-  for (const q of questions) {
+  return questions.map((q) => {
     const key = makeQuestionPerformanceKey(testId, q);
     const excerpt = excerptForPerformanceUi(q);
     let correct = false;
@@ -88,18 +85,13 @@ export async function recordQuestionPerformanceAfterSubmit(params: {
       correct = s !== null && s >= ESSAY_PASS_SCORE;
     }
 
-    const { error } = await admin.rpc("record_question_attempt", {
-      p_user_id: userId,
-      p_test_id: testId,
-      p_question_key: key,
-      p_prompt_excerpt: excerpt,
-      p_question_type: q.type,
-      p_correct: correct,
-    });
-    if (error) {
-      console.error("record_question_attempt failed", error.message);
-    }
-  }
+    return {
+      question_key: key,
+      prompt_excerpt: excerpt,
+      question_type: q.type,
+      correct,
+    };
+  });
 }
 
 export type QuestionPerformanceRow = {

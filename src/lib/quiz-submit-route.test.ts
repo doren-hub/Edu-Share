@@ -30,9 +30,8 @@ function loadWithStubs(path: string, stubs: Record<string, unknown>) {
 
 type Row = { id: string; user_id: string; test_id: string | null; questions_json: unknown; answers_json: unknown; score_mc: number; score_essay: number; score_total: number; feedback_json: unknown };
 
-// quiz_sessions の 1 行を模したメモリ DB。update は .is("answers_json", null)
-// 条件を評価し、条件付き更新の原子性（1 行を 1 回だけ更新）を再現する。
-function fixture(opts: { row?: Partial<Row>; user?: string | null } = {}) {
+// RPC の成功・競合・エラーを模擬する。DB 内の原子性は隔離 PostgreSQL で別途検証。
+function fixture(opts: { row?: Partial<Row>; user?: string | null; failSave?: boolean } = {}) {
   const row: Row = {
     id: sessionId, user_id: userId, test_id: "test-1",
     questions_json: [{ id: "q1", type: "multiple_choice", prompt: "p", options: ["a", "b"], correctIndex: 0 }],
@@ -40,24 +39,24 @@ function fixture(opts: { row?: Partial<Row>; user?: string | null } = {}) {
   };
   const calls = { grade: 0, stats: 0, updates: 0 };
   const admin = {
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      assert.equal(name, "submit_quiz_with_performance");
+      assert.equal(args.p_user_id, userId);
+      assert.equal(args.p_session_id, sessionId);
+      if (opts.failSave) return { data: null, error: { message: "injected failure" } };
+      if (row.answers_json !== null) return { data: false, error: null };
+      calls.updates++;
+      calls.stats++;
+      Object.assign(row, {
+        answers_json: args.p_answers, score_mc: args.p_score_mc,
+        score_essay: args.p_score_essay, score_total: args.p_score_total, feedback_json: args.p_feedback,
+      });
+      return { data: true, error: null };
+    },
     from: (table: string) => {
       assert.equal(table, "quiz_sessions");
       return {
         select: () => ({ eq: () => ({ single: async () => ({ data: { ...row }, error: null }) }) }),
-        update: (values: Partial<Row>) => {
-          const filters: Array<(r: Row) => boolean> = [];
-          const chain = {
-            eq: (col: keyof Row, v: unknown) => { filters.push((r) => r[col] === v); return chain; },
-            is: (col: keyof Row, v: null) => { filters.push((r) => r[col] === v); return chain; },
-            select: async () => {
-              if (!filters.every((f) => f(row))) return { data: [], error: null };
-              calls.updates++;
-              Object.assign(row, values);
-              return { data: [{ id: row.id }], error: null };
-            },
-          };
-          return chain;
-        },
       };
     },
   };
@@ -83,7 +82,7 @@ function fixture(opts: { row?: Partial<Row>; user?: string | null } = {}) {
       },
     },
     "@/lib/question-performance": {
-      recordQuestionPerformanceAfterSubmit: async () => { calls.stats++; },
+      buildQuestionPerformanceAttempts: () => [{ question_key: "key", correct: true }],
     },
   });
   const post = route.POST as (req: Request, ctx: { params: Promise<{ sessionId: string }> }) => Promise<Response>;
@@ -132,4 +131,12 @@ test("submit: 未ログインは 401、他人のセッションは 403 で書き
   const other = fixture({ user: "someone-else" });
   assert.equal((await other.submit()).status, 403);
   for (const f of [anon, other]) assert.deepEqual(f.calls, { grade: 0, stats: 0, updates: 0 });
+});
+
+test("submit: RPC失敗では500を返し結果を確定しない", async () => {
+  const f = fixture({ failSave: true });
+  f.setSingleGrade();
+  assert.equal((await f.submit()).status, 500);
+  assert.equal(f.row.answers_json, null);
+  assert.deepEqual(f.calls, { grade: 1, stats: 0, updates: 0 });
 });
