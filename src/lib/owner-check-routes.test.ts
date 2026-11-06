@@ -144,6 +144,16 @@ type Case = {
   /** 本人成功時に期待する書き込み（順序どおり） */
   ownerWrites: string[];
   extra?: Extra;
+  /** 存在しない ID に対する応答（省略時は 404）。200 冪等成功など */
+  missingResponse?: { status: number; body?: unknown };
+  /** 存在しない ID でも 200 冪等成功を返すルート（missingResponse の簡易指定） */
+  idempotentMissing?: boolean;
+  /** 未認証・他人の不正な本文を解析しないことを検証するケースか */
+  assertsOwnerBeforeBody?: boolean;
+  /** 本人による不正な JSON を所有者確認後に拒否することを検証するケースか */
+  rejectsMalformedJsonAfterOwnerCheck?: boolean;
+  /** 再出題元セッションの所有者確認を検証するケースか */
+  reuseSessionCase?: boolean;
 };
 
 const json = (body: unknown) => () => new Request("https://unused.invalid/x", { method: "POST", body: JSON.stringify(body) });
@@ -153,6 +163,8 @@ const cases: Case[] = [
     name: "tests PATCH", path: "../app/api/tests/[id]/route.ts", method: "PATCH", params: { id: TEST_ID },
     rows: (o) => ({ tests: testRow(o) }), request: json({ title: "新しいタイトル" }),
     ownerWrites: ["update:tests"],
+    assertsOwnerBeforeBody: true,
+    rejectsMalformedJsonAfterOwnerCheck: true,
   },
   {
     name: "tests DELETE", path: "../app/api/tests/[id]/route.ts", method: "DELETE", params: { id: TEST_ID },
@@ -164,22 +176,26 @@ const cases: Case[] = [
     rows: (o) => ({ tests: testRow(o) }),
     request: () => new Request("https://unused.invalid/x", { method: "POST", body: pdfForm() }),
     ownerWrites: ["update:tests", "r2:put", "ingest"],
+    assertsOwnerBeforeBody: true,
   },
   {
     name: "material/slide commit", path: "../app/api/tests/[id]/material/slide/commit/route.ts", method: "POST",
     params: { id: TEST_ID }, rows: (o) => ({ tests: { ...testRow(o), pdf_storage_path: null } }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-slide-upload-${SESSION_ID}.pdf` }),
     ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
+    assertsOwnerBeforeBody: true,
   },
   {
     name: "material/video commit", path: "../app/api/tests/[id]/material/video/commit/route.ts", method: "POST",
     params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({ action: "commit", path: `${OWNER}/${TEST_ID}-notebooklm-video-upload-${SESSION_ID}.mp4` }),
     ownerWrites: ["r2:copy", "update:tests", "r2:delete"],
+    assertsOwnerBeforeBody: true,
   },
   ...(["slide", "video"] as const).flatMap((kind): Case[] => [
     {
       name: `material/${kind} POST`, path: `../app/api/tests/[id]/material/${kind}/route.ts`, method: "POST",
       params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
       ownerWrites: ["multipart", "r2:put", "r2:delete", "update:tests"],
+      assertsOwnerBeforeBody: true,
       extra: (record) => ({
         "@/lib/multipart-file-stream": {
           processMultipartFileUpload: async (_req: Request, _opts: unknown, upload: (stream: unknown) => Promise<void>) => {
@@ -200,6 +216,7 @@ const cases: Case[] = [
     name: "tests summarize", path: "../app/api/tests/[id]/summarize/route.ts", method: "POST",
     params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
     ownerWrites: ["r2:read", "pdf:extract", "llm:summary"],
+    assertsOwnerBeforeBody: true,
     extra: (record) => ({
       "@/lib/object-storage": { getObjectBytes: record("r2:read", new Uint8Array()) },
       "@/lib/pdf-text-by-page": { extractPdfTextByPage: record("pdf:extract", ["本文"]) },
@@ -210,6 +227,7 @@ const cases: Case[] = [
     name: "quiz DELETE", path: "../app/api/quiz/[sessionId]/route.ts", method: "DELETE", params: { sessionId: SESSION_ID },
     rows: (o) => ({ quiz_sessions: { id: SESSION_ID, user_id: o } }), request: json({}),
     ownerWrites: ["delete:quiz_sessions"],
+    idempotentMissing: true,
   },
   {
     name: "quiz submit", path: "../app/api/quiz/[sessionId]/submit/route.ts", method: "POST", params: { sessionId: SESSION_ID },
@@ -221,6 +239,8 @@ const cases: Case[] = [
     }),
     request: json({ answers: { q1: 0 } }),
     ownerWrites: ["llm:grade", "update:quiz_sessions", "stats"],
+    assertsOwnerBeforeBody: true,
+    rejectsMalformedJsonAfterOwnerCheck: true,
     extra: (record) => ({
       "@/lib/claude-quiz": { gradeWithClaude: record("llm:grade", { scoreMc: 1, scoreEssay: 0, scoreTotal: 1, feedback: {} }) },
       "@/lib/question-performance": { recordQuestionPerformanceAfterSubmit: record("stats") },
@@ -237,6 +257,7 @@ const cases: Case[] = [
     }),
     request: json({ reuseQuestionsFromSessionId: SESSION_ID }),
     ownerWrites: ["insert:quiz_sessions"],
+    reuseSessionCase: true,
     extra: () => ({
       "@/lib/claude-quiz": { stripForClient: (qs: unknown[]) => qs },
       "@/lib/quiz-session-mode": {
@@ -270,26 +291,28 @@ for (const c of cases) {
     const h = harness(c.path, { user: OWNER, rows: {}, extra: c.extra });
     const res = await call(h);
     // DELETE は既存の冪等な成功応答を維持する。
-    assert.equal(res.status, c.name === "quiz DELETE" ? 200 : 404);
-    if (c.name === "quiz DELETE") assert.deepEqual(await res.json(), { ok: true, deleted: false });
+    const expectedStatus = c.missingResponse?.status ?? (c.idempotentMissing ? 200 : 404);
+    assert.equal(res.status, expectedStatus);
+    const expectedBody = c.missingResponse?.body ?? (c.idempotentMissing ? { ok: true, deleted: false } : undefined);
+    if (expectedBody !== undefined) {
+      assert.deepEqual(await res.json(), expectedBody);
+    }
     assert.deepEqual(h.writes, []);
     assert.deepEqual(h.calls, []);
   });
 
-  if (c.method === "POST" || c.method === "PATCH") {
-    if (!c.name.startsWith("tests start")) {
-      test(`${c.name}: 未認証・他人の不正な本文を解析しない`, async () => {
-        for (const user of [null, OTHER]) {
-          const h = run(user);
-          const req = new Request("https://unused.invalid/x", { method: c.method, body: "{" });
-          const res = await h.route[c.method](req, { params: Promise.resolve(c.params) });
-          assert.equal(res.status, user === null ? 401 : 403);
-          assert.equal(req.bodyUsed, false);
-          assert.deepEqual(h.writes, []);
-          assert.deepEqual(h.calls, []);
-        }
-      });
-    }
+  if (c.assertsOwnerBeforeBody) {
+    test(`${c.name}: 未認証・他人の不正な本文を解析しない`, async () => {
+      for (const user of [null, OTHER]) {
+        const h = run(user);
+        const req = new Request("https://unused.invalid/x", { method: c.method, body: "{" });
+        const res = await h.route[c.method](req, { params: Promise.resolve(c.params) });
+        assert.equal(res.status, user === null ? 401 : 403);
+        assert.equal(req.bodyUsed, false);
+        assert.deepEqual(h.writes, []);
+        assert.deepEqual(h.calls, []);
+      }
+    });
   }
 
   test(`${c.name}: 本人なら成功する`, async () => {
@@ -301,9 +324,8 @@ for (const c of cases) {
   });
 }
 
-for (const name of ["tests PATCH", "quiz submit"]) {
-  test(`${name}: 本人の不正な JSON は所有者確認後に拒否する`, async () => {
-    const c = cases.find((c) => c.name === name)!;
+for (const c of cases.filter((c) => c.rejectsMalformedJsonAfterOwnerCheck)) {
+  test(`${c.name}: 本人の不正な JSON は所有者確認後に拒否する`, async () => {
     const h = harness(c.path, { user: OWNER, rows: c.rows(OWNER), extra: c.extra });
     const req = new Request("https://unused.invalid/x", { method: c.method, body: "{" });
     const res = await h.route[c.method](req, { params: Promise.resolve(c.params) });
@@ -314,23 +336,23 @@ for (const name of ["tests PATCH", "quiz submit"]) {
   });
 }
 
+const reuseCase = cases.find((c) => c.reuseSessionCase)!;
+
 test("再出題: 他人のセッションは教材との関連検査より先に拒否する", async () => {
-  const c = cases.find((c) => c.name.startsWith("tests start"))!;
-  const rows = c.rows(OTHER);
+  const rows = reuseCase.rows(OTHER);
   rows.quiz_sessions = { ...rows.quiz_sessions, test_id: "another-test" };
-  const h = harness(c.path, { user: OWNER, rows, extra: c.extra });
-  const res = await h.route.POST(c.request(), { params: Promise.resolve(c.params) });
+  const h = harness(reuseCase.path, { user: OWNER, rows, extra: reuseCase.extra });
+  const res = await h.route.POST(reuseCase.request(), { params: Promise.resolve(reuseCase.params) });
   assert.equal(res.status, 403);
   assert.deepEqual(h.writes, []);
   assert.deepEqual(h.calls, []);
 });
 
 test("再出題: 共有教材でも本人のセッションなら利用できる", async () => {
-  const c = cases.find((c) => c.name.startsWith("tests start"))!;
-  const h = harness(c.path, { user: OTHER, rows: c.rows(OTHER), extra: c.extra });
-  const res = await h.route.POST(c.request(), { params: Promise.resolve(c.params) });
+  const h = harness(reuseCase.path, { user: OTHER, rows: reuseCase.rows(OTHER), extra: reuseCase.extra });
+  const res = await h.route.POST(reuseCase.request(), { params: Promise.resolve(reuseCase.params) });
   assert.equal(res.status, 200, await res.clone().text());
-  assert.deepEqual(h.writes, c.ownerWrites);
+  assert.deepEqual(h.writes, reuseCase.ownerWrites);
   assert.deepEqual(h.calls, []);
 });
 
