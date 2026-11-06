@@ -57,7 +57,6 @@ function fixture(opts: { row?: Partial<Row>; user?: string | null; failSave?: bo
       assert.equal(table, "quiz_sessions");
       return {
         select: () => ({ eq: () => ({ single: async () => ({ data: { ...row }, error: null }) }) }),
-
       };
     },
   };
