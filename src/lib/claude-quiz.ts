@@ -136,6 +136,7 @@ export interface QuizGeminiClient {
   }): {
     generateContent(prompt: string, options?: { signal?: AbortSignal }): Promise<{
       response: {
+        candidates?: Array<{ finishReason?: string }>;
         text(): string;
       };
     }>;
@@ -220,6 +221,7 @@ async function generateResponse(params: {
     user: params.cacheableDocument ? `${params.user}\n\n${params.cacheableDocument}` : params.user,
     maxTokens: params.maxTokens,
     temperature: params.temperature,
+    quiz: params.quiz,
     signal: params.signal,
   }, gemini) };
 }
@@ -235,6 +237,7 @@ export async function callGeminiText(params: {
   user: string;
   maxTokens?: number;
   temperature?: number;
+  quiz?: boolean;
   signal?: AbortSignal;
 }, geminiClient?: QuizGeminiClient): Promise<string> {
   let genAI: QuizGeminiClient;
@@ -266,6 +269,10 @@ export async function callGeminiText(params: {
       params.signal?.throwIfAborted();
       try {
         const result = await model.generateContent(params.user, { signal: params.signal });
+        // text() uses the first candidate. Diagnose before text extraction or JSON parsing can fail.
+        if (params.quiz && result.response.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+          console.warn("quiz_generation_truncated", { provider: "gemini", reason: "max_tokens" });
+        }
         return result.response.text().trim();
       } catch (e) {
         params.signal?.throwIfAborted();

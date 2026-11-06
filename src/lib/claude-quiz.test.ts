@@ -250,7 +250,9 @@ test("出題: 同じ資料は nonce が変わっても同じキャッシュ pref
   assert.ok(repeated[1].type === "text" && repeated[1].text.includes("document_type: paper"));
 });
 
-function fakeGeminiClient(replies: Array<string | Error>) {
+type GeminiResponse = Awaited<ReturnType<ReturnType<QuizGeminiClient["getGenerativeModel"]>["generateContent"]>>["response"];
+
+function fakeGeminiClient(replies: Array<string | Error | GeminiResponse>) {
   const calls: Array<{
     model: string;
     systemInstruction?: string;
@@ -266,6 +268,7 @@ function fakeGeminiClient(replies: Array<string | Error>) {
           assert.ok(replies.length, "unexpected API call");
           const reply = replies.shift()!;
           if (reply instanceof Error) throw reply;
+          if (typeof reply !== "string") return { response: reply };
           return {
             response: {
               text: () => reply,
@@ -434,6 +437,82 @@ test("診断: 採点の max_tokens は出題診断に混ぜない", async (t) =>
     return { content: [{ type: "text", text: '{"score":4,"comment":"ok"}', citations: null }], stop_reason: "max_tokens" };
   } } };
   await gradeWithClaude({ questions, answers: {} }, client);
+  assert.equal(warn.mock.callCount(), 0);
+  assert.equal(info.mock.callCount(), 0);
+});
+
+test("診断: Gemini の通常・終了理由なし応答は途中切れとして記録しない", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  const valid = questions.map((q) => ({ ...q, sourceExcerpt: excerpt }));
+  for (const candidates of [undefined, [], [{}], [{ finishReason: "STOP" }],
+    [{ finishReason: "PRIVATE-unknown-reason" }], [{ finishReason: "STOP" }, { finishReason: "MAX_TOKENS" }]]) {
+    const f = fakeGeminiClient([{ candidates, text: () => JSON.stringify(valid) }]);
+    assert.deepEqual(await generateQuizFromContext(quizParams, f.client),
+      valid.map((q) => ({ ...q, sourcePdfPage: 3 })));
+    assert.equal(f.calls.length, 1);
+  }
+  assert.equal(warn.mock.callCount(), 0);
+});
+
+test("診断: Gemini MAX_TOKENS は少数・空・修復・解析不能でも固定分類のみ記録する", async (t) => {
+  const info = t.mock.method(console, "info", () => {});
+  const warn = t.mock.method(console, "warn", () => {});
+  const privateText = "PRIVATE-question-answer-key-marker";
+  const valid = { ...questions[1], id: privateText, prompt: privateText, referenceAnswer: privateText, sourceExcerpt: excerpt };
+  const replies = [
+    { text: JSON.stringify([valid, valid, null, { ...valid, id: "bad-source", sourceExcerpt: privateText }]), count: 1 },
+    { text: "[]", count: 0 },
+    { text: JSON.stringify([valid]).slice(0, -1), count: 1 },
+    { text: "PRIVATE-unparseable-response", count: null },
+  ];
+  for (const { text, count } of replies) {
+    const f = fakeGeminiClient([{
+      candidates: [{ finishReason: "MAX_TOKENS" }], text: () => text,
+    }]);
+    if (count === null) {
+      await assert.rejects(generateQuizFromContext(quizParams, f.client), /JSON 配列/);
+    } else {
+      const result = await generateQuizFromContext(quizParams, f.client);
+      assert.deepEqual(result, count ? [{ ...valid, sourcePdfPage: 3 }] : []);
+    }
+    assert.equal(f.calls.length, 1);
+  }
+  assert.deepEqual(warn.mock.calls.map((c) => c.arguments), Array(4).fill([
+    "quiz_generation_truncated", { provider: "gemini", reason: "max_tokens" },
+  ]));
+  assert.deepEqual(info.mock.calls.map((c) => c.arguments), [
+    ["quiz_generation_validation", { received: 4, accepted: 1,
+      excluded: { schema_validation: 1, duplicate_id: 1, source_not_found: 1 } }],
+    ["quiz_generation_validation", { received: 0, accepted: 0,
+      excluded: { schema_validation: 0, duplicate_id: 0, source_not_found: 0 } }],
+    ["quiz_generation_validation", { received: 1, accepted: 1,
+      excluded: { schema_validation: 0, duplicate_id: 0, source_not_found: 0 } }],
+  ]);
+});
+
+test("診断: Gemini は text() 失敗より前に途中切れを記録する", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  const f = fakeGeminiClient([{
+    candidates: [{ finishReason: "MAX_TOKENS" }],
+    text() {
+      assert.equal(warn.mock.callCount(), 1);
+      throw new Error("text extraction failed");
+    },
+  }]);
+  await assert.rejects(generateQuizFromContext(quizParams, f.client), /text extraction failed/);
+  assert.deepEqual(warn.mock.calls.map((c) => c.arguments), [[
+    "quiz_generation_truncated", { provider: "gemini", reason: "max_tokens" },
+  ]]);
+  assert.equal(f.calls.length, 1);
+});
+
+test("診断: Gemini 採点と汎用テキストの MAX_TOKENS は出題診断に混ぜない", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  const info = t.mock.method(console, "info", () => {});
+  const response = { candidates: [{ finishReason: "MAX_TOKENS" }], text: () => '{"score":4,"comment":"ok"}' };
+  const f = fakeGeminiClient([response, response]);
+  assert.equal((await gradeWithClaude({ questions, answers: {} }, f.client)).scoreEssay, 40);
+  assert.equal(await callGeminiText({ user: "test" }, f.client), response.text());
   assert.equal(warn.mock.callCount(), 0);
   assert.equal(info.mock.callCount(), 0);
 });
