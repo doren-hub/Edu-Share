@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NOTEBOOKLM_APP_URL } from "@/lib/notebooklm";
-import { createObjectReadUrl } from "@/lib/object-storage";
+import { createObjectReadUrl, getObjectMetadata } from "@/lib/object-storage";
 
 export const runtime = "nodejs";
 
@@ -50,6 +50,21 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   let signedUrl: string;
+  try {
+    const metadata = await getObjectMetadata(test.pdf_storage_path);
+    if (!metadata.exists) {
+      return NextResponse.json(
+        { error: "PDFの実体がありません。アップロードしたユーザーが教材の詳細ページで「PDFを再アップロード」してから、もう一度お試しください。" },
+        { status: 404 },
+      );
+    }
+  } catch {
+    return NextResponse.json(
+      { error: "PDFの存在を確認できませんでした。時間をおいてもう一度お試しください。" },
+      { status: 503 },
+    );
+  }
+
   try {
     signedUrl = await createObjectReadUrl(test.pdf_storage_path, SIGNED_URL_TTL_SEC);
   } catch (error) {
