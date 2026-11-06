@@ -188,7 +188,7 @@ cat tools/paper-pipeline/logs/scheduled-run.log | tail -n 30
 | `NOTEBOOK_SHORT_STOP_PERCENT` | `85` | 短期枠の使用率がこの％を超えたら生成を止めます |
 | `NOTEBOOK_WEEKLY_STOP_PERCENT` | `100` | 週枠の使用率がこの％に達したら生成を止めます |
 | `NO_REVEAL_LOGIN` | `0`（`scheduled-run.sh` 経由では `--no-reveal-login` により `1` 相当） | ログイン要求検知時に画面付き Chrome を開かず終了コード 15 で終了します |
-| `SCHEDULED_LOG_FILE` | `logs/scheduled-run.log` | 定期実行ログファイルの出力先パス |
+| `SCHEDULED_LOG_FILE` | `logs/scheduled-run.log` | 定期実行ログファイルの出力先パス。ログの誤コミットを防ぐため、Git 管理対象外の `tools/paper-pipeline/logs/` 配下を推奨します。このディレクトリ外に出力する場合は、出力先を別途 `.gitignore` などで Git 管理対象外にしてください |
 | `SCHEDULED_LOCK_DIR` | `/tmp/paper-pipeline-scheduled-run.lock` | 二重起動防止用ロックディレクトリのパス |
 
 ---
