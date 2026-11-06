@@ -291,3 +291,34 @@ test("multipart: file フィールドが存在しない場合は 400 を返す",
     assert.equal(result.error, "PDFファイルが必要です");
   }
 });
+
+test("multipart: upload completion waits for the entire body and rejects malformed trailing parts", async () => {
+  let release: () => void;
+  const tail = new Promise<void>(resolve => { release = resolve; });
+  let uploaded: () => void;
+  const stored = new Promise<void>(resolve => { uploaded = resolve; });
+  async function* body() {
+    yield Buffer.from('--boundary\r\nContent-Disposition: form-data; name="file"; filename="slide.pdf"\r\nContent-Type: application/pdf\r\n\r\nbytes\r\n--boundary\r\n');
+    await tail;
+    yield Buffer.from('Content-Disposition: form-data; name="truncated"\r\n');
+  }
+  const req = new Request("https://app.invalid", {
+    method: "POST", headers: { "content-type": "multipart/form-data; boundary=boundary" },
+    body: Readable.toWeb(Readable.from(body())) as ReadableStream<Uint8Array>,
+    // @ts-expect-error Node.js fetch duplex
+    duplex: "half",
+  });
+  let settled = false;
+  const result = processMultipartFileUpload(req, {
+    maxBytes: 1000, maxBytesMessage: "too large", missingFileMessage: "missing",
+    invalidFormatMessage: "invalid", fileValidator: looksLikeSlidePdf,
+  }, async stream => {
+    for await (const _ of stream) { /* consume the complete file */ }
+    uploaded();
+  }).then(value => { settled = true; return value; });
+  await stored;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  release!();
+  assert.equal((await result).ok, false);
+});

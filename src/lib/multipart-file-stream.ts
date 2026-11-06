@@ -47,17 +47,26 @@ export async function processMultipartFileUpload(
     };
   }
 
-  const bb = busboy({ headers: { "content-type": contentType } });
+  let bb: ReturnType<typeof busboy>;
+  try {
+    bb = busboy({ headers: { "content-type": contentType } });
+  } catch {
+    return { ok: false, status: 400, error: options.missingFileMessage };
+  }
   const reqStream = Readable.fromWeb(req.body as import("node:stream/web").ReadableStream);
 
   return await new Promise<ProcessMultipartFileResult>((resolve) => {
     let finished = false;
     let fileHandled = false;
+    let parsingComplete = false;
+    let uploaded: ProcessMultipartFileResult | undefined;
+    let activeFile: Readable | undefined;
 
     const cleanupAndResolve = (result: ProcessMultipartFileResult) => {
       if (finished) return;
       finished = true;
       try {
+        if (!result.ok) activeFile?.destroy(new Error(result.error));
         reqStream.unpipe(bb);
         bb.on("error", () => {});
         reqStream.on("error", () => {});
@@ -76,6 +85,7 @@ export async function processMultipartFileUpload(
         return;
       }
       fileHandled = true;
+      activeFile = fileStream;
 
       const fileInfo = {
         filename: info.filename || "",
@@ -94,11 +104,9 @@ export async function processMultipartFileUpload(
 
       try {
         await uploadFile(fileStream, fileInfo);
-        cleanupAndResolve({
-          ok: true,
-          filename: fileInfo.filename,
-          mimeType: fileInfo.mimeType,
-        });
+        uploaded = { ok: true, filename: fileInfo.filename, mimeType: fileInfo.mimeType };
+        // Do not publish a valid file from a truncated/malformed multipart body.
+        if (parsingComplete) cleanupAndResolve(uploaded);
       } catch (err) {
         if (isPayloadTooLargeError(err)) {
           cleanupAndResolve({
@@ -118,6 +126,8 @@ export async function processMultipartFileUpload(
     });
 
     bb.on("close", () => {
+      parsingComplete = true;
+      if (uploaded) cleanupAndResolve(uploaded);
       if (!fileHandled) {
         cleanupAndResolve({
           ok: false,
@@ -136,6 +146,9 @@ export async function processMultipartFileUpload(
       });
     });
 
+    reqStream.on("error", () => {
+      cleanupAndResolve({ ok: false, status: 400, error: "リクエストの読み取りに失敗しました" });
+    });
     reqStream.pipe(bb);
   });
 }
