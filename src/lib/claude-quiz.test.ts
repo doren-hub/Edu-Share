@@ -447,6 +447,45 @@ test("採点: 提出用strictモードではAPI障害・形式不正を確定せ
   }
 });
 
+test("採点: strictモードは数値以外と非有限値を拒否し、再試行で正常採点できる", async () => {
+  // 1e400 は有効な JSON 数値だが、JSON.parse 後は Infinity になる。
+  const invalidScores = ['""', '" "', "true", "false", '"8"', "null", "1e400", "-1e400", '"NaN"', "[]", "{}"];
+  for (const score of invalidScores) {
+    for (const fake of [fakeClient, fakeGeminiClient]) {
+      const f = fake([`{"score":${score},"comment":"invalid"}`, '{"score":8,"comment":"ok"}']);
+      const params = { questions, answers: {}, failOnError: true };
+      await assert.rejects(gradeWithClaude(params, f.client), /採点結果に有効な点数がありません/);
+      assert.equal(f.calls.length, 1);
+      assert.equal((await gradeWithClaude(params, f.client)).scoreEssay, 80);
+      assert.equal(f.calls.length, 2);
+    }
+  }
+});
+
+test("採点: strictモードでも正常数値の丸めと0〜10への範囲処理を維持する", async () => {
+  for (const [score, expected] of [[0, 0], [7.6, 8], [10, 10], [-3, 0], [15, 10]]) {
+    const f = fakeClient([JSON.stringify({ score, comment: "ok" })]);
+    const result = await gradeWithClaude({ questions, answers: { q1: 1 }, failOnError: true }, f.client);
+    assert.equal(result.scoreEssay, expected * 10);
+    assert.equal(result.scoreMc, 100);
+    assert.equal(result.scoreTotal, Math.round((100 + expected * 10) / 2));
+    assert.deepEqual(result.feedback, {
+      multipleChoice: { correct: 1, total: 1 },
+      essays: [{ id: "e1", score: expected, max: 10, comment: "ok" }],
+    });
+  }
+});
+
+test("採点: 非strictモードの既存の型変換と欠落時の0点を維持する", async () => {
+  for (const failOnError of [undefined, false]) {
+    for (const [score, expected] of [["", 0], [true, 10], [false, 0], ["8", 80], [null, 0], [undefined, 0]] as const) {
+      const f = fakeClient([JSON.stringify({ score, comment: "legacy" })]);
+      const result = await gradeWithClaude({ questions, answers: {}, failOnError }, f.client);
+      assert.equal(result.scoreEssay, expected);
+    }
+  }
+});
+
 test("採点: 両プロバイダーに中断signalを渡し、中断後に後続の設問を採点しない", async () => {
   for (const provider of ["anthropic", "gemini"]) {
     const controller = new AbortController();
