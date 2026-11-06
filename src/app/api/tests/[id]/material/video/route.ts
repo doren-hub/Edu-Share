@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -42,7 +43,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   const { data: test, error: fetchErr } = await admin
     .from("tests")
-    .select("id, uploaded_by")
+    .select("id, uploaded_by, pdf_storage_path, notebooklm_video_mp4_storage_path")
     .eq("id", testId)
     .single();
 
@@ -59,7 +60,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
-  const storagePath = notebooklmVideoMp4StoragePath(test.uploaded_by, testId);
+  // Never write to a key that an existing reference (or concurrent upload) uses.
+  const storagePath = `${test.uploaded_by}/${testId}-notebooklm-video-${randomUUID()}.mp4`;
+  const oldPath: string | null = test.notebooklm_video_mp4_storage_path ?? null;
+  const cleanup = async (...keys: Array<string | null | undefined>) => {
+    try { await deleteObjects(keys.filter(key => key !== test.pdf_storage_path)); } catch {
+      // Best effort: never roll back a published reference for a cleanup failure.
+    }
+  };
+  let storageWrite: Promise<void> | undefined;
 
   const uploadResult = await processMultipartFileUpload(
     req,
@@ -71,13 +80,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       fileValidator: looksLikeVideoMp4,
     },
     async (fileStream) => {
-      await putObject(storagePath, fileStream, "video/mp4", {
+      storageWrite = putObject(storagePath, fileStream, "video/mp4", {
         maxBytes: MAX_BYTES,
       });
+      await storageWrite;
     },
   );
 
   if (!uploadResult.ok) {
+    // A parser failure may arrive while the storage callback is still settling.
+    await storageWrite?.catch(() => {});
+    await cleanup(storagePath);
     return NextResponse.json(
       {
         error: uploadResult.error,
@@ -87,26 +100,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
-  try {
-    await deleteObjects([legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId)]);
-  } catch {
-    // 旧キーの掃除は登録結果を失敗扱いにしない。
-  }
-
-  const { error: dbErr } = await admin
-    .from("tests")
-    .update({ notebooklm_video_mp4_storage_path: storagePath })
-    .eq("id", testId);
-  if (dbErr) {
+  let update = admin.from("tests").update({ notebooklm_video_mp4_storage_path: storagePath })
+    .eq("id", testId).eq("uploaded_by", user.id);
+  update = oldPath === null ? update.is("notebooklm_video_mp4_storage_path", null) : update.eq("notebooklm_video_mp4_storage_path", oldPath);
+  const { data: changed, error: dbErr } = await update.select("id");
+  if (dbErr || !changed?.length) {
+    // An error can hide a successful write. Keep the possibly published object.
+    if (!dbErr) await cleanup(storagePath);
     return NextResponse.json(
-      {
-        error:
-          "データベースの更新に失敗しました（マイグレーション 017 が未適用の可能性があります）",
-        details: dbErr.message,
-      },
-      { status: 500 },
+      { error: "教材の更新に失敗しました。再読み込みしてやり直してください。" },
+      { status: dbErr ? 500 : 409 },
     );
   }
+
+  await cleanup(oldPath, notebooklmVideoMp4StoragePath(test.uploaded_by, testId),
+    legacyNotebooklmVideoMp4StoragePath(test.uploaded_by, testId));
 
   return NextResponse.json({ ok: true, path: storagePath });
 }

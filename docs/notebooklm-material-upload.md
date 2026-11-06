@@ -23,8 +23,16 @@ outages, uploads abandoned before commit, and a repeated PUT after cleanup can
 leave unreferenced staging files. A DB transport error retains the immutable
 copy because the write may have succeeded; deleting that copy could break a live
 reference. These cases require separate orphan cleanup; this change introduces
-no bucket-wide deletion or production migration. The legacy multipart POST
-endpoints retain their existing upload behavior.
+no bucket-wide deletion or production migration. The multipart POST endpoints also stream to a fresh immutable key, validate the
+file extension/MIME and enforce their size limits, then compare-and-swap the
+reference using both its previous value and owner. They do not need a staging
+copy because no client PUT URL is issued. Failed uploads and definite conflicts
+clean up only their new key. DB errors retain the possibly published key, just
+as direct commits do. Only successful publication removes the prior reference
+(including immutable keys), the old fixed key and legacy key; the original paper
+PDF is excluded from cleanup. Cleanup failures leave orphan files and still
+return success, with no rollback or bucket-wide sweep. Multipart keeps its
+existing extension/MIME validation; it does not inspect file signatures.
 
 All automated tests mock storage and Supabase. Do not validate by connecting to
 production Supabase/R2 or running the paper pipeline.

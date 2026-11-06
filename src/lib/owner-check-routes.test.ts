@@ -254,7 +254,7 @@ const cases: Case[] = [
     {
       name: `material/${kind} POST`, path: `../app/api/tests/[id]/material/${kind}/route.ts`, method: "POST",
       params: { id: TEST_ID }, rows: (o) => ({ tests: testRow(o) }), request: json({}),
-      ownerWrites: ["multipart", "r2:put", "r2:delete", "update:tests"],
+      ownerWrites: ["multipart", "r2:put", "update:tests", "r2:delete"],
       expectedConditions: [
         { table: "tests", op: "update", method: "eq", args: ["id", TEST_ID] },
       ],
