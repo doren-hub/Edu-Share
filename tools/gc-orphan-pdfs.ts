@@ -1,15 +1,26 @@
 import { pathToFileURL } from "node:url";
 import { S3Client, ListObjectsV2Command, HeadObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { createClient } from "@supabase/supabase-js";
-import { collectOrphanPdfs, type GcObject } from "../src/lib/pdf-object-gc.ts";
+import { collectOrphanPdfs, type GcObject, type GcOptions } from "../src/lib/pdf-object-gc.ts";
 
 export function parseGcArguments(args: string[]) {
-  const options = { execute: false, writersStopped: false, operator: "", approval: "" };
+  const options: GcOptions = { execute: false, writersStopped: false, operator: "", approval: "" };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--execute") options.execute = true;
     else if (arg === "--dry-run") { /* default */ }
     else if (arg === "--writers-stopped") options.writersStopped = true;
+    else if (arg === "--max-objects" || arg === "--start-after") {
+      const value = args[++i];
+      if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
+      if (arg === "--start-after") options.startAfter = value;
+      else {
+        if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1 || Number(value) > 100_000) {
+          throw new Error("--max-objects must be an integer from 1 to 100000");
+        }
+        options.maxObjects = Number(value);
+      }
+    }
     else if (arg === "--operator" || arg === "--approval") {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
@@ -17,7 +28,7 @@ export function parseGcArguments(args: string[]) {
     } else throw new Error(`Unknown argument: ${arg}`);
   }
   if (args.includes("--dry-run") && options.execute) throw new Error("Conflicting modes");
-  if (options.execute && (!options.writersStopped || !options.operator.trim() || !options.approval.trim())) {
+  if (options.execute && (!options.writersStopped || !options.operator?.trim() || !options.approval?.trim())) {
     throw new Error("Execute requires --writers-stopped --operator NAME --approval OWNER-APPROVAL-REFERENCE");
   }
   return options;
@@ -43,11 +54,11 @@ export async function main(args = process.argv.slice(2)) {
   });
   try {
     const result = await collectOrphanPdfs({
-      async *list() {
+      async *list(startAfter) {
         let token: string | undefined;
         const seen = new Set<string>();
         do {
-          const page = await s3.send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: token }));
+          const page = await s3.send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: token, StartAfter: token ? undefined : startAfter, MaxKeys: 1000 }));
           for (const obj of page.Contents ?? []) {
             yield { key: obj.Key ?? "", lastModified: obj.LastModified?.toISOString() ?? "", etag: obj.ETag ?? "", size: obj.Size ?? NaN };
           }
