@@ -1,3 +1,5 @@
+begin;
+
 -- Offline maintenance fence. No TTL: a crashed collector must be stopped and
 -- explicitly released by the owner, never concurrently replaced.
 create table if not exists public.pdf_gc_guard (
@@ -37,8 +39,8 @@ begin
   if v_run is not null then raise exception 'PDF GC maintenance active'; end if;
   if TG_OP <> 'DELETE' and exists (
     select 1 from public.pdf_gc_objects where storage_path in (
-      new.pdf_storage_path, new.notebooklm_slide_pdf_storage_path,
-      new.notebooklm_video_mp4_storage_path
+      btrim(new.pdf_storage_path), btrim(new.notebooklm_slide_pdf_storage_path),
+      btrim(new.notebooklm_video_mp4_storage_path)
     )
   ) then raise exception 'PDF key retired by GC'; end if;
   if TG_OP = 'DELETE' then return old; end if;
@@ -121,3 +123,6 @@ revoke all on function public.begin_pdf_gc(uuid,text,text), public.pdf_gc_reason
 grant execute on function public.begin_pdf_gc(uuid,text,text), public.pdf_gc_reason(text,timestamptz),
   public.reserve_pdf_gc_object(uuid,text,timestamptz,text), public.finish_pdf_gc_object(uuid,text,boolean),
   public.end_pdf_gc(uuid) to service_role;
+
+notify pgrst, 'reload schema';
+commit;

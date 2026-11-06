@@ -125,6 +125,10 @@ test("042 SQL + mocked R2: references, active uploads, fence, tombstones, delete
     await assert.rejects(collectOrphanPdfs(deps, execute), /injected R2 failure/);
     assert.equal((await db.query<{ status: string }>("select status from pdf_gc_objects")).rows[0].status, "failed");
     await assert.rejects(db.query("update tests set pdf_storage_path=$1", [key]), /key retired/);
+    // Storage consumers trim paths; whitespace cannot bypass retirement in any column.
+    for (const column of ["pdf_storage_path", "notebooklm_slide_pdf_storage_path", "notebooklm_video_mp4_storage_path"]) {
+      await assert.rejects(db.query(`update tests set ${column}=$1`, [`  ${key}  `]), /key retired/);
+    }
     failDelete = false;
     assert.equal((await collectOrphanPdfs(deps, execute)).deleted, 1);
     assert.equal((await db.query<{ status: string }>("select status from pdf_gc_objects")).rows[0].status, "deleted");
