@@ -5,7 +5,7 @@ import { beforeEach, test } from "node:test";
 import ts from "typescript";
 import * as schemas from "./api-input-schemas.ts";
 import * as requestJson from "./request-json.ts";
-import * as rateLimit from "./llm-rate-limit.ts";
+import * as rateLimit from "./llm-rate-limit-test-store.ts";
 
 beforeEach(() => rateLimit.resetLlmRateLimitForTests());
 

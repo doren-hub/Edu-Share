@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { paperAskSchema as bodySchema, uuidSchema } from "@/lib/api-input-schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { checkUserAskRateLimit } from "@/lib/paper-ask-rate-limit";
+import { llmRateLimitResponse } from "@/lib/llm-rate-limit";
 import {
   askPaperQuestion,
   type PaperAskChunk,
@@ -29,16 +29,8 @@ export async function POST(req: Request, context: RouteContext) {
   }
 
   // 2. ユーザーごとのレート制限（1分間に数回）
-  const rate = checkUserAskRateLimit(auth.user.id);
-  if (!rate.allowed) {
-    return NextResponse.json(
-      {
-        error: "質問の回数制限に達しました。少し待ってから再度お試しください。",
-        retryAfterSeconds: rate.retryAfterSeconds,
-      },
-      { status: 429 },
-    );
-  }
+  const rateLimit = await llmRateLimitResponse("ask", auth.user.id);
+  if (rateLimit) return rateLimit;
 
   // 本文より先に認証・回数制限を判定する。不正本文も認証済みなら1回と数える。
   const body = await readBoundedJson(req, API_BODY_LIMITS.paperAsk);

@@ -1,64 +1,63 @@
-/**
- * LLM を呼ぶ API のユーザー単位レート制限（プロセス内メモリ、固定窓ではなくスライディング窓）。
- * 制限値はここで一元管理する。説明は docs/api-input-limits.md を参照。
- */
+/** Shared sliding-window limits. Keep all LLM API budgets here. */
 export const LLM_RATE_LIMITS = {
-  /** POST /api/tests/[id]/start（出題生成） */
-  quizStart: { windowMs: 60 * 1000, maxRequests: 10 },
-  /** POST /api/quiz/[sessionId]/submit（記述採点） */
-  quizSubmit: { windowMs: 60 * 1000, maxRequests: 10 },
-  /** POST /api/tests/upload/summarize と /api/tests/[id]/summarize（共通の枠） */
-  summarize: { windowMs: 60 * 1000, maxRequests: 5 },
+  ask: { windowMs: 60_000, maxRequests: 6 },
+  quizStart: { windowMs: 60_000, maxRequests: 10 },
+  quizSubmit: { windowMs: 60_000, maxRequests: 10 },
+  // Both summary routes consume this same budget.
+  summarize: { windowMs: 60_000, maxRequests: 5 },
 } as const;
-
 export type LlmRateLimitKind = keyof typeof LLM_RATE_LIMITS;
+export type RateLimitDecision = { allowed: boolean; retryAfterSeconds: number };
+export type SharedRateLimitStore = {
+  consume(kind: LlmRateLimitKind, userId: string, limit: { windowMs: number; maxRequests: number }): Promise<RateLimitDecision>;
+};
 
-const buckets = new Map<LlmRateLimitKind, Map<string, number[]>>();
-
-export function checkLlmRateLimit(
-  kind: LlmRateLimitKind,
-  userId: string,
-  now: number = Date.now(),
-): { allowed: true } | { allowed: false; retryAfterSeconds: number } {
-  const { windowMs, maxRequests } = LLM_RATE_LIMITS[kind];
-  let users = buckets.get(kind);
-  if (!users) {
-    users = new Map();
-    buckets.set(kind, users);
-  }
-  const windowStart = now - windowMs;
-
-  // 期限切れユーザーの整理（メモリ肥大化防止）
-  for (const [uid, list] of users) {
-    const fresh = list.filter((t) => t > windowStart);
-    if (fresh.length === 0) users.delete(uid);
-    else if (fresh.length !== list.length) users.set(uid, fresh);
-  }
-
-  const valid = users.get(userId) ?? [];
-  if (valid.length >= maxRequests) {
-    const retryAfter = Math.ceil((valid[0]! + windowMs - now) / 1000);
-    return { allowed: false, retryAfterSeconds: Math.max(1, retryAfter) };
-  }
-  valid.push(now);
-  users.set(userId, valid);
-  return { allowed: true };
+/** Dependency injection keeps tests offline; production never falls back to local counters. */
+export function createLlmRateLimiter(store: SharedRateLimitStore) {
+  return async function llmRateLimitResponse(kind: LlmRateLimitKind, userId: string): Promise<Response | null> {
+    try {
+      const rate = await store.consume(kind, userId, LLM_RATE_LIMITS[kind]);
+      if (typeof rate.allowed !== "boolean" || !Number.isInteger(rate.retryAfterSeconds) ||
+          rate.retryAfterSeconds < 0 || (!rate.allowed && rate.retryAfterSeconds < 1)) {
+        throw new Error("Invalid rate limit decision");
+      }
+      if (rate.allowed) return null;
+      return Response.json({
+        error: "リクエストの回数制限に達しました。少し待ってから再度お試しください。",
+        retryAfterSeconds: rate.retryAfterSeconds,
+      }, { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } });
+    } catch {
+      // Do not expose database details or allow unmetered LLM calls during an outage.
+      return Response.json({ error: "回数制限の確認に失敗しました。少し待ってから再度お試しください。" },
+        { status: 503, headers: { "Retry-After": "5" } });
+    }
+  };
 }
 
-/** 制限超過時は 429 + Retry-After を返す。許可なら null。 */
-export function llmRateLimitResponse(kind: LlmRateLimitKind, userId: string): Response | null {
-  const rate = checkLlmRateLimit(kind, userId);
-  if (rate.allowed) return null;
-  // next/server を import しないことで node --test から直接読み込める。
-  return Response.json(
-    {
-      error: "リクエストの回数制限に達しました。少し待ってから再度お試しください。",
-      retryAfterSeconds: rate.retryAfterSeconds,
+type RpcClient = {
+  rpc(name: string, params: Record<string, unknown>): {
+    abortSignal(signal: AbortSignal): PromiseLike<{ data: unknown; error: unknown }>;
+  };
+};
+
+export function createSharedRateLimitStore(client: () => Promise<RpcClient>): SharedRateLimitStore {
+  return {
+    async consume(kind, userId, limit) {
+      const { data, error } = await (await client()).rpc("consume_llm_rate_limit", {
+        p_user_id: userId, p_kind: kind,
+        p_window_ms: limit.windowMs, p_max_requests: limit.maxRequests,
+      }).abortSignal(AbortSignal.timeout(5000));
+      if (error || !data || typeof data !== "object" ||
+          !("allowed" in data) || typeof data.allowed !== "boolean" ||
+          !("retry_after_seconds" in data) || typeof data.retry_after_seconds !== "number") {
+        throw new Error("Shared rate limit unavailable");
+      }
+      return { allowed: data.allowed, retryAfterSeconds: data.retry_after_seconds };
     },
-    { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } },
-  );
+  };
 }
 
-export function resetLlmRateLimitForTests(): void {
-  buckets.clear();
-}
+export const llmRateLimitResponse = createLlmRateLimiter(createSharedRateLimitStore(async () => {
+  const { createAdminClient } = await import("./supabase/admin");
+  return createAdminClient();
+}));
