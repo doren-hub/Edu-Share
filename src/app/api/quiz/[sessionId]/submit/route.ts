@@ -23,7 +23,7 @@ export async function POST(
   if (!user) {
     return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
   }
-  const limited = llmRateLimitResponse("quizSubmit", user.id);
+  const limited = await llmRateLimitResponse("quizSubmit", user.id);
   if (limited) return limited;
 
   const admin = createAdminClient();

@@ -7,11 +7,7 @@ import {
   parsePaperAskResponse,
   askPaperQuestion,
 } from "./paper-ask.ts";
-import {
-  checkUserAskRateLimit,
-  resetUserAskRateLimitForTests,
-  ASK_RATE_LIMIT_MAX_REQUESTS,
-} from "./paper-ask-rate-limit.ts";
+
 
 describe("selectPaperAskChunks: 材料の選び方", () => {
   const sampleChunks: PaperAskChunk[] = [
@@ -193,21 +189,5 @@ describe("askPaperQuestion: LLM 偽物による単体テスト", () => {
 
     assert.equal(result.answer, "論文には書かれていません。");
     assert.deepEqual(result.referencedChunks, []);
-  });
-});
-
-describe("checkUserAskRateLimit: レート制限", () => {
-  it("指定回数までは許可され、回数超過で 429 相当のブロック判定になる", () => {
-    resetUserAskRateLimitForTests();
-    const userId = "test-user-uuid-123";
-
-    for (let i = 0; i < ASK_RATE_LIMIT_MAX_REQUESTS; i++) {
-      const res = checkUserAskRateLimit(userId);
-      assert.equal(res.allowed, true);
-    }
-
-    const blocked = checkUserAskRateLimit(userId);
-    assert.equal(blocked.allowed, false);
-    assert.ok(typeof blocked.retryAfterSeconds === "number" && blocked.retryAfterSeconds > 0);
   });
 });

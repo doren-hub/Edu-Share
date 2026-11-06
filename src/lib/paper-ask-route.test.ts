@@ -5,7 +5,7 @@ import { test } from "node:test";
 import ts from "typescript";
 import * as schemas from "./api-input-schemas.ts";
 import * as requestJson from "./request-json.ts";
-import * as rateLimit from "./paper-ask-rate-limit.ts";
+import * as rateLimit from "./llm-rate-limit-test-store.ts";
 
 const require = createRequire(import.meta.url);
 const { NextResponse } = require("next/server.js");
@@ -31,7 +31,7 @@ function loadWithStubs(path: string, stubs: Record<string, unknown>) {
 }
 
 function fixture(authenticated = true) {
-  rateLimit.resetUserAskRateLimitForTests();
+  rateLimit.resetLlmRateLimitForTests();
   const events: string[] = [];
   const cookieWrites: unknown[][] = [];
   const server = loadWithStubs("./supabase/server.ts", {
@@ -80,11 +80,11 @@ function fixture(authenticated = true) {
         };
       },
     },
-    "@/lib/paper-ask-rate-limit": {
-      checkUserAskRateLimit: (id: string) => {
+    "@/lib/llm-rate-limit": {
+      llmRateLimitResponse: (kind: "ask", id: string) => {
         events.push("rate");
         assert.equal(id, userId);
-        return rateLimit.checkUserAskRateLimit(id);
+        return rateLimit.llmRateLimitResponse(kind, id);
       },
     },
     "@/lib/embeddings": {
@@ -153,7 +153,7 @@ for (const [name, text, headers] of [
 
   test(`ask: rate-limited ${name} body is not read (429)`, async () => {
     const f = fixture();
-    for (let i = 0; i < rateLimit.ASK_RATE_LIMIT_MAX_REQUESTS; i++) rateLimit.checkUserAskRateLimit(userId);
+    for (let i = 0; i < rateLimit.LLM_RATE_LIMITS.ask.maxRequests; i++) rateLimit.checkLlmRateLimit("ask", userId);
     const body = bodyRequest(text, headers);
     const res = await f.post(body.req);
     assert.equal(res.status, 429);
@@ -187,7 +187,7 @@ for (const [name, text, status] of [
 
 test("ask: invalid authenticated bodies consume quota before being read", async () => {
   const f = fixture();
-  for (let i = 0; i < rateLimit.ASK_RATE_LIMIT_MAX_REQUESTS; i++) {
+  for (let i = 0; i < rateLimit.LLM_RATE_LIMITS.ask.maxRequests; i++) {
     assert.equal((await f.post(bodyRequest("{").req)).status, 400);
   }
   const body = bodyRequest(validBody);

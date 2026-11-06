@@ -47,7 +47,7 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
   }
-  const limited = llmRateLimitResponse("summarize", user.id);
+  const limited = await llmRateLimitResponse("summarize", user.id);
   if (limited) return limited;
 
   const form = await req.formData();

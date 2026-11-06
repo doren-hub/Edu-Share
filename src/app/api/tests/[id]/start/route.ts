@@ -258,7 +258,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if (!user) {
       return NextResponse.json({ error: "ログインが必要です" }, { status: 401 });
     }
-    const limited = llmRateLimitResponse("quizStart", user.id);
+    const limited = await llmRateLimitResponse("quizStart", user.id);
     if (limited) return limited;
 
     const rawBody = await req.json().catch(() => ({}));
