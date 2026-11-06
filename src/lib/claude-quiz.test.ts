@@ -360,3 +360,79 @@ test("採点: Gemini 経路でも模範解答と回答を包装し、テキス�
   assert.ok(f.calls[0].prompt.includes("光合成を説明"));
   assert.ok(f.calls[0].prompt.includes("光を使います"));
 });
+
+test("診断: 通常応答は全件受理と除外ゼロを記録する", async (t) => {
+  const info = t.mock.method(console, "info", () => {});
+  const warn = t.mock.method(console, "warn", () => {});
+  const valid = questions.map((q) => ({ ...q, sourceExcerpt: excerpt }));
+  const client: QuizAnthropicClient = { messages: { async create() {
+    return { content: toolReply({ questions: valid }), stop_reason: "tool_use" };
+  } } };
+  assert.equal((await generateQuizFromContext(quizParams, client)).length, 2);
+  assert.deepEqual(info.mock.calls.map((c) => c.arguments), [["quiz_generation_validation", {
+    received: 2, accepted: 2,
+    excluded: { schema_validation: 0, duplicate_id: 0, source_not_found: 0 },
+  }]]);
+  assert.equal(warn.mock.callCount(), 0);
+});
+
+test("診断: ツール・テキストの除外を理由別に一度ずつ数え、本文を記録しない", async (t) => {
+  const info = t.mock.method(console, "info", () => {});
+  const warn = t.mock.method(console, "warn", () => {});
+  const privateText = "PRIVATE-question-answer-key-marker";
+  const valid = { ...questions[1], id: privateText, prompt: privateText, referenceAnswer: privateText, sourceExcerpt: excerpt };
+  const batch = [valid, { ...valid }, null, { ...valid, id: "bad", prompt: "" },
+    { ...valid, id: "missing-source", sourceExcerpt: privateText }];
+  for (const reply of [toolReply({ questions: batch }), JSON.stringify(batch)]) {
+    const result = await generateQuizFromContext(quizParams, fakeClient([reply]).client);
+    assert.deepEqual(result, [{ ...valid, sourcePdfPage: 3 }]);
+  }
+  assert.deepEqual(info.mock.calls.map((c) => c.arguments), Array(2).fill([
+    "quiz_generation_validation", {
+      received: 5, accepted: 1,
+      excluded: { schema_validation: 2, duplicate_id: 1, source_not_found: 1 },
+    },
+  ]));
+  const logs = JSON.stringify(info.mock.calls.map((c) => c.arguments));
+  assert.ok(!logs.includes(privateText));
+  assert.ok(!logs.includes(excerpt));
+  assert.equal(warn.mock.callCount(), 0);
+});
+
+test("診断: max_tokens は少数・空・解析不能の応答でも本文なしで記録する", async (t) => {
+  const info = t.mock.method(console, "info", () => {});
+  const warn = t.mock.method(console, "warn", () => {});
+  const valid = { ...questions[0], sourceExcerpt: excerpt };
+  const replies: Array<{ content: ReplyContent; count: number | null }> = [
+    { content: toolReply({ questions: [valid] }), count: 1 },
+    { content: toolReply({ questions: [] }), count: 0 },
+    { content: [{ type: "text", text: JSON.stringify([valid]).slice(0, -1), citations: null }], count: 1 },
+    { content: [{ type: "text", text: "PRIVATE-truncated-response", citations: null }], count: null },
+  ];
+  for (const { content, count } of replies) {
+    const client: QuizAnthropicClient = { messages: { async create() {
+      return { content, stop_reason: "max_tokens" };
+    } } };
+    if (count === null) {
+      await assert.rejects(generateQuizFromContext(quizParams, client), /JSON 配列/);
+    } else {
+      const result = await generateQuizFromContext(quizParams, client);
+      assert.equal(result.length, count);
+    }
+  }
+  assert.deepEqual(warn.mock.calls.map((c) => c.arguments), Array(4).fill([
+    "quiz_generation_truncated", { provider: "anthropic", reason: "max_tokens" },
+  ]));
+  assert.equal(info.mock.callCount(), 3);
+});
+
+test("診断: 採点の max_tokens は出題診断に混ぜない", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  const info = t.mock.method(console, "info", () => {});
+  const client: QuizAnthropicClient = { messages: { async create() {
+    return { content: [{ type: "text", text: '{"score":4,"comment":"ok"}', citations: null }], stop_reason: "max_tokens" };
+  } } };
+  await gradeWithClaude({ questions, answers: {} }, client);
+  assert.equal(warn.mock.callCount(), 0);
+  assert.equal(info.mock.callCount(), 0);
+});

@@ -108,7 +108,7 @@ function resolveProvider(): LlmProvider {
 /** 最小限の API 境界。注入時はキー・プロバイダー設定なしで Anthropic 経路を使う。 */
 export interface QuizAnthropicClient {
   messages: {
-    create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Pick<Anthropic.Message, "content">>;
+    create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Pick<Anthropic.Message, "content"> & Partial<Pick<Anthropic.Message, "stop_reason">>>;
   };
 }
 
@@ -179,6 +179,10 @@ async function generateResponse(params: {
       throw new Error(
         `Claude API の呼び出しに失敗しました（モデル名・APIキー・利用枠を確認）。model=${anthropicModel()} / ${msg}`,
       );
+    }
+    if (params.quiz && res.stop_reason === "max_tokens") {
+      // Log only a fixed classification, before parsing can fail. Never log response content.
+      console.warn("quiz_generation_truncated", { provider: "anthropic", reason: "max_tokens" });
     }
     if (params.quiz) {
       const tools = res.content.filter((b) => b.type === "tool_use");
@@ -482,13 +486,24 @@ session_entropy: ${params.nonce}`;
 
   const out: StoredQuestion[] = [];
   const ids = new Set<string>();
+  // Mutually exclusive reasons: count each rejected question once, in validation order.
+  const excluded = { schema_validation: 0, duplicate_id: 0, source_not_found: 0 };
   for (const rawItem of parsed) {
     const validation = generatedQuestionSchema.safeParse(rawItem);
-    if (!validation.success) continue;
+    if (!validation.success) {
+      excluded.schema_validation++;
+      continue;
+    }
     const item = validation.data;
-    if (ids.has(item.id)) continue;
+    if (ids.has(item.id)) {
+      excluded.duplicate_id++;
+      continue;
+    }
     const sourceExcerpt = item.sourceExcerpt.replace(/\s+/g, " ").trim();
-    if (!excerptAppearsInJoined(sourceExcerpt, joinedForValidate)) continue;
+    if (!excerptAppearsInJoined(sourceExcerpt, joinedForValidate)) {
+      excluded.source_not_found++;
+      continue;
+    }
     ids.add(item.id);
     if (item.type === "multiple_choice") {
       out.push({
@@ -512,6 +527,13 @@ session_entropy: ${params.nonce}`;
       });
     }
   }
+
+  // Only aggregate counts cross the logging boundary: no IDs, schema errors or model text.
+  console.info("quiz_generation_validation", {
+    received: parsed.length,
+    accepted: out.length,
+    excluded,
+  });
 
   // 3 問未満でも返す。不足分は API 側で同一教材の過去セッションからランダム補填する。
   attachSourcePdfPages(out, params.contextChunks);
