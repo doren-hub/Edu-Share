@@ -1133,7 +1133,7 @@ async function generateStudioItem(
   }
 
   if (opts.explainerVideo) {
-    await selectExplainerVideoFormat(page);
+    await withTimeout(selectExplainerVideoFormat(page), 20_000, "動画形式の選択がタイムアウトしました");
     const existing = scanStudioVideoOutputs(await studioCardTexts(page));
     log(`Studio: 生成前の ${formatVideoScan(existing)}`);
     if (!shouldKickoffVideo(existing)) {
