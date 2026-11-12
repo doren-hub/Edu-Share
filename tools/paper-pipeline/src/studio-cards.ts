@@ -179,7 +179,7 @@ export function isSlideDeckCardText(text: string): boolean {
   if (/スライド資料を生成|スライドを生成中|Generating slide/i.test(t)) return false;
   // Nested video metadata can be collected without its parent icon or play button.
   // Use whitespace/separators rather than \b after Japanese length labels.
-  if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明動画|説明|短め|標準|ショート|Short|Brief|Standard)(?=\s|·|$)/i.test(t)) return false;
+  if (/\b\d{1,2}:\d{2}\s*·\s*(解説|Explainer|説明|(?:短め|標準|ショート|Short|Brief|Standard)(?=\s|·|$))/i.test(t)) return false;
   if (/chevron_forward/.test(t)) return false;
 
   const kind = detectStudioCardKind(t);

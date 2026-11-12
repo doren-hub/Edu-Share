@@ -245,7 +245,7 @@ test("動画・クイズ・単語帳と生成タイルだけではスライド�
 });
 
 test("Issue #292: 動画の長さ表記つき部品はスライドではない", () => {
-  for (const length of ["短め", "標準", "ショート", "解説", "説明動画", "説明", "Explainer", "Short", "Brief", "Standard", "short"]) {
+  for (const length of ["短め", "標準", "ショート", "解説", "解説動画", "説明動画", "説明", "Explainer", "Short", "Brief", "Standard", "short"]) {
     for (const metadata of [
       `1:11 · ${length} · 1 件のソース · 5 日前`,
       `12:34·${length}·1 件のソース · 5 日前`,
