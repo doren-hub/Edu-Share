@@ -244,6 +244,44 @@ test("動画・クイズ・単語帳と生成タイルだけではスライド�
   assert.equal(shouldKickoffSlides(cards), true);
 });
 
+test("Issue #292: 動画の長さ表記つき部品はスライドではない", () => {
+  for (const length of ["短め", "標準", "ショート", "解説", "解説動画", "説明動画", "説明", "Explainer", "Short", "Brief", "Standard", "short"]) {
+    for (const metadata of [
+      `1:11 · ${length} · 1 件のソース · 5 日前`,
+      `12:34·${length}·1 件のソース · 5 日前`,
+      `1:11\n·\n${length}\n· 1 件のソース · 5 日前`,
+    ]) {
+      assert.equal(isSlideDeckCardText(metadata), false, metadata);
+      assert.equal(isSlideGenerationInProgress(metadata), false, metadata);
+      assert.equal(shouldKickoffSlides([metadata]), true, metadata);
+    }
+  }
+});
+
+test("Issue #292: 実測した動画・クイズ・フラッシュカードだけならスライドを開始する", () => {
+  const cards = [
+    "copy 睡眠時間 フラッシュカード 1 件のソース · 5 日前 more_vert",
+    "quiz 睡眠時間 クイズ 1 件のソース · 5 日前 more_vert",
+    "videocam 未読 睡眠時間と寿命：長すぎる睡眠の隠れたサイン 1:11 · 短め · 1 件のソース · 5 日前 play_arrow more_vert",
+    "1:11 · 短め · 1 件のソース · 5 日前",
+  ];
+  for (const card of cards) {
+    assert.equal(isSlideDeckCardText(card), false, card);
+    assert.equal(isSlideGenerationInProgress(card), false, card);
+  }
+  assert.equal(shouldKickoffSlides(cards), true);
+
+  // Existing, generating and ready slides still prevent duplicate generation.
+  for (const slide of [
+    "tablet 睡眠時間と寿命 1 件のソース · 5 日前 more_vert",
+    "睡眠時間と寿命 1 件のソース · 5 日前",
+    "tablet スライド資料を生成しています... 1 件のソース sync",
+    "スライド資料「睡眠時間と寿命」の準備ができました。",
+  ]) {
+    assert.equal(shouldKickoffSlides([...cards, slide]), false, slide);
+  }
+});
+
 test("動画ダウンロードは download / ダウンロード / メニュー表記", () => {
   assert.equal(looksLikeVideoDownloadLabel("download"), true);
   assert.equal(looksLikeVideoDownloadLabel("download download"), true);
