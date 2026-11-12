@@ -10,6 +10,7 @@ import {
   formatVideoScan,
   isChatCustomizeLabel,
   isExplainerVideoCardText,
+  isAdoptableExplainerVideoText,
   isSlideReadyNotificationText,
   isStudioArtifactViewerText,
   isStudioGenerateLabel,
@@ -82,8 +83,8 @@ test("同じノートに動画が2本あるときは再生成しない", () => {
   assert.match(formatVideoScan(scan), /2 件/);
 });
 
-test("ショートが1本だけのときは説明動画を作り直してよい", () => {
-  const card = "subscriptions 0:45 · 解説 · 1 件のソース · 3 分前 play_arrow";
+test("ショートが1本だけのときは解説を生成する", () => {
+  const card = "subscriptions 0:45 · 短め · 1 件のソース · 3 分前 play_arrow";
   const scan = scanStudioVideoOutputs([card]);
   assert.equal(scan.shortCount, 1);
   assert.equal(scan.explainerCount, 0);
@@ -91,74 +92,46 @@ test("ショートが1本だけのときは説明動画を作り直してよい"
   assert.equal(studioVideoGenerationDone(scan), false);
 });
 
-test("ショートが2本あるときはこれ以上作らない", () => {
-  const body = "0:40 · 解説 play_arrow\n0:55 · 解説 play_arrow";
+test("ショートが2本でも解説を生成する", () => {
+  const body = "0:40 · 短め play_arrow\n0:55 · 短め play_arrow";
   const scan = scanStudioVideoOutputs([body]);
   assert.equal(scan.shortCount, 2);
-  assert.equal(shouldKickoffVideo(scan), false);
-  assert.equal(studioVideoGenerationDone(scan), true);
+  assert.equal(shouldKickoffVideo(scan), true);
+  assert.equal(studioVideoGenerationDone(scan), false);
 });
 
-test("Issue #236: 「短め」表記の動画カード（1:13 · 短め 等）も動画出力として認識する", () => {
-  const card1 = "videocam 未読 コーディングAIがルールブックを活かせない理由 0:59 · 短め · 1 件のソース · 11 分前 play_arrow more_";
-  const card2 = "videocam 未読 AIに指示書を読ませても無駄な理由 1:17 · 短め · 1 件のソース · 33 分前 play_arrow more_vert";
-  assert.equal(isExplainerVideoCardText(card1), true);
-  assert.equal(isExplainerVideoCardText(card2), true);
-  assert.deepEqual(listVideoDurationsSec(card1), [59]);
-  assert.deepEqual(listVideoDurationsSec(card2), [77]);
-  const scan = scanStudioVideoOutputs([card1, card2]);
-  assert.equal(scan.shortCount, 2);
-  assert.equal(scan.explainerCount, 0);
-  assert.equal(shouldKickoffVideo(scan), false);
-  assert.equal(studioVideoGenerationDone(scan), true);
+test("短めは時間や状態・本数によらず採用しない", () => {
+  for (const label of ["短め", "ショート", "Short", "Brief"]) {
+    const cards = [`videocam 1:11 · ${label} · 1 件のソース`, `videocam 5:00 · ${label} play_arrow`];
+    assert.equal(isExplainerVideoCardText(cards[0]), true);
+    assert.equal(isAdoptableExplainerVideoText(cards[1]), false);
+    const scan = scanStudioVideoOutputs(cards);
+    assert.equal(scan.shortCount, 2);
+    assert.equal(scan.explainerCount, 0);
+    assert.equal(shouldKickoffVideo(scan), true);
+    assert.equal(studioVideoGenerationDone(scan), false);
+    for (const opts of [{}, { videoStarted: true }, { kickoffFailed: true }, { completed: true }]) {
+      assert.equal(shouldAdoptStudioVideo(scan, opts), false);
+    }
+    const state = emptyState({ filename: "x.pdf", inboxPdfPath: "", paperDir: "" });
+    state.studioStarted = ["nlm-video"];
+    state.completed = ["nlm-video"];
+    state.kickoffRetryStage = "nlm-video";
+    state.kickoffRetryAt = new Date().toISOString();
+    assert.equal(shouldAdoptStudioVideoForState(scan, state), false);
+  }
 });
 
-test("shouldAdoptStudioVideo: 1本だけのショート動画（1:13 等）もキックオフ試行後や上限クールダウン中は採用する", () => {
-  const card = "videocam 未読 優秀なAIがしれっとデータを破壊する理由 1:13 · 短め · 1 件のソース · 14 時間前 play_arrow more_";
-  const scan = scanStudioVideoOutputs([card]);
-  assert.equal(scan.shortCount, 1);
-  assert.equal(scan.explainerCount, 0);
-
-  // 初回キックオフ前（未試行）は解説動画の生成を優先するためまだ採用しない
-  assert.equal(shouldAdoptStudioVideo(scan), false);
-
-  // 生成開始済み（videoStarted）なら既存の 1 本を採用する
-  assert.equal(shouldAdoptStudioVideo(scan, { videoStarted: true }), true);
-
-  // キックオフ失敗・上限等のクールダウン中（kickoffFailed）なら既存の 1 本を採用する
-  assert.equal(shouldAdoptStudioVideo(scan, { kickoffFailed: true }), true);
-
-  // 既に完了扱い（completed）なら採用する
-  assert.equal(shouldAdoptStudioVideo(scan, { completed: true }), true);
-
-  // 解説動画がある場合は無条件で採用する
-  const explainerScan = scanStudioVideoOutputs(["subscriptions 5:00 · 解説 · 1 件のソース play_arrow"]);
-  assert.equal(shouldAdoptStudioVideo(explainerScan), true);
-
-  // 他ステージ（スライド等）のエラーで動画のキックオフ失敗ではない場合（kickoffFailed: false）は採用しない
-  assert.equal(shouldAdoptStudioVideo(scan, { kickoffFailed: false, videoStarted: false, completed: false }), false);
-});
-
-test("shouldAdoptStudioVideoForState: スライド等別ステージのキックオフ失敗では単一ショート動画を採用しない", () => {
-  const card = "videocam 未読 優秀なAIがしれっとデータを破壊する理由 1:13 · 短め · 1 件のソース · 14 時間前 play_arrow more_";
-  const scan = scanStudioVideoOutputs([card]);
-
-  // 初期状態（未開始）
-  const state = emptyState({ filename: "test-paper.pdf", inboxPdfPath: "", paperDir: "" });
-  assert.equal(shouldAdoptStudioVideoForState(scan, state), false);
-
-  // スライドのキックオフ失敗時（kickoffRetryStage === "nlm-slides"）: 動画はまだ試行していないので採用しない
-  state.kickoffRetryAt = new Date(Date.now() + 60_000).toISOString();
-  state.kickoffRetryStage = "nlm-slides";
-  assert.equal(shouldAdoptStudioVideoForState(scan, state), false);
-
-  // クイズのキックオフ失敗時（kickoffRetryStage === "nlm-quiz"）も同様
-  state.kickoffRetryStage = "nlm-quiz";
-  assert.equal(shouldAdoptStudioVideoForState(scan, state), false);
-
-  // 動画のキックオフ失敗時（kickoffRetryStage === "nlm-video"）: 既存の 1 本を採用する
-  state.kickoffRetryStage = "nlm-video";
-  assert.equal(shouldAdoptStudioVideoForState(scan, state), true);
+test("形式表示が時間より優先され、未知形式を採用しない", () => {
+  for (const label of ["解説", "説明動画", "Explainer"]) {
+    const card = `videocam 1:11 · ${label} · 1 件のソース`;
+    assert.equal(isAdoptableExplainerVideoText(card), true);
+    assert.equal(shouldAdoptStudioVideo(scanStudioVideoOutputs([card])), true);
+  }
+  assert.equal(shouldAdoptStudioVideo(scanStudioVideoOutputs(["videocam 8:00 play_arrow"])), false);
+  const mixed = ["videocam 5:00 · 短め", "videocam 5:00 · 解説"];
+  assert.equal(shouldAdoptStudioVideo(scanStudioVideoOutputs(mixed)), true);
+  assert.equal(isAdoptableExplainerVideoText(mixed.join(" ")), false);
 });
 
 test("studioVideoGenerationDone: タイルだけでは生成完了にしない", () => {
