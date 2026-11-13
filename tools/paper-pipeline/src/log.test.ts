@@ -87,3 +87,9 @@ test("scheduled wrapper disables child file output before invoking npm", () => {
   assert.ok(setting < script.indexOf("DECISION_ENV=$(npm"));
   assert.match(script, /npm start .*>> "\$LOG_FILE" 2>&1/);
 });
+
+// ランナー全体の設定と、上記 off の実動作検証を合わせて、他 suite による運用ログの汚染を防ぐ。
+test("npm test disables operational file logging for all test processes", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.match(pkg.scripts.test, /^PAPER_PIPELINE_LOG_FILE=off node --import tsx --test /);
+});
