@@ -1,3 +1,4 @@
+import { artifactArchived } from "./artifact-record.ts";
 import {
   hasStudioStarted,
   isCompleted,
@@ -23,7 +24,10 @@ export function missingEduUploads(
   selected: readonly StudioStageId[],
 ): StudioStageId[] {
   const uploaded = new Set(state.eduUploaded ?? []);
-  return selected.filter((s) => studioArtifactReady(state, s) && !uploaded.has(s));
+  return selected.filter((s) =>
+    !(s === "nlm-video" && artifactArchived(state, "video")) &&
+    !(s === "nlm-slides" && artifactArchived(state, "slides")) &&
+    studioArtifactReady(state, s) && !uploaded.has(s));
 }
 
 /** NotebookLM で生成済みの可能性があるが、ローカルにまだ無い Studio 出力 */

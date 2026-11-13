@@ -1,3 +1,4 @@
+import { artifactArchived, type ArtifactArchive } from "./artifact-record.ts";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -163,6 +164,7 @@ export function videoFileReady(paperDir: string, videoMp4Path: string): boolean 
 }
 
 export function needsLocalVideoFile(state: {
+  artifactArchive?: ArtifactArchive;
   paperDir: string;
   videoMp4Path: string;
   completed: string[];
@@ -170,6 +172,7 @@ export function needsLocalVideoFile(state: {
   waitingFor?: string;
   studioStarted?: string[];
 }): boolean {
+  if (artifactArchived(state, "video")) return false;
   if (!state.notebooklmUrl) return false;
   if (videoFileReady(state.paperDir, state.videoMp4Path)) return false;
   if (state.completed.includes("nlm-video") || state.completed.includes("done")) return true;

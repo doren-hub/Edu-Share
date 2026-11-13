@@ -128,3 +128,63 @@ npm run scheduled-decide
 
 `npm test` はファイル出力を無効にして実行するため、架空のテスト処理が運用ログに混ざりません。
 ログ保存の単体テストだけは、一時ディレクトリ内で明示的に保存を検証します。
+
+## 完了済み成果物の外部保管（手動操作）
+
+`artifact-archive` はブラウザー・NotebookLM・SciSpace・Edu Share に接続しない独立したコマンドです。
+実データへの適用は所有者が行ってください。Google ドライブのパソコン版など、既存の保管先ディレクトリを
+`PAPER_PIPELINE_ARCHIVE_ROOT` または `--root` で指定します。未設定・不存在ならエラーで停止します。
+種類は `PAPER_PIPELINE_ARCHIVE_PROVIDER` または `--provider`（既定 `google-drive`）で指定でき、
+他のファイルシステム上の保管先も使えます。個人のパスやアカウント名をリポジトリに保存しないでください。
+以下は `tools/paper-pipeline` 内での例です。`<...>` は実際の値に置き換えてください。
+
+```sh
+# 1 本ずつ、既定は予行。コピー・記録・削除はしない
+npm run artifact-archive -- archive --paper '<paper-directory>' --root '<archive-directory>'
+# 内容を確認した後、明示して実行
+npm run artifact-archive -- archive --paper '<paper-directory>' --root '<archive-directory>' --execute
+# 保管先一覧（state.json だけを読み、保管先ファイルは開かない）
+npm run artifact-archive -- list --paper '<paper-directory>'
+# 復元も既定は予行
+npm run artifact-archive -- restore --paper '<paper-directory>'
+npm run artifact-archive -- restore --paper '<paper-directory>' --execute
+```
+
+保管対象は DONE マーカーと `completed` の `done`・`edu-materials` があり、Edu Share の ID または URL が
+記録されている論文だけです。打ち切り (`giveUp`) は対象外です。動画・スライド・元の PDF をコピーし、
+全ファイルのバイト数が一致することを確かめ、`state.json` を一時ファイルから置き換えて保管記録を書き、
+最後にローカルの対象ファイルを削除します。生成対象外だった動画・スライドは省略できますが、
+パス・生成完了・アップロード済みの記録があるファイルが欠けている場合は停止します。
+`state.json`・`quiz.csv`・`vocab.csv`・DONE は残します。リンクや論文ディレクトリ外のファイルは扱いません。
+保管先には衝突を避けた固有のサブディレクトリを作り、既存ファイルを上書きしません。
+同じ論文への保管・復元の同時操作は `.artifact-archive.lock` で拒否します。
+通常のパイプラインも停止した状態で操作してください（パイプラインはこのロックを取得しません）。
+
+記録例（パスは説明用のプレースホルダー）:
+
+```json
+{
+  "artifactArchive": {
+    "provider": "google-drive",
+    "archivedAt": "2026-11-13T00:00:00.000Z",
+    "files": {
+      "video": { "localPath": "<paper-directory>/video.mp4", "path": "<archive-directory>/<unique-paper>/video.mp4", "bytes": 123456 },
+      "slides": { "localPath": "<paper-directory>/slides.pdf", "path": "<archive-directory>/<unique-paper>/slides.pdf", "bytes": 23456 },
+      "pdf": { "localPath": "<paper-directory>/paper.pdf", "path": "<archive-directory>/<unique-paper>/pdf.pdf", "bytes": 34567 }
+    }
+  }
+}
+```
+
+保管済みの DONE 論文は修復・再生成・再登録の対象から外れます。判定と一覧表示は記録だけを参照し、
+保管先の存在確認や先頭読み取りをしないため、ストリーミング保存先の取り込みを起こしません。
+作り直す際は先に復元してください。復元は全ファイルを一時ファイルにコピーしてバイト数を照合し、
+ローカルに戻してから保管記録を消します。保管先のコピーは削除しません。
+既存ローカルファイルは上書きせず停止します。
+
+コピー・照合失敗時は元ファイルと記録を保持します（保管前なら記録を新規作成しません）。
+失敗した保管先の途中コピーは調査用に残します。途中終了でローカル削除が一部だけ終わった場合や、
+復元の公開・記録保存に失敗した場合も記録を保持します。既存ローカルファイルを別の場所へ退避してから
+復元を再試行してください。強制終了後のロックは、関連処理が動いていないことを確認した所有者が除去します。
+サイズ照合は内容のハッシュ比較やクラウドへの同期完了を保証しません。ローカルにコピーできた後の
+クラウド同期・保持状況はストレージ側で確認してください。

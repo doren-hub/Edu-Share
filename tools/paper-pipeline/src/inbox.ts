@@ -1,3 +1,4 @@
+import { archivedDone } from "./artifact-record.ts";
 import {
   copyFileSync,
   existsSync,
@@ -207,6 +208,7 @@ export function listVideoRepairPdfs(workDir: string, onlyFilename = ""): InboxPd
   for (const name of listWorkDirs(workDir)) {
     const { state } = loadWorkPaper(workDir, name);
     if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (hasDoneMarker(state.paperDir) && archivedDone(state)) continue;
     if (!needsLocalVideoFile(state)) continue;
     const absPath = workPdfPath(state);
     if (!absPath) continue;
@@ -221,6 +223,7 @@ export function listRawPasteRepairPdfs(workDir: string, onlyFilename = ""): Inbo
   for (const name of listWorkDirs(workDir)) {
     const { state } = loadWorkPaper(workDir, name);
     if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (hasDoneMarker(state.paperDir) && archivedDone(state)) continue;
     if (!needsSciSpaceCardRecapture(state)) continue;
     if (
       state.waitingFor &&
@@ -247,6 +250,7 @@ export function listEduMaterialRepairPdfs(
   for (const name of listWorkDirs(workDir)) {
     const { state } = loadWorkPaper(workDir, name);
     if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (hasDoneMarker(state.paperDir) && archivedDone(state)) continue;
     if (!hasDoneMarker(state.paperDir) && !state.eduShareTestId) continue;
     if (missingEduUploads(state, selected).length === 0) continue;
     const absPath = workPdfPath(state);
@@ -285,6 +289,7 @@ export function listStudioFollowupPdfs(
   for (const name of listWorkDirs(workDir)) {
     const { state } = loadWorkPaper(workDir, name);
     if (onlyFilename && state.filename !== onlyFilename) continue;
+    if (hasDoneMarker(state.paperDir) && archivedDone(state)) continue;
     if (!isUploadedPaper(state)) continue;
     if (missingStudioStages(state, selected).length === 0) continue;
     const absPath = workPdfPath(state);
