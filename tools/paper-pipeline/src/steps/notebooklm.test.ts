@@ -338,8 +338,8 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
     await t.test("混在カードから解説だけのメニューを開く", async () => {
       const page = await context.newPage();
       try {
-        await page.setContent(`<artifact-library-item>videocam 5:00 · 短め<button onclick="document.body.dataset.chosen='short'">more_vert</button></artifact-library-item>
-          <artifact-library-item>videocam 1:11 · 解説<button onclick="document.body.dataset.chosen='explainer'">more_vert</button></artifact-library-item>`);
+        await page.setContent(`<artifact-library-item>videocam 5:00 · 短め · 1 件のソース <button onclick="document.body.dataset.chosen='short'">more_vert</button></artifact-library-item>
+          <artifact-library-item>videocam 1:11 · 解説 · 1 件のソース <button onclick="document.body.dataset.chosen='explainer'">more_vert</button></artifact-library-item>`);
         assert.equal(await clickExplainerCardOverflow(page), true);
         assert.equal(await page.getAttribute("body", "data-chosen"), "explainer");
         await page.locator("artifact-library-item").last().evaluate(el => el.remove());
