@@ -34,6 +34,8 @@ fi
 LOG_DIR="$PIPELINE_ROOT/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${SCHEDULED_LOG_FILE:-$LOG_DIR/scheduled-run.log}"
+# 子プロセスの出力はこのスクリプトが記録するため、本体の追記を無効化する。
+export PAPER_PIPELINE_LOG_FILE=off
 
 log() {
   local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"

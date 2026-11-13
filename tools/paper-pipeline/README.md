@@ -113,3 +113,15 @@ npm run scheduled-decide
 テストには外部サービスへ接続しない画面フィクスチャが含まれます。`npx playwright install chromium` 済みの Chromium、またはローカルの Chrome を使います。CI はテスト用 Chromium を準備します。運用の Chrome プロファイルは使いません。
 
 書誌の UI ラベル混入・短縮タイトルは原本に照合し、不確かな値による上書きを止めます。既存の誤登録を限定して通常アプリから直す手順は [論文書誌の修正](../../docs/paper-bibliography-repair.md) を参照してください。自動的な一括修正は行いません。
+
+## ログファイル
+
+`log` / `warn` / `error` は画面への出力と同じ時刻つきの行を、実行ディレクトリによらず
+`tools/paper-pipeline/logs/pipeline.log` に追記します（ビルド後も同じ場所）。
+既存の `firstLine` による Playwright Call log の除外は変わりません。
+
+- `PAPER_PIPELINE_LOG_FILE=/path/to/run.log` で出力先を変更できます。相対パスは実行ディレクトリ基準です。
+- `PAPER_PIPELINE_LOG_FILE=off` でファイル出力を無効化できます。未設定・空文字列は既定の出力先を使います。
+- 親ディレクトリは自動作成します。書き込みに失敗すると詳細情報を含まない警告を一度だけ標準エラーに出し、そのプロセスのファイル出力を停止します。画面への出力と処理は続きます。
+- 定期実行スクリプトは子プロセスに `PAPER_PIPELINE_LOG_FILE=off` を設定し、従来どおり `logs/scheduled-run.log`（`SCHEDULED_LOG_FILE` で変更可）に出力を記録します。同じ行を本体から二重に追記しません。
+- `logs/` は Git の無視対象です。任意の出力先を指定する場合は、そのファイルもコミットしないでください。ログの分割・古いログの削除は行いません。
