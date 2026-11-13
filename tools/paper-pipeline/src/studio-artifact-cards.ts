@@ -20,6 +20,7 @@ export type StudioArtifactCard = {
   ready: boolean;
   busy: boolean;
   target: Locator;
+  row: Locator;
 };
 
 /** Scope every lookup to an artifact row: source rows and creation tiles are not outputs. */
@@ -71,6 +72,7 @@ export async function studioArtifactCards(page: Page): Promise<StudioArtifactCar
       ready,
       busy,
       target,
+      row,
     });
   }
   return cards;

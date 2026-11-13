@@ -8,6 +8,9 @@ import { emptyState, hasStudioStarted, isCompleted, type PaperState } from "../s
 import { GenerationWaitingError } from "../waiting.ts";
 import {
   collectReadyStudio,
+  openVideoCustomize,
+  selectExplainerVideoFormat,
+  clickExplainerCardOverflow,
   returnToStudioList,
   runStudioParallel,
   studioArtifactViewerOpen,
@@ -109,7 +112,7 @@ async function mountStudioFixture(
           <div id="studio-list-view">
             <div id="creation-tiles">
               <button id="tile-audio" onclick="window.openCustomize('audio')">音声解説 chevron_forward</button>
-              <button id="tile-video" onclick="window.openCustomize('video')">動画解説 chevron_forward</button>
+              <div><button id="tile-video" onclick="document.body.dataset.unsafeGeneration='true'">動画解説 chevron_forward</button><button aria-label="動画解説をカスタマイズ" onclick="window.openCustomize('video')">edit</button></div>
               <button id="tile-slides" onclick="window.openCustomize('slides')">スライド資料 chevron_forward</button>
               <button id="tile-quiz" onclick="window.openCustomize('quiz')">クイズ chevron_forward</button>
               <button id="tile-flashcards" onclick="window.openCustomize('flashcards')">フラッシュカード chevron_forward</button>
@@ -313,6 +316,37 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
   await context.newPage(); // keeper tab so ensureKeeperTab is a no-op
 
   try {
+    await t.test("動画は編集から開き、解説を選べない場合は生成しない", async () => {
+      const page = await context.newPage();
+      try {
+        await mountStudioFixture(page, {});
+        await assert.rejects(() => selectExplainerVideoFormat(page), /カスタマイズを開けない/);
+        assert.equal(await openVideoCustomize(page), true);
+        assert.equal(await page.getAttribute("body", "data-unsafe-generation"), null);
+        await selectExplainerVideoFormat(page);
+        assert.equal(await page.getAttribute("body", "data-format"), "explainer");
+        await page.getByRole("button", { name: "説明動画", exact: true }).evaluate(el => el.textContent = "短め");
+        await assert.rejects(() => selectExplainerVideoFormat(page), /解説を選べない/);
+        assert.deepEqual(await page.evaluate(() => (window as unknown as { __kickedOff: string[] }).__kickedOff), []);
+        await page.locator("#customize-dialog").evaluate(el => (el as HTMLElement).style.display = "none");
+        await page.getByRole("button", { name: "動画解説をカスタマイズ", exact: true }).evaluate(el => el.remove());
+        assert.equal(await openVideoCustomize(page), false);
+        assert.equal(await page.getAttribute("body", "data-unsafe-generation"), null);
+      } finally { await page.close(); }
+    });
+
+    await t.test("混在カードから解説だけのメニューを開く", async () => {
+      const page = await context.newPage();
+      try {
+        await page.setContent(`<artifact-library-item>videocam 5:00 · 短め · 1 件のソース <button onclick="document.body.dataset.chosen='short'">more_vert</button></artifact-library-item>
+          <artifact-library-item>videocam 1:11 · 解説 · 1 件のソース <button onclick="document.body.dataset.chosen='explainer'">more_vert</button></artifact-library-item>`);
+        assert.equal(await clickExplainerCardOverflow(page), true);
+        assert.equal(await page.getAttribute("body", "data-chosen"), "explainer");
+        await page.locator("artifact-library-item").last().evaluate(el => el.remove());
+        assert.equal(await clickExplainerCardOverflow(page), false);
+      } finally { await page.close(); }
+    });
+
     await t.test(
       "クイズ取得後に Studio 一覧へ戻り、続けて単語帳を取得して生成中のスライドを開始失敗にしない",
       async () => {

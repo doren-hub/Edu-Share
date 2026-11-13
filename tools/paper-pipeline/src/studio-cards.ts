@@ -1,4 +1,4 @@
-import { hasStudioStarted, isCompleted, type PaperState } from "./state.ts";
+import { type PaperState } from "./state.ts";
 
 /** Studio 出力カードの相対時刻。1時間超は「昨日」「2日前」になる。 */
 export const STUDIO_RELATIVE_TIME =
@@ -74,7 +74,7 @@ export function detectStudioCardKind(text: string): StudioCardKind {
 }
 
 const EXPLAINER_DURATION =
-  /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明|短め|ショート|Short|Brief)\b/gi;
+  /\b(\d{1,2}):(\d{2})\s*·\s*(解説|Explainer|説明動画|説明|短め|ショート|Short|Brief)(?=\s|·|$)/gi;
 
 export type VideoKickoffScan = {
   durationsSec: number[];
@@ -114,62 +114,42 @@ export function isExplainerVideoCardText(text: string): boolean {
   return false;
 }
 
+/** Only explicitly labelled explainer metadata is eligible; duration alone is not a format. */
+export function isAdoptableExplainerVideoText(text: string): boolean {
+  const formats = [...text.matchAll(new RegExp(EXPLAINER_DURATION.source, "gi"))];
+  return formats.length > 0 && formats.every((m) => /^(解説|Explainer|説明動画|説明)$/i.test(m[3]));
+}
+
 export function scanStudioVideoOutputs(texts: string[]): VideoKickoffScan {
-  const durationsSec = uniqueDurations(texts.flatMap((t) => listVideoDurationsSec(t)));
+  const metadata = texts.flatMap((t) => [...t.matchAll(new RegExp(EXPLAINER_DURATION.source, "gi"))]);
   return {
-    durationsSec,
-    explainerCount: durationsSec.filter((s) => s >= 120).length,
-    shortCount: durationsSec.filter((s) => s < 120).length,
+    durationsSec: uniqueDurations(texts.flatMap((t) => listVideoDurationsSec(t))),
+    explainerCount: uniqueDurations(metadata.filter((m) => /^(解説|Explainer|説明動画|説明)$/i.test(m[3]))
+      .map((m) => durationSec(m[1], m[2]))).length,
+    shortCount: uniqueDurations(metadata.filter((m) => /^(短め|ショート|Short|Brief)$/i.test(m[3]))
+      .map((m) => durationSec(m[1], m[2]))).length,
   };
 }
 
-/** タイル（subscriptions 動画解説）だけでは既存動画とみなさない。 */
+/** Short or unknown-format outputs never suppress a safe explainer retry. */
 export function shouldKickoffVideo(scan: VideoKickoffScan): boolean {
-  if (scan.explainerCount > 0) return false;
-  if (scan.shortCount >= 2) return false;
-  return true;
+  return scan.explainerCount === 0;
 }
 
-/** 再生成しない既存動画がある。MP4 未保存でも Studio 生成は終わっている。 */
 export function studioVideoGenerationDone(scan: VideoKickoffScan): boolean {
-  return scan.durationsSec.length > 0 && !shouldKickoffVideo(scan);
+  return scan.explainerCount > 0;
 }
 
-/**
- * 既存の動画カード（1本だけのショートを含む）をMP4保存対象として採用すべきか判定する。
- * - 解説動画（>=120s）がある場合は常に採用
- * - ショートが2本以上ある場合は再生成不要なので採用
- * - ショートが1本だけでも、生成開始試行済み/失敗クールダウン中/生成完了扱いの場合は採用
- */
+/** State and cooldowns cannot make a short video eligible for collection. */
 export function shouldAdoptStudioVideo(
   scan: VideoKickoffScan,
-  opts?: {
-    videoStarted?: boolean;
-    kickoffFailed?: boolean;
-    completed?: boolean;
-  },
+  _opts?: { videoStarted?: boolean; kickoffFailed?: boolean; completed?: boolean },
 ): boolean {
-  if (scan.explainerCount > 0) return true;
-  if (scan.shortCount >= 2) return true;
-  if (scan.shortCount > 0 && (opts?.videoStarted || opts?.kickoffFailed || opts?.completed)) {
-    return true;
-  }
-  return false;
+  return scan.explainerCount > 0;
 }
 
-/**
- * PaperState に応じて既存の動画カードを採用すべきか判定する。
- * スライド等別ステージのキックオフ失敗（kickoffRetryStage !== "nlm-video"）では採用しない。
- */
-export function shouldAdoptStudioVideoForState(
-  scan: VideoKickoffScan,
-  state?: PaperState,
-): boolean {
-  return shouldAdoptStudioVideo(scan, {
-    videoStarted: state ? hasStudioStarted(state, "nlm-video") : false,
-    kickoffFailed: Boolean(state?.kickoffRetryAt) && state?.kickoffRetryStage === "nlm-video",
-    completed: state ? isCompleted(state, "nlm-video") : false,
-  });
+export function shouldAdoptStudioVideoForState(scan: VideoKickoffScan, _state?: PaperState): boolean {
+  return shouldAdoptStudioVideo(scan);
 }
 
 /** 生成タイルではなく、Studio に並んでいるスライド出力か */

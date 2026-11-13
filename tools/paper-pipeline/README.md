@@ -58,6 +58,12 @@ inbox に置いてから完了までの操作手順は [docs/inbox.md](docs/inbo
 
 `npm start` / `npm run repair-meta` / `npm run fill-inbox` / `npm run worker` は実行前に自動で事前ビルド（`tsc -p tsconfig.build.json`）を行い、`dist/` 配下の JavaScript を `node` で直接実行します（tsx のランタイム変換メモリを消費しません）。また、ヘッドレス起動時は `--disable-gpu` により不要な GPU プロセスのメモリ消費を抑えます。
 
+## 動画形式
+
+動画は Studio の動画解説タイルの編集（カスタマイズ）から「解説」を選んで生成します。編集を開けない、または解説を選べない場合は生成を中止し、既存の開始再試行・クールダウン処理に戻ります。既定形式でのワンクリック生成は使いません。
+
+収集時はカードの `m:ss · 解説` / `Explainer` 表示を確認します。「短め」「ショート」「Short」「Brief」や形式不明の動画は、長さ・本数・開始済み状態にかかわらず採用しません。既に保存・登録済みの MP4 の差し替えは行いません。
+
 ## 動き
 
 1. Edu Share の論文一覧からタイトルと DOI を取る

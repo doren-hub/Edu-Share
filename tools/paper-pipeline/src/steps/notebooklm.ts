@@ -49,7 +49,7 @@ import {
   studioText,
   shouldKickoffSlides,
   shouldKickoffVideo,
-  shouldAdoptStudioVideo,
+  isAdoptableExplainerVideoText,
   shouldAdoptStudioVideoForState,
   studioOutputScanIncomplete,
   studioVideoGenerationDone,
@@ -964,47 +964,49 @@ async function clickStudioTile(page: Page, labels: (string | RegExp)[]): Promise
   return false;
 }
 
-const SHORT_VIDEO_FORMAT = /ショート|Short\b|Brief|シネマティック|Cinematic/i;
-
-async function selectExplainerVideoFormat(page: Page): Promise<void> {
-  log("動画形式: 説明 / 解説 を探します");
-  const dialog = page.getByRole("dialog");
-  if (!(await isVisibleNow(dialog))) {
-    warn("動画形式: カスタマイズダイアログが無いので形式選択を飛ばします");
-    return;
-  }
-  const root = dialog.first();
-  const groups = [
-    root.getByRole("radio"),
-    root.getByRole("tab"),
-    root.getByRole("button"),
-    root.locator("[role='option']"),
-  ];
+/** Fail closed: callers must not generate unless this selection succeeds. */
+export async function selectExplainerVideoFormat(page: Page): Promise<void> {
+  const root = await studioCustomizeRoot(page);
+  if (!root) throw new Error("動画形式: カスタマイズを開けないため生成を中止します（再試行可能）");
+  const groups = [root.getByRole("radio"), root.getByRole("tab"), root.getByRole("button"),
+    root.locator("[role='option']"), root.getByText(/^(説明動画|説明|解説|解説動画|Explainer)$/i)];
   for (const group of groups) {
     const n = Math.min(await group.count().catch(() => 0), 40);
     for (let i = 0; i < n; i++) {
       const el = group.nth(i);
       if (!(await isVisibleNow(el))) continue;
-      const text = `${await innerTextNow(el, 0)} ${await attrNow(el, "aria-label")}`
-        .replace(/\s+/g, " ")
-        .trim();
-      if (SHORT_VIDEO_FORMAT.test(text)) continue;
-      const explainer =
-        /説明動画|Explainer|解説動画/i.test(text) || text === "説明" || text === "解説";
-      if (!explainer) continue;
+      const text = `${await innerTextNow(el, 0)} ${await attrNow(el, "aria-label")}`.replace(/\s+/g, " ").trim();
+      if (/短め|ショート|Short\b|Brief|シネマティック|Cinematic/i.test(text)) continue;
+      if (!/説明動画|Explainer|解説動画/i.test(text) && text !== "説明" && text !== "解説") continue;
       await el.click({ timeout: 5_000 });
-      log(`動画形式: 説明動画を選びました（${text.slice(0, 40)}）`);
-      await page.waitForTimeout(500);
+      log(`動画形式: 解説を選択しました（${text.slice(0, 40)}）`);
       return;
     }
   }
-  const clicked = await clickFirstByName(
-    page,
-    [/説明動画/, /^説明$/, /Explainer/i, /^解説$/, /解説動画/],
-    { timeoutMs: 4_000 },
-  );
-  if (clicked) log("動画形式: 説明 / 解説 をクリックしました");
-  else warn("説明動画の形式ボタンが見つかりません。ショートが選ばれたままの可能性があります");
+  throw new Error("動画形式: 解説を選べないため生成を中止します（再試行可能）");
+}
+
+/** Open the tile's edit control, never its default one-click generation action. */
+export async function openVideoCustomize(page: Page): Promise<boolean> {
+  await openStudio(page);
+  const tiles = page.locator("button, [role='button'], a").filter({ hasText: /動画解説|Video overview|ビデオ概要/i });
+  const n = Math.min(await tiles.count(), 20);
+  for (let i = 0; i < n; i++) {
+    const tile = tiles.nth(i);
+    const parent = tile.locator("xpath=..");
+    for (const controls of [tile.getByRole("button", { name: /カスタマイズ|Customize|編集|Edit/i }),
+      parent.getByRole("button", { name: /カスタマイズ|Customize|編集|Edit/i }),
+      parent.locator("button, [role='button']").filter({ hasText: /^\s*(edit|edit_square|tune)\s*$/i })]) {
+      for (let j = 0; j < await controls.count(); j++) {
+        const control = controls.nth(j);
+        if (!(await isVisibleNow(control))) continue;
+        await control.click({ timeout: 5_000 });
+        if (await waitForAnyVisible(page, [page.getByRole("dialog"), page.locator(".cdk-overlay-pane")], 4_000)) return true;
+        throw new Error("動画の編集からカスタマイズを開けませんでした");
+      }
+    }
+  }
+  return false;
 }
 
 async function studioCustomizeRoot(page: Page): Promise<Locator | null> {
@@ -1086,7 +1088,7 @@ async function generateStudioItem(
     throw new Error("ソースが 0 件のため Studio 生成を開始できません");
   }
   log(`Studio: ${String(labels[0])} を開きます`);
-  const hit = await clickStudioTile(page, labels);
+  const hit = opts.explainerVideo ? await openVideoCustomize(page) : await clickStudioTile(page, labels);
   if (!hit) {
     await logVisibleButtonNames(page);
     throw new Error(`Studio 項目が見つかりません: ${labels[0]}`);
@@ -1131,9 +1133,7 @@ async function generateStudioItem(
   }
 
   if (opts.explainerVideo) {
-    await withTimeout(selectExplainerVideoFormat(page), 20_000, "動画形式の選択がタイムアウトしました").catch((e) => {
-      warn(e instanceof Error ? e.message : String(e));
-    });
+    await withTimeout(selectExplainerVideoFormat(page), 20_000, "動画形式の選択がタイムアウトしました");
     const existing = scanStudioVideoOutputs(await studioCardTexts(page));
     log(`Studio: 生成前の ${formatVideoScan(existing)}`);
     if (!shouldKickoffVideo(existing)) {
@@ -1333,18 +1333,8 @@ async function peekStudioVideoOutputs(page: Page): Promise<VideoKickoffScan> {
 async function studioHasExplainerVideoOutput(page: Page, state?: PaperState): Promise<boolean> {
   const scan = await scanPageVideoOutputs(page);
   const adopt = shouldAdoptStudioVideoForState(scan, state);
-  if (adopt) {
-    if (scan.explainerCount === 0 && scan.shortCount > 0) {
-      log(`既存動画（${formatVideoScan(scan)}）を採用し、MP4 を保存します`);
-    }
-    return true;
-  }
-  if (scan.shortCount > 0) {
-    const sec = scan.durationsSec.find((s) => s < 120) ?? 0;
-    const mm = Math.floor(sec / 60);
-    const ss = String(sec % 60).padStart(2, "0");
-    log(`既存動画が ${mm}:${ss} のためショートとみなし、説明動画を作り直します`);
-  }
+  if (adopt) return true;
+  if (scan.shortCount > 0) log(`短めの動画は採用しません（${formatVideoScan(scan)}）`);
   return false;
 }
 
@@ -1676,67 +1666,16 @@ async function clickVideoHeaderDownload(page: Page): Promise<boolean> {
   return false;
 }
 
-/** tsx が関数に __name を付けるため、page.evaluate には文字列だけ渡す */
-async function clickExplainerCardOverflow(page: Page): Promise<boolean> {
-  const hit = await page
-    .evaluate(`(() => {
-      const label = (el) => ((el.innerText || "") + " " + (el.getAttribute("aria-label") || "")).replace(/\\s+/g, " ").trim();
-      const isOverflow = (t) => /more_vert|more_horiz/i.test(t) || /その他の操作|More options|More actions/i.test(t);
-      const explainerCardText = (el) => {
-        let cur = el;
-        for (let i = 0; i < 12 && cur; i++) {
-          const t = (cur.innerText || "").replace(/\\s+/g, " ").trim();
-          if (
-            t.length <= 280 &&
-            (/\\d{1,2}:\\d{2}\\s*·\\s*(解説|Explainer|説明|短め|ショート|Short|Brief)/i.test(t) ||
-              (/\\b\\d{1,2}:\\d{2}\\b/.test(t) && /play_arrow|videocam/i.test(t))) &&
-            !/ソースを削除|ソース名を変更|ソースを追加/.test(t) &&
-            !(/\\btablet\\b|スライド資料|Slide deck/i.test(t))
-          ) {
-            return t;
-          }
-          const root = cur.getRootNode();
-          if (root && root.host && root !== document) { cur = root.host; continue; }
-          cur = cur.parentElement;
-        }
-        return "";
-      };
-      const found = [];
-      const walk = (root) => {
-        for (const el of root.querySelectorAll("button, [role='button']")) {
-          const t = label(el);
-          if (!isOverflow(t)) continue;
-          const ctx = explainerCardText(el);
-          if (!ctx) continue;
-          let near = false;
-          const video = document.querySelector("video");
-          if (video) {
-            const vr = video.getBoundingClientRect();
-            const er = el.getBoundingClientRect();
-            near = er.left < vr.right + 80 && er.right > vr.left - 80 && er.top < vr.bottom + 80 && er.bottom > vr.top - 80;
-          }
-          const score = (ctx ? 2 : 0) + (near ? 1 : 0);
-          if (score > 0) found.push({ el, score });
-        }
-        for (const el of root.querySelectorAll("*")) {
-          if (el.shadowRoot) walk(el.shadowRoot);
-        }
-      };
-      walk(document);
-      found.sort((a, b) => b.score - a.score);
-      if (!found[0]) return "";
-      found[0].el.click();
-      return found[0].score > 1 ? "explainer" : "near";
-    })()`)
-    .catch((e) => {
-      warn(`解説カードメニュー: ${e instanceof Error ? e.message : e}`);
-      return "";
-    });
-  if (hit) {
-    log(`Studio: 解説カードのその他メニューを開きました（${hit}）`);
+/** Scope collection to an explicitly labelled explainer card. */
+export async function clickExplainerCardOverflow(page: Page): Promise<boolean> {
+  const cards = await studioArtifactCards(page);
+  for (const card of cards) {
+    if (card.kind !== "video" || card.busy || !isAdoptableExplainerVideoText(card.text)) continue;
+    const buttons = card.row.getByRole("button", { name: /more_vert|more_horiz|その他|More options|More actions/i });
+    if (!(await isVisibleNow(buttons.first()))) continue;
+    await buttons.first().click({ timeout: 5_000 });
     await page.waitForTimeout(500);
-    if (await dismissSourceDeleteMenu(page)) return false;
-    return true;
+    return !(await dismissSourceDeleteMenu(page));
   }
   return false;
 }
@@ -1965,7 +1904,7 @@ async function downloadStudioVideoMp4(page: Page, destPath: string): Promise<voi
         for (let i = 0; i < 8; i++) {
           if (page.isClosed()) throw new Error("ブラウザが閉じられています");
           if (await clickNotebookLmVideoDownload(page)) return;
-          if (await clickLabeledControl(page, "download")) return;
+          // Never fall back to an unscoped download control: it may belong to a short video.
           await new Promise((r) => setTimeout(r, 1_000));
         }
         throw new Error("ダウンロード操作が見つかりません");
