@@ -1,3 +1,4 @@
+import { artifactArchived } from "./artifact-record.ts";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -102,6 +103,8 @@ export function studioArtifactPath(state: PaperState, stage: StudioStageId): str
 }
 
 export function studioArtifactReady(state: PaperState, stage: StudioStageId): boolean {
+  if (stage === "nlm-video" && artifactArchived(state, "video")) return true;
+  if (stage === "nlm-slides" && artifactArchived(state, "slides")) return true;
   if (stage === "nlm-video") return videoFileReady(state.paperDir, state.videoMp4Path);
   const min = stage === "nlm-slides" ? 1_000 : 20;
   return fileHasBytes(studioArtifactPath(state, stage), min);

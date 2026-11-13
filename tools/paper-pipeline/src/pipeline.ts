@@ -1,3 +1,4 @@
+import { archivedDone } from "./artifact-record.ts";
 import { readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright";
@@ -500,6 +501,10 @@ export async function processOnePaper(
       paperDir: item.paperDir,
     }),
   );
+  if (hasDoneMarker(item.paperDir) && archivedDone(state)) {
+    log(`スキップ（外部保管済み）: ${item.filename}`);
+    return "skipped";
+  }
   state.inboxPdfPath = item.absPath;
   state.filename = item.filename;
   state.paperDir = item.paperDir;

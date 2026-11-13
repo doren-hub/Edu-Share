@@ -1,3 +1,4 @@
+import type { ArtifactArchive } from "./artifact-record.ts";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -30,6 +31,7 @@ export type StudioStageId = (typeof STUDIO_STAGES)[number];
 export const SKIP_SLIDES_VIDEO_STAGES: readonly StudioStageId[] = ["nlm-slides", "nlm-video"];
 
 export type PaperState = {
+  artifactArchive?: ArtifactArchive;
   giveUp?: { at: string; reason: string };
   filename: string;
   inboxPdfPath: string;
