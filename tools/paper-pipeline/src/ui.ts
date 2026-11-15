@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { importDownload } from "./download-files.ts";
+import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join } from "node:path";
 import type { Locator, Page } from "playwright";
@@ -136,15 +137,17 @@ export async function uploadViaChooserOrInput(
   }
 }
 
-function copyIfReady(
+export function copyIfReady(
   src: string | null | undefined,
   destPath: string,
   minBytes = 1_000,
+  downloadsDir = getChromeDownloadsPath() ?? undefined,
 ): boolean {
   if (!src || !existsSync(src)) return false;
   try {
     if (statSync(src).size <= minBytes) return false;
-    if (src !== destPath) copyFileSync(src, destPath);
+    importDownload(src, destPath, downloadsDir, undefined,
+      extname(destPath).toLowerCase() === ".mp4" ? isRealVideoFile : () => true);
     return existsSync(destPath) && statSync(destPath).size > minBytes;
   } catch {
     return false;
@@ -287,14 +290,6 @@ export async function waitForDownloadTo(
           continue;
         }
         if (copyIfReady(p, destPath, minBytes)) {
-          if (ext === ".mp4" && !isRealVideoFile(destPath)) {
-            try {
-              unlinkSync(destPath);
-            } catch {
-              /* 次の候補へ */
-            }
-            continue;
-          }
           log(`保存: ${destPath}（${n}）`);
           return destPath;
         }

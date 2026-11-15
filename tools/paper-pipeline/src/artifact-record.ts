@@ -3,7 +3,7 @@ export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 export type ArtifactArchive = {
   provider: string;
   archivedAt: string;
-  files: Partial<Record<ArtifactKind, { localPath: string; path: string; bytes: number }>>;
+  files: Partial<Record<ArtifactKind, { localPath: string; path: string; bytes: number; sha256?: string }>>;
 };
 
 /** Metadata only: never inspect an archive path (streaming storage may hydrate it). */
