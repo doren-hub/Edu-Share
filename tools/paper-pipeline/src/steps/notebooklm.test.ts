@@ -4,9 +4,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright";
-import { emptyState, hasStudioStarted, isCompleted, type PaperState } from "../state.ts";
+import { emptyState, loadState, hasStudioStarted, isCompleted, type PaperState } from "../state.ts";
 import { GenerationWaitingError } from "../waiting.ts";
 import {
+  tryKickoffStudio,
   collectReadyStudio,
   openVideoCustomize,
   selectExplainerVideoFormat,
@@ -316,6 +317,43 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
   await context.newPage(); // keeper tab so ensureKeeperTab is a no-op
 
   try {
+    await t.test("開始失敗は永続化し、開始済みにせず3回で打ち切る", async () => {
+      const page = await context.newPage();
+      const { paperDir, state: initial } = makeTempState();
+      try {
+        await mountStudioFixture(page, {});
+        await page.getByRole("button", { name: "動画解説をカスタマイズ", exact: true }).evaluate(el => el.remove());
+        let state = initial;
+        for (let i = 1; i <= 3; i++) {
+          state.kickoffRetryAt = "";
+          const kick = () => tryKickoffStudio(page, state, "nlm-video", [/動画解説/], 100, { explainerVideo: true });
+          if (i < 3) assert.equal(await kick(), "skipped");
+          else await assert.rejects(kick, /開始失敗が 3 回/);
+          state = loadState(paperDir, initial);
+          assert.equal(state.kickoffFailures?.["nlm-video"], i);
+          assert.equal(hasStudioStarted(state, "nlm-video"), false);
+          assert.equal(state.generationStartedAt, "");
+          if (i < 3) {
+            assert.equal(await kick(), "skipped"); // cooling does not count another failure
+            assert.equal(state.kickoffFailures?.["nlm-video"], i);
+          }
+        }
+        assert.ok(state.giveUp);
+        assert.equal(await page.getAttribute("body", "data-unsafe-generation"), null);
+      } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
+    });
+
+    await t.test("hover で表示される編集だけを開く", async () => {
+      const page = await context.newPage();
+      try {
+        await mountStudioFixture(page, {});
+        await page.addStyleTag({ content: "#video-edit { visibility: hidden; } div:hover > #video-edit { visibility: visible; }" });
+        await page.getByRole("button", { name: "動画解説をカスタマイズ", exact: true }).evaluate(el => el.id = "video-edit");
+        assert.equal(await openVideoCustomize(page), true);
+        assert.equal(await page.getAttribute("body", "data-unsafe-generation"), null);
+      } finally { await page.close(); }
+    });
+
     await t.test("動画は編集から開き、解説を選べない場合は生成しない", async () => {
       const page = await context.newPage();
       try {

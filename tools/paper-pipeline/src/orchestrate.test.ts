@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  nextWaitingCheckAt,
   decideIdleAction,
   decideOrchestratorExitCode,
   detectProgress,
@@ -469,3 +470,9 @@ test("getPaperWaitingStage: waitingFor, kickoffRetryStage, completed から適�
   );
 });
 
+
+test("waiting worker は未開始段階が残っていても再確認時刻まで休む", () => {
+  assert.equal(nextWaitingCheckAt("nlm-video", 0, 100), 60_100);
+  assert.equal(nextWaitingCheckAt("nlm-video", 180_100, 100), 180_100);
+  assert.equal(nextWaitingCheckAt("nlm-quiz", 0, 100), 20_100);
+});

@@ -469,6 +469,13 @@ async function main(): Promise<void> {
     const stateAfter = loadPaperState(track.item);
     const progressMade = detectProgress(stateBefore, stateAfter, code);
 
+    if (stateAfter.giveUp) {
+      job.status = "failed";
+      failed.push(track.item.filename);
+      warn(`オーケストレータ: ${track.item.filename} は打ち切り済みです。他の論文を続けます`);
+      continue;
+    }
+
     if (progressMade) {
       waitingSince = 0;
     } else if (waitingSince === 0) {
@@ -520,17 +527,8 @@ async function main(): Promise<void> {
         );
         continue;
       }
-      if (!job.kickoffSettled && !generationBlocked && cooldownUntil <= Date.now()) {
-        job.status = "ready";
-        job.nextCheckAt = 0;
-        log(
-          `オーケストレータ: ${track.item.filename} は ${stage} 待ちだが指定した Studio が揃っていないので同じ論文を続けます`,
-        );
-        continue;
-      }
       job.status = "waiting";
-      job.nextCheckAt =
-        cooldownUntil > Date.now() ? cooldownUntil : Date.now() + recheckDelayMs(stage);
+      job.nextCheckAt = nextWaitingCheckAt(stage, cooldownUntil);
       log(
         generationBlocked
           ? `オーケストレータ: ${track.item.filename} は生成待ち。利用量回復までは他の論文の SciSpace / Edu Share を進めます`
@@ -664,4 +662,9 @@ if (isMainModule()) {
       logError(e instanceof Error ? e.stack ?? e.message : String(e));
       process.exit(1);
     });
+}
+
+/** 未開始の Studio が残っていても、待機 worker を即座に起動し直さない。 */
+export function nextWaitingCheckAt(stage: string, cooldownUntil: number, now = Date.now()): number {
+  return Math.max(cooldownUntil, now + recheckDelayMs(stage));
 }

@@ -32,6 +32,7 @@ export const SKIP_SLIDES_VIDEO_STAGES: readonly StudioStageId[] = ["nlm-slides",
 
 export type PaperState = {
   artifactArchive?: ArtifactArchive;
+  kickoffFailures?: Partial<Record<StageId, number>>;
   giveUp?: { at: string; reason: string };
   filename: string;
   inboxPdfPath: string;
@@ -211,6 +212,8 @@ export function studioKickoffSettled(state: PaperState, skip: readonly StudioSta
 }
 
 export function markStudioStarted(state: PaperState, stage: StageId): void {
+  if (!state.generationStartedAt) state.generationStartedAt = new Date().toISOString();
+  if (state.kickoffFailures) delete state.kickoffFailures[stage];
   if (!state.studioStarted) state.studioStarted = [];
   if (!state.studioStarted.includes(stage)) state.studioStarted.push(stage);
   saveState(state);

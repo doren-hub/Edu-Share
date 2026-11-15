@@ -1,4 +1,4 @@
-import { saveState, type PaperState } from "./state.ts";
+import { saveState, type PaperState, type StageId } from "./state.ts";
 
 /** 同じ論文を際限なくやり直さないための上限。超えたらその論文だけあきらめて、ほかを続ける */
 
@@ -63,6 +63,23 @@ export function prepareGivenUp(state: PaperState, retry: boolean): boolean {
   if (!state.giveUp) return false;
   if (!retry) return true;
   delete state.giveUp;
+  state.kickoffFailures = {};
+  saveState(state);
+  return false;
+}
+
+/** 開始失敗は worker をまたいで段階ごとに数える。生成待ちとは区別する。 */
+export const MAX_KICKOFF_FAILURES = 3;
+export function noteKickoffFailure(state: PaperState, stage: StageId, now = Date.now()): boolean {
+  state.kickoffFailures ??= {};
+  const failures = Math.max(0, Math.floor(Number(state.kickoffFailures[stage]) || 0)) + 1;
+  state.kickoffFailures[stage] = failures;
+  state.kickoffRetryStage = stage;
+  state.kickoffRetryAt = new Date(now + 180_000).toISOString();
+  if (failures >= MAX_KICKOFF_FAILURES) {
+    persistGiveUp(state, `${stage} の開始失敗が ${failures} 回続きました`, now);
+    return true;
+  }
   saveState(state);
   return false;
 }

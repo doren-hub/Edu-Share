@@ -97,3 +97,19 @@ test("打ち切りは再読込でもスキップし、選んだ論文の明示�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("開始成功はその段階の失敗だけをリセットし、開始時刻を記録する", async () => {
+  const { emptyState, markStudioStarted } = await import("./state.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const paperDir = mkdtempSync(join(tmpdir(), "kickoff-success-"));
+  try {
+    const state = emptyState({ filename: "a.pdf", inboxPdfPath: "", paperDir });
+    state.kickoffFailures = { "nlm-video": 2, "nlm-slides": 1 };
+    markStudioStarted(state, "nlm-video");
+    assert.equal(state.kickoffFailures["nlm-video"], undefined);
+    assert.equal(state.kickoffFailures["nlm-slides"], 1);
+    assert.ok(Date.parse(state.generationStartedAt));
+  } finally { rmSync(paperDir, { recursive: true, force: true }); }
+});
