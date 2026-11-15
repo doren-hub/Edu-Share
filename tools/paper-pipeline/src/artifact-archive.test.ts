@@ -231,3 +231,27 @@ test("interrupted transaction can recover from its journal and finish renaming",
   assert.ok(!existsSync(join(state.paperDir, ".artifact-archive-rename.json")));
   restorePaper(state.paperDir, true);
 }));
+
+
+test("video through a directory alias is archived and never reported as retained", () => fixture(({ root, state, archive }) => {
+  const alias = join(root, "paper-alias");
+  symlinkSync(state.paperDir, alias);
+  state.videoMp4Path = join(alias, "video.mp4");
+  saveState(state);
+  const plan = archivePaper({ paperDir: state.paperDir, root: archive });
+  assert.equal(plan.find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
+  const executed = archivePaper({ paperDir: state.paperDir, root: archive, execute: true });
+  assert.equal(executed.find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
+  assert.ok(!existsSync(state.videoMp4Path));
+  restorePaper(state.paperDir, true);
+  assert.ok(existsSync(state.videoMp4Path));
+}));
+
+test("compressed video without an original never reports a retained file", () => fixture(({ state, archive }) => {
+  state.videoMp4Path = join(state.paperDir, "video-upload.mp4");
+  writeFileSync(state.videoMp4Path, "compressed");
+  rmSync(join(state.paperDir, "video.mp4"));
+  saveState(state);
+  assert.equal(archivePaper({ paperDir: state.paperDir, root: archive }).find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
+  assert.equal(archivePaper({ paperDir: state.paperDir, root: archive, execute: true }).find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
+}));

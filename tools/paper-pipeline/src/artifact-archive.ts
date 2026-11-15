@@ -103,8 +103,9 @@ export function archivePaper(options: {
     if (new Set(files.map((f) => f.localPath)).size !== files.length) throw new Error("Artifact paths overlap");
     if (new Set(files.map((f) => f.path)).size !== files.length) throw new Error("Archive filenames overlap");
     const originalVideo = join(paperDir, "video.mp4");
-    if (state.videoMp4Path && resolve(state.videoMp4Path) !== originalVideo && existsSync(originalVideo)) {
-      files.find((f) => f.kind === "video")!.retainedLocalPaths = [originalVideo];
+    const video = files.find((f) => f.kind === "video");
+    if (video && video.localPath !== originalVideo && existsSync(originalVideo)) {
+      video.retainedLocalPaths = [originalVideo];
     }
     if (!options.execute) return files;
     mkdirSync(destination);
