@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { importDownload } from "./download-files.ts";
+import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join } from "node:path";
 import type { Locator, Page } from "playwright";
@@ -144,7 +145,7 @@ function copyIfReady(
   if (!src || !existsSync(src)) return false;
   try {
     if (statSync(src).size <= minBytes) return false;
-    if (src !== destPath) copyFileSync(src, destPath);
+    importDownload(src, destPath, getChromeDownloadsPath() ?? undefined);
     return existsSync(destPath) && statSync(destPath).size > minBytes;
   } catch {
     return false;

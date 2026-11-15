@@ -1,3 +1,4 @@
+import { fileHash } from "./download-files.ts";
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -118,7 +119,7 @@ export function archivePaper(options: {
     }
     state.artifactArchive = {
       provider, archivedAt: new Date().toISOString(),
-      files: Object.fromEntries(files.map(({ kind, retainedLocalPaths: _retained, ...f }) => [kind, f])),
+      files: Object.fromEntries(files.map(({ kind, retainedLocalPaths: _retained, ...f }) => [kind, { ...f, sha256: fileHash(f.path) }])),
     };
     writeState(state);
     for (const f of files) unlinkSync(f.localPath);

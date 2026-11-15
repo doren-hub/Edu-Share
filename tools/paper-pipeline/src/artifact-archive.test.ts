@@ -1,3 +1,4 @@
+import { fileHash } from "./download-files.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -48,6 +49,7 @@ test("dry run leaves every local/archive file and state unchanged; explicit arch
   assert.ok(Number.isFinite(Date.parse(listArchive(state.paperDir)!.archivedAt)));
   for (const f of Object.values(listArchive(state.paperDir)!.files)) {
     assert.equal(readFileSync(f.path).length, f.bytes);
+    assert.equal(f.sha256, fileHash(f.path));
     assert.ok(!existsSync(f.localPath));
   }
   for (const name of ["state.json", "quiz.csv", "vocab.csv", "DONE"]) assert.ok(existsSync(join(state.paperDir, name)));
