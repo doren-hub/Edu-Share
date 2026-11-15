@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { archivePaper, listArchive, restorePaper } from "./artifact-archive.ts";
+import { archivePaper, listArchive, renameArchive, restorePaper } from "./artifact-archive.ts";
 
 // Deliberately independent of browser configuration and dotenv loading.
 try {
@@ -10,11 +10,12 @@ try {
       execute: { type: "boolean", default: false },
     },
   });
-  if (positionals.length !== 1 || !["archive", "list", "restore"].includes(positionals[0]!) || !values.paper) {
-    throw new Error("Usage: artifact-archive <archive|list|restore> --paper <paper-directory> [--root <existing-directory>] [--provider <kind>] [--execute]");
+  if (positionals.length !== 1 || !["archive", "list", "restore", "rename"].includes(positionals[0]!) || !values.paper) {
+    throw new Error("Usage: artifact-archive <archive|list|restore|rename> --paper <paper-directory> [--root <existing-directory>] [--provider <kind>] [--execute]");
   }
   const command = positionals[0];
   const result = command === "list" ? listArchive(values.paper) ?? null
+    : command === "rename" ? renameArchive(values.paper, values.execute)
     : command === "restore" ? restorePaper(values.paper, values.execute)
     : archivePaper({ paperDir: values.paper, root: values.root ?? process.env.PAPER_PIPELINE_ARCHIVE_ROOT ?? "",
         provider: values.provider ?? process.env.PAPER_PIPELINE_ARCHIVE_PROVIDER, execute: values.execute });

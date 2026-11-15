@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { ARTIFACT_KINDS, validArchive, type ArtifactArchive, type ArtifactKind } from "./artifact-record.ts";
 import { doneMarkerPath, statePath, type PaperState } from "./state.ts";
 
-type FileEntry = { kind: ArtifactKind; localPath: string; path: string; bytes: number };
+type FileEntry = { kind: ArtifactKind; localPath: string; path: string; bytes: number; retainedLocalPaths?: string[] };
+const RENAME_JOURNAL = ".artifact-archive-rename.json";
 function inside(root: string, path: string): boolean {
   const r = relative(root, path);
   return !!r && r !== ".." && !r.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(r);
@@ -15,7 +16,7 @@ function localFile(paperDir: string, path: string): string {
   if (!inside(paperDir, p) || realpathSync(join(p, "..")) !== paperDir) {
     throw new Error("Artifact must be directly inside the paper directory");
   }
-  if (["state.json", "DONE", "quiz.csv", "vocab.csv", ".artifact-archive.lock"].includes(basename(p))) {
+  if (["state.json", "DONE", "quiz.csv", "vocab.csv", ".artifact-archive.lock", RENAME_JOURNAL].includes(basename(p))) {
     throw new Error("Protected local file cannot be archived or restored");
   }
   if (existsSync(p) && (!lstatSync(p).isFile() || lstatSync(p).isSymbolicLink())) {
@@ -24,6 +25,10 @@ function localFile(paperDir: string, path: string): string {
   return p;
 }
 function readState(paperDir: string): PaperState {
+  if (existsSync(join(paperDir, RENAME_JOURNAL))) throw new Error("Interrupted archive rename: run rename --execute to recover first");
+  return readStateRaw(paperDir);
+}
+function readStateRaw(paperDir: string): PaperState {
   if (lstatSync(statePath(paperDir)).isSymbolicLink()) throw new Error("Linked state is not supported");
   return { ...JSON.parse(readFileSync(statePath(paperDir), "utf8")), paperDir } as PaperState;
 }
@@ -93,9 +98,14 @@ export function archivePaper(options: {
       }
       const bytes = statSync(localPath).size;
       if (bytes <= 0) throw new Error(`Empty artifact: ${kind}`);
-      files.push({ kind, localPath, path: join(destination, `${kind}${kind === "video" ? ".mp4" : ".pdf"}`), bytes });
+      files.push({ kind, localPath, path: join(destination, basename(localPath)), bytes });
     }
     if (new Set(files.map((f) => f.localPath)).size !== files.length) throw new Error("Artifact paths overlap");
+    if (new Set(files.map((f) => f.path)).size !== files.length) throw new Error("Archive filenames overlap");
+    const originalVideo = join(paperDir, "video.mp4");
+    if (state.videoMp4Path && resolve(state.videoMp4Path) !== originalVideo && existsSync(originalVideo)) {
+      files.find((f) => f.kind === "video")!.retainedLocalPaths = [originalVideo];
+    }
     if (!options.execute) return files;
     mkdirSync(destination);
     // On failure retain both the originals and any partial archive for manual inspection.
@@ -107,7 +117,7 @@ export function archivePaper(options: {
     }
     state.artifactArchive = {
       provider, archivedAt: new Date().toISOString(),
-      files: Object.fromEntries(files.map(({ kind, ...f }) => [kind, f])),
+      files: Object.fromEntries(files.map(({ kind, retainedLocalPaths: _retained, ...f }) => [kind, f])),
     };
     writeState(state);
     for (const f of files) unlinkSync(f.localPath);
@@ -144,6 +154,80 @@ export function restorePaper(paperPath: string, execute = false, copy: typeof co
       writeState(state);
     } finally { for (const f of temps) rmSync(f.temp, { force: true }); }
     return files;
+  };
+  return execute ? withLock(paperDir, run) : run();
+}
+
+
+type RenameEntry = { kind: ArtifactKind; from: string; to: string };
+function renamePlan(archive: ArtifactArchive, paperDir: string): RenameEntry[] {
+  const entries = ARTIFACT_KINDS.flatMap((kind) => {
+    const f = archive.files[kind];
+    return f ? [{ kind, from: f.path, to: join(dirname(f.path), basename(localFile(paperDir, f.localPath))) }] : [];
+  });
+  if (new Set(entries.map((f) => resolve(f.to))).size !== entries.length ||
+      new Set(entries.map((f) => resolve(f.from))).size !== entries.length) {
+    throw new Error("Archive filenames overlap");
+  }
+  return entries;
+}
+function present(path: string): boolean {
+  try { lstatSync(path); return true; } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+function preflightRenames(entries: RenameEntry[]): void {
+  for (const f of entries) {
+    if (!lstatSync(f.from).isFile() || lstatSync(f.from).isSymbolicLink()) throw new Error("Archive source must be a regular file");
+    if (f.from !== f.to && present(f.to)) throw new Error(`Archive destination already exists: ${basename(f.to)}`);
+  }
+}
+/** Metadata-only renames. A journal permits rollback after interruption before state publication. */
+export function renameArchive(paperPath: string, execute = false, rename: typeof renameSync = renameSync): RenameEntry[] {
+  const paperDir = realpathSync(paperPath);
+  const journal = join(paperDir, RENAME_JOURNAL);
+  const recover = () => {
+    if (!present(journal)) return;
+    if (!lstatSync(journal).isFile() || lstatSync(journal).isSymbolicLink()) throw new Error("Invalid rename journal");
+    const saved = JSON.parse(readFileSync(journal, "utf8")) as { before: ArtifactArchive; after: ArtifactArchive };
+    if (!validArchive(saved.before) || !validArchive(saved.after)) throw new Error("Invalid rename journal");
+    const plan = renamePlan(saved.before, paperDir);
+    const expected = structuredClone(saved.before);
+    for (const f of plan) expected.files[f.kind]!.path = f.to;
+    if (JSON.stringify(expected) !== JSON.stringify(saved.after)) throw new Error("Invalid rename journal targets");
+    const current = readStateRaw(paperDir).artifactArchive;
+    if (JSON.stringify(current) === JSON.stringify(saved.after)) { unlinkSync(journal); return; }
+    if (JSON.stringify(current) !== JSON.stringify(saved.before)) throw new Error("Rename journal does not match state");
+    const changed = plan.filter((f) => f.from !== f.to);
+    // Validate the complete rollback before changing anything. Never overwrite either name.
+    for (const f of changed) {
+      if (present(f.from) === present(f.to)) throw new Error("Ambiguous rename recovery; owner inspection required");
+      const path = present(f.from) ? f.from : f.to;
+      if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new Error("Invalid recovery source");
+    }
+    for (const f of changed.reverse()) if (!present(f.from)) renameSync(f.to, f.from);
+    unlinkSync(journal);
+  };
+  const run = () => {
+    if (execute) recover();
+    const state = readState(paperDir);
+    if (!validArchive(state.artifactArchive)) throw new Error("No valid archive record");
+    const plan = renamePlan(state.artifactArchive, paperDir);
+    preflightRenames(plan);
+    if (!execute || plan.every((f) => f.from === f.to)) return plan;
+    const before = structuredClone(state.artifactArchive);
+    for (const f of plan) state.artifactArchive.files[f.kind]!.path = f.to;
+    writeFileSync(journal, JSON.stringify({ before, after: state.artifactArchive }), { flag: "wx" });
+    try {
+      for (const f of plan) if (f.from !== f.to) {
+        if (present(f.to)) throw new Error("Archive destination already exists");
+        rename(f.from, f.to);
+      }
+      writeState(state);
+      unlinkSync(journal);
+    } catch (error) { recover(); throw error; }
+    return plan;
   };
   return execute ? withLock(paperDir, run) : run();
 }
