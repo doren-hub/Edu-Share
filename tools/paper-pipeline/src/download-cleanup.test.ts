@@ -1,3 +1,4 @@
+import { copyIfReady } from "./ui.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -91,5 +92,31 @@ test("recent downloads, active Chrome, linked directories and linked state fail 
     assert.equal(cleanupDownloads(f).eligibleBytes, 0);
     rmSync(f.downloads, { recursive: true }); symlinkSync(f.paper, f.downloads);
     assert.throws(() => cleanupDownloads(f), /unlinked directory/);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+test("UI import validates video before deleting source and preserves prior destination on failure", () => {
+  const f = fixture();
+  try {
+    const src = join(f.downloads, "title.mp4"), dest = join(f.paper, "video.mp4");
+    writeFileSync(src, Buffer.alloc(120_000, 1));
+    writeFileSync(dest, "previous artifact");
+    assert.equal(copyIfReady(src, dest, 1000, f.downloads), false);
+    assert.equal(existsSync(src), true);
+    assert.equal(readFileSync(dest, "utf8"), "previous artifact");
+    const video = Buffer.alloc(120_000, 1); video.write("ftyp", 4);
+    writeFileSync(src, video);
+    assert.equal(copyIfReady(src, dest, 1000, f.downloads), true);
+    assert.equal(existsSync(src), false);
+    assert.deepEqual(readFileSync(dest), video);
+    const missingDest = join(f.root, "missing", "video.mp4");
+    writeFileSync(src, video);
+    assert.equal(copyIfReady(src, missingDest, 1000, f.downloads), false);
+    assert.equal(existsSync(src), true);
+    // Directory aliases for the same file must never remove the destination.
+    const alias = join(f.root, "alias"); symlinkSync(f.downloads, alias);
+    assert.equal(copyIfReady(src, join(alias, "title.mp4"), 1000, f.downloads), true);
+    assert.equal(existsSync(src), true);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });

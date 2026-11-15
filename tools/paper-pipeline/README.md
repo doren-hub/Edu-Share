@@ -228,7 +228,8 @@ npm run artifact-archive -- rename --paper '<paper-directory>' --execute
 
 今後は取り込み先と元ファイルの SHA-256 とサイズ変更の有無を検証してから、専用の
 `<CHROME_USER_DATA_DIR>/playwright-downloads` 内の元ファイルだけを削除します。
-コピー・照合に失敗した場合は元を残します。通常の Downloads フォルダから拾ったファイル、
+コピー・照合・動画形式の検証に失敗した場合は元と既存の取り込み先を残します。
+成功時は既存の取り込み先を検証済みのコピーに置き換えます。通常の Downloads フォルダから拾ったファイル、
 `.crdownload`、取り込み先自身は削除しません。
 
 既存分の片付けは、パイプライン（スケジュール起動も含む）と専用 Chrome を停止してから、
