@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "playwright";
@@ -159,7 +159,7 @@ test("archive keeps PDF and compressed video names and explicitly reports retain
   assert.equal(plan.find((f) => f.kind === "pdf")!.path.split("/").pop(), "paper.pdf");
   const video = plan.find((f) => f.kind === "video")!;
   assert.equal(video.path.split("/").pop(), "video-upload.mp4");
-  assert.deepEqual(video.retainedLocalPaths, [join(state.paperDir, "video.mp4")]);
+  assert.deepEqual(video.retainedLocalPaths, [join(realpathSync(state.paperDir), "video.mp4")]);
   const executed = archivePaper({ paperDir: state.paperDir, root: archive, execute: true });
   assert.deepEqual(executed.find((f) => f.kind === "video")!.retainedLocalPaths, video.retainedLocalPaths);
   assert.ok(existsSync(join(state.paperDir, "video.mp4")));
