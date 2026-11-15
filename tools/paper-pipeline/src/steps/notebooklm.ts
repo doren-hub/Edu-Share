@@ -1,3 +1,4 @@
+import { noteKickoffFailure } from "../give-up.ts";
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Locator, Page, Route } from "playwright";
@@ -993,6 +994,7 @@ export async function openVideoCustomize(page: Page): Promise<boolean> {
   const n = Math.min(await tiles.count(), 20);
   for (let i = 0; i < n; i++) {
     const tile = tiles.nth(i);
+    await tile.hover({ timeout: 2_000 }).catch(() => undefined);
     const parent = tile.locator("xpath=..");
     for (const controls of [tile.getByRole("button", { name: /カスタマイズ|Customize|編集|Edit/i }),
       parent.getByRole("button", { name: /カスタマイズ|Customize|編集|Edit/i }),
@@ -1006,7 +1008,21 @@ export async function openVideoCustomize(page: Page): Promise<boolean> {
       }
     }
   }
+  await logVideoCustomizeDiagnostics(page);
   return false;
+}
+
+/** Restrict diagnostics to tile controls; omit unknown strings, URLs and user content. */
+export async function logVideoCustomizeDiagnostics(page: Page): Promise<void> {
+  const info = await page.locator("button, [role='button'], a")
+    .filter({ hasText: /動画解説|Video overview|ビデオ概要/i }).evaluateAll(tiles => {
+      const safe = (value: string | null) => (value ?? "").match(/動画解説|Video overview|ビデオ概要|カスタマイズ|Customize|編集|Edit|edit_square|tune|videocam/gi)?.join(" ").slice(0, 80) ?? "";
+      return tiles.slice(0, 3).map(tile => Array.from((tile.parentElement ?? tile).querySelectorAll("button, [role], mat-icon, a"))
+        .slice(0, 16).map(el => ({ tag: el.tagName.slice(0, 30),
+          role: ["button", "img", "link"].includes(el.getAttribute("role") ?? "") ? el.getAttribute("role") : "",
+          ariaLabel: safe(el.getAttribute("aria-label")), text: safe(el.textContent) })));
+    }).catch(() => []);
+  warn(`動画カスタマイズ: タイル周辺の要素（許可した UI 語のみ） ${JSON.stringify(info).slice(0, 2500)}`);
 }
 
 async function studioCustomizeRoot(page: Page): Promise<Locator | null> {
@@ -2282,7 +2298,7 @@ async function unmarkStaleStudioStarts(
   }
 }
 
-async function tryKickoffStudio(
+export async function tryKickoffStudio(
   page: Page,
   state: PaperState,
   stage: StageId,
@@ -2290,6 +2306,8 @@ async function tryKickoffStudio(
   timeoutMs: number,
   extra: { explainerVideo?: boolean; kickoffConfirmMs?: number } = {},
 ): Promise<"complete" | "started" | "skipped"> {
+  if (state.giveUp) throw new Error(state.giveUp.reason);
+  if (state.kickoffRetryStage === stage && Date.parse(state.kickoffRetryAt) > Date.now()) return "skipped";
   if (hasStudioStarted(state, stage)) {
     log(`${stage} はすでに開始済み。待ち中に他の Studio を進めます`);
     return "skipped";
@@ -2310,16 +2328,17 @@ async function tryKickoffStudio(
     saveState(state);
     return r;
   } catch (e) {
-    if (e instanceof GenerationWaitingError) throw e;
+    if (e instanceof GenerationWaitingError) {
+      markStudioStarted(state, e.stage);
+      throw e;
+    }
     const msg = collectErrMsg(e);
     if (/ソースが 0 件のため|Studio 生成が失敗したままです/.test(msg)) {
       throw e instanceof Error ? e : new Error(msg);
     }
     warn(`${stage} の開始に失敗したので後でやり直します: ${msg}`);
-    state.kickoffRetryAt = new Date(Date.now() + 180_000).toISOString();
-    state.kickoffRetryStage = stage;
     state.lastError = msg;
-    saveState(state);
+    if (noteKickoffFailure(state, stage)) throw new Error(state.giveUp!.reason);
     return "skipped";
   }
 }

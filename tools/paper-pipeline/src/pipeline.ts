@@ -32,7 +32,6 @@ import {
   isCompleted,
   loadState,
   markCompleted,
-  markStudioStarted,
   saveState,
   STAGES,
   studioKickoffBegun,
@@ -767,11 +766,7 @@ export async function processOnePaper(
   } catch (e) {
     if (e instanceof NeedVisibleChromeError) throw e;
     if (e instanceof GenerationWaitingError) {
-      state.waitingFor = e.stage;
-      if (!state.generationStartedAt) state.generationStartedAt = new Date().toISOString();
-      if (!skipStudio) markStudioStarted(state, e.stage);
-      state.lastError = "";
-      saveState(state);
+      recordGenerationWaiting(state, e.stage);
       log(`${item.filename}: 生成待ち（${e.stage}）。Chrome を明け渡します`);
       return "waiting";
     }
@@ -795,4 +790,10 @@ export async function processOnePaper(
     }
     return "failed";
   }
+}
+/** 待機だけでは開始済みにしない。開始成功は NotebookLM 側で記録する。 */
+export function recordGenerationWaiting(state: PaperState, stage: StageId): void {
+  state.waitingFor = stage;
+  if (!state.kickoffRetryStage) state.lastError = "";
+  saveState(state);
 }

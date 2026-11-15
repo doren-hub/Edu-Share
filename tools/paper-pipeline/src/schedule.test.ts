@@ -272,3 +272,9 @@ test("pickNextJob: 利用量待ちで収穫できる論文が無ければ idle",
   assert.equal(r.kind, "idle");
   if (r.kind === "idle") assert.equal(r.sleepMs, 60_000);
 });
+
+test("打ち切り済みの論文は次の論文と全体終了を妨げない", () => {
+  const failed = job({ id: "given-up.pdf", status: "failed", kickoffBegun: true, kickoffSettled: false });
+  assert.deepEqual(pickNextJob([failed, job({ id: "next.pdf" })], 100), { kind: "run", id: "next.pdf" });
+  assert.deepEqual(pickNextJob([failed], 100), { kind: "done" });
+});

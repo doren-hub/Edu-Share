@@ -65,3 +65,28 @@ for (const outcome of ["failure", "success", "scan"] as const) {
     }
   });
 }
+
+test("開始失敗の待機では開始済み印と生成時刻を作らず、失敗理由を保つ", async () => {
+  const { recordGenerationWaiting } = await import("./pipeline.ts");
+  const { emptyState, loadState, markStudioStarted } = await import("./state.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const paperDir = mkdtempSync(join(tmpdir(), "waiting-start-"));
+  try {
+    const state = emptyState({ filename: "a.pdf", inboxPdfPath: "", paperDir });
+    state.kickoffRetryStage = "nlm-video";
+    state.lastError = "edit control missing";
+    recordGenerationWaiting(state, "nlm-video");
+    const saved = loadState(paperDir, state);
+    assert.deepEqual(saved.studioStarted, []);
+    assert.equal(saved.generationStartedAt, "");
+    assert.equal(saved.lastError, "edit control missing");
+    assert.equal(saved.waitingFor, "nlm-video");
+    markStudioStarted(state, "nlm-slides");
+    const startedAt = state.generationStartedAt;
+    recordGenerationWaiting(state, "nlm-video");
+    assert.deepEqual(state.studioStarted, ["nlm-slides"]);
+    assert.equal(state.generationStartedAt, startedAt);
+  } finally { rmSync(paperDir, { recursive: true, force: true }); }
+});
