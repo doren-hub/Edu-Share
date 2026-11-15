@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import type { AppConfig } from "./config.ts";
-import { archivePaper, listArchive, restorePaper } from "./artifact-archive.ts";
+import { archivePaper, listArchive, renameArchive, restorePaper } from "./artifact-archive.ts";
 import { emptyState, loadState, saveState, type PaperState } from "./state.ts";
 import { listVideoRepairPdfs, listStudioFollowupPdfs, listEduMaterialRepairPdfs, listRawPasteRepairPdfs } from "./inbox.ts";
 import { studioArtifactReady } from "./studio-select.ts";
@@ -136,4 +136,122 @@ test("restore refuses to overwrite local files and keeps metadata", () => fixtur
 test("malformed archive record cannot suppress missing video", () => fixture(({ state }) => {
   state.artifactArchive = { provider: "", archivedAt: "invalid", files: { video: { localPath: "a", path: "b", bytes: 1 } } };
   assert.equal(needsLocalVideoFile(state), true);
+}));
+
+
+function legacyArchive(state: PaperState, archive: string, reload: () => PaperState) {
+  archivePaper({ paperDir: state.paperDir, root: archive, execute: true });
+  const saved = reload();
+  for (const [kind, f] of Object.entries(saved.artifactArchive!.files)) {
+    const old = join(f.path, "..", `${kind}${kind === "video" ? ".mp4" : ".pdf"}`);
+    if (old !== f.path) renameSync(f.path, old);
+    f.path = old;
+  }
+  saveState(saved);
+  return saved;
+}
+
+test("archive keeps PDF and compressed video names and explicitly reports retained original video", () => fixture(({ state, archive, reload }) => {
+  state.videoMp4Path = join(state.paperDir, "video-upload.mp4");
+  writeFileSync(state.videoMp4Path, "compressed video");
+  saveState(state);
+  const plan = archivePaper({ paperDir: state.paperDir, root: archive });
+  assert.equal(plan.find((f) => f.kind === "pdf")!.path.split("/").pop(), "paper.pdf");
+  const video = plan.find((f) => f.kind === "video")!;
+  assert.equal(video.path.split("/").pop(), "video-upload.mp4");
+  assert.deepEqual(video.retainedLocalPaths, [join(realpathSync(state.paperDir), "video.mp4")]);
+  const executed = archivePaper({ paperDir: state.paperDir, root: archive, execute: true });
+  assert.deepEqual(executed.find((f) => f.kind === "video")!.retainedLocalPaths, video.retainedLocalPaths);
+  assert.ok(existsSync(join(state.paperDir, "video.mp4")));
+  assert.ok(reload().artifactArchive!.files.video!.path.endsWith("/video-upload.mp4"));
+  restorePaper(state.paperDir, true);
+  assert.equal(readFileSync(state.videoMp4Path, "utf8"), "compressed video");
+}));
+
+test("legacy rename dry run changes nothing; execute updates names and record, then restores", () => fixture(({ state, archive, reload }) => {
+  const saved = legacyArchive(state, archive, reload);
+  const before = readFileSync(join(state.paperDir, "state.json"), "utf8");
+  const plan = renameArchive(state.paperDir);
+  assert.ok(plan.some((f) => f.from.endsWith("/pdf.pdf") && f.to.endsWith("/paper.pdf")));
+  assert.equal(readFileSync(join(state.paperDir, "state.json"), "utf8"), before);
+  assert.ok(existsSync(saved.artifactArchive!.files.pdf!.path));
+  renameArchive(state.paperDir, true);
+  assert.ok(listArchive(state.paperDir)!.files.pdf!.path.endsWith("/paper.pdf"));
+  assert.ok(!existsSync(saved.artifactArchive!.files.pdf!.path));
+  renameArchive(state.paperDir, true); // idempotent
+  restorePaper(state.paperDir, true);
+  assert.equal(readFileSync(join(state.paperDir, "paper.pdf"), "utf8"), "paper.pdf".repeat(100));
+}));
+
+for (const failure of ["collision", "missing", "duplicate-target"] as const) {
+  test(`rename preflights entire paper without changing it: ${failure}`, () => fixture(({ state, archive, reload }) => {
+    const saved = legacyArchive(state, archive, reload);
+    const pdf = saved.artifactArchive!.files.pdf!;
+    if (failure === "collision") writeFileSync(join(pdf.path, "..", "paper.pdf"), "existing");
+    if (failure === "missing") rmSync(pdf.path);
+    if (failure === "duplicate-target") {
+      saved.artifactArchive!.files.video!.localPath = pdf.localPath;
+      saveState(saved);
+    }
+    const before = readFileSync(join(state.paperDir, "state.json"), "utf8");
+    for (const execute of [false, true]) assert.throws(() => renameArchive(state.paperDir, execute));
+    assert.equal(readFileSync(join(state.paperDir, "state.json"), "utf8"), before);
+    assert.ok(existsSync(saved.artifactArchive!.files.slides!.path));
+    if (failure === "collision") assert.equal(readFileSync(join(pdf.path, "..", "paper.pdf"), "utf8"), "existing");
+  }));
+}
+
+test("rename error rolls back earlier renames without publishing state", () => fixture(({ state, archive, reload }) => {
+  state.videoMp4Path = join(state.paperDir, "video-upload.mp4");
+  writeFileSync(state.videoMp4Path, "compressed"); saveState(state);
+  const saved = legacyArchive(state, archive, reload);
+  const before = readFileSync(join(state.paperDir, "state.json"), "utf8");
+  let calls = 0;
+  assert.throws(() => renameArchive(state.paperDir, true, (from, to) => {
+    if (++calls === 2) throw new Error("rename failed");
+    renameSync(from, to);
+  }), /rename failed/);
+  assert.equal(readFileSync(join(state.paperDir, "state.json"), "utf8"), before);
+  for (const f of Object.values(saved.artifactArchive!.files)) assert.ok(existsSync(f.path));
+  renameArchive(state.paperDir, true);
+  restorePaper(state.paperDir, true);
+}));
+
+test("interrupted transaction can recover from its journal and finish renaming", () => fixture(({ state, archive, reload }) => {
+  const saved = legacyArchive(state, archive, reload);
+  const before = saved.artifactArchive!;
+  const after = structuredClone(before);
+  const pdf = after.files.pdf!;
+  pdf.path = join(pdf.path, "..", "paper.pdf");
+  writeFileSync(join(state.paperDir, ".artifact-archive-rename.json"), JSON.stringify({ before, after }));
+  renameSync(before.files.pdf!.path, pdf.path);
+  assert.throws(() => renameArchive(state.paperDir), /Interrupted/);
+  renameArchive(state.paperDir, true);
+  assert.deepEqual(reload().artifactArchive, after);
+  assert.ok(!existsSync(join(state.paperDir, ".artifact-archive-rename.json")));
+  restorePaper(state.paperDir, true);
+}));
+
+
+test("video through a directory alias is archived and never reported as retained", () => fixture(({ root, state, archive }) => {
+  const alias = join(root, "paper-alias");
+  symlinkSync(state.paperDir, alias);
+  state.videoMp4Path = join(alias, "video.mp4");
+  saveState(state);
+  const plan = archivePaper({ paperDir: state.paperDir, root: archive });
+  assert.equal(plan.find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
+  const executed = archivePaper({ paperDir: state.paperDir, root: archive, execute: true });
+  assert.equal(executed.find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
+  assert.ok(!existsSync(state.videoMp4Path));
+  restorePaper(state.paperDir, true);
+  assert.ok(existsSync(state.videoMp4Path));
+}));
+
+test("compressed video without an original never reports a retained file", () => fixture(({ state, archive }) => {
+  state.videoMp4Path = join(state.paperDir, "video-upload.mp4");
+  writeFileSync(state.videoMp4Path, "compressed");
+  rmSync(join(state.paperDir, "video.mp4"));
+  saveState(state);
+  assert.equal(archivePaper({ paperDir: state.paperDir, root: archive }).find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
+  assert.equal(archivePaper({ paperDir: state.paperDir, root: archive, execute: true }).find((f) => f.kind === "video")!.retainedLocalPaths, undefined);
 }));
