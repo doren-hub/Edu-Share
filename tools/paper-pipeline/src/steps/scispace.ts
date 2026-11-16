@@ -28,6 +28,8 @@ import {
 } from "../scispace-card.ts";
 import { isShorterTitle, titleHasPdfContinuation, titleLooksTruncated, verifiedReferenceTitle } from "../bibliography.ts";
 import { extractPdfText } from "../pdf-text.ts";
+import { parseFirstPageTitleAndAuthor } from "../content-match.ts";
+import { PDF_TITLE_CHECK_PREFIX_CHARS } from "../pdf-grounding.ts";
 import { arxivIdFromFilename, fetchArxivAbstract, fetchArxivAtom, parseArxivAtomAuthors, parseArxivAtomTitle, parseArxivAtomYear } from "../arxiv-abstract.ts";
 import { bibliographicPasteFromWork, fetchCrossrefWork } from "../crossref.ts";
 import {
@@ -1500,7 +1502,7 @@ async function fillMetaFromRecordPage(
     (await page.locator('meta[name="description"]').getAttribute("content").catch(() => "")) ||
     ""
   ).trim();
-  const heading = [og, h1].find((t) => t.length > 12 && !looksLikeSciSpaceNav(t) && !looksLikeCitationTitle(t) && !looksLikeVenueLine(t) && !titleLooksLikeFilename(t, filename) && !isDummySciSpacePaste(t)) ?? "";
+  const heading = [og, h1].find((t) => t.length > 12 && usableRecordTitle(t, filename)) ?? "";
   const body = await pageText(page);
   const raw = [heading, ogDesc, body].filter(Boolean).join("\n");
   const card = extractSciSpaceCardMeta(raw, filename);
@@ -1517,15 +1519,42 @@ async function fillMetaFromRecordPage(
   }
   await fillTldrFallbacks(page, card, filename);
   const filesCard = extractSciSpaceCardMeta(state.filesPaste, filename);
-  if (titleLooksLikeBadSciSpaceCapture(card.title) && filesCard.title) {
-    card.title = filesCard.title;
-    card.paste = metadataPasteFromCard(card, filename);
-  }
   if (venueLooksLikeBadSciSpaceCapture(card.venue) && filesCard.venue) {
     card.venue = filesCard.venue;
     card.paste = metadataPasteFromCard(card, filename);
   }
-  applyExtractedCard(state, filename, card, [], pdfText);
+  applyRecordPageCard(state, filename, card, heading, pdfText);
+}
+
+function usableRecordTitle(title: string, filename: string): boolean {
+  return Boolean(title.trim()) && !titleLooksLikeFilename(title, filename) &&
+    !titleLooksLikeBadSciSpaceCapture(title) && !looksLikeSciSpaceNav(title) &&
+    !looksLikeCitationTitle(title) && !looksLikeVenueLine(title) && !isDummySciSpacePaste(title);
+}
+
+/** Keep source provenance: body text needs stronger evidence than Files or a heading. */
+export function applyRecordPageCard(
+  state: PaperState,
+  filename: string,
+  card: ReturnType<typeof extractSciSpaceCardMeta>,
+  heading: string,
+  pdfText?: string,
+): void {
+  const filesTitle = extractSciSpaceCardMeta(state.filesPaste, filename).title;
+  const key = (value: string) => value.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  const pdfTitle = pdfText
+    ? parseFirstPageTitleAndAuthor(pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS)).title ?? ""
+    : "";
+  const title = usableRecordTitle(heading, filename) ? heading
+    : usableRecordTitle(filesTitle, filename) ? filesTitle
+    : usableRecordTitle(card.title, filename) && pdfText &&
+      usableRecordTitle(pdfTitle, filename) && key(card.title) === key(pdfTitle) &&
+      isTitleGroundedInPdfText(card.title, pdfText) ? card.title : "";
+  // Preserve the existing heading merge rules (e.g. a saved complete title).
+  // Without a heading, a previous body capture must not defeat the selected source.
+  if (!usableRecordTitle(heading, filename)) state.title = filename.replace(/\.pdf$/i, "");
+  applyExtractedCard(state, filename, { ...card, title }, [], pdfText);
+  if (!title || titleLooksLikeFilename(state.title, filename)) state.sciTitleRejected = true;
 }
 
 export async function captureSciSpaceRecordUrl(

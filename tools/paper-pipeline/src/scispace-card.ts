@@ -408,6 +408,7 @@ function pickTitle(lines: string[], filename: string): string {
         !looksLikeSciSpaceNav(s) &&
         !looksLikeCitationTitle(s) &&
         !looksLikeVenueLine(s) &&
+        !looksLikeNonTitleFragment(s) &&
         !YEAR_AUTHOR.test(s) &&
         !isBibliographyLabel(s) &&
         !looksLikePageRange(s) &&
@@ -545,11 +546,22 @@ export function isRejectedVenueCandidate(s: string): boolean {
   );
 }
 
+function looksLikeNonTitleFragment(t: string): boolean {
+  if (/^(?:e\.g\.|cf\.)\s*[,;:]?/i.test(t)) return true;
+  // Citation tails and journal running headers are not paper titles.
+  if (/[,、]\s*$/.test(t)) return true;
+  if (/\b\d+\s*\(\s*\d+\s*\)\s*[:：,]\s*(?:19|20)\d{2}\b/.test(t)) return true;
+  if (/^(?:本稿[はでに]|本研究[はでに]|本論文[はでに]|この(?:論文|研究)[はでに])/.test(t)) return true;
+  if (/^(?:this|the)\s+(?:paper|study)\s+(?:presents?|examines?|reviews?|investigates?|aims?|discusses?|shows?)\b/i.test(t)) return true;
+  return false;
+}
+
 /** SciSpace 個別ページなどから誤って取れたタイトル */
 export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
   const t = title.trim();
   if (!t || isBibliographyLabel(t) || titleLooksTruncated(t)) return true;
   if (looksLikeUnansweredSciSpaceResponse(t)) return true;
+  if (looksLikeNonTitleFragment(t)) return true;
   if (/\.pdf$/i.test(t)) return true;
   if (/^ISSN\s/i.test(t)) return true;
   if (/^vol\.?\s*\d/i.test(t)) return true;

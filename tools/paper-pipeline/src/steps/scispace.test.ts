@@ -384,7 +384,11 @@ test("virtualized Files row: terminal, usable and pending TL;DR (offline DOM)", 
         await context.route("**/*", async route => {
           if (route.request().url() !== folderUrl) {
             recordRequests++;
-            await route.abort();
+            if (route.request().url() === "https://scispace.com/records/offline-RID") {
+              await route.fulfill({ contentType: "text/html", body: '<h1>Files</h1><meta property="og:title" content="Files"><meta property="og:description" content=""><meta name="description" content=""><p>e.g., Janis &amp; Terwilliger,</p>' });
+            } else {
+              await route.abort();
+            }
             return;
           }
           await route.fulfill({ contentType: "text/html; charset=utf-8", body: `
@@ -454,4 +458,70 @@ test("virtualized Files row: terminal, usable and pending TL;DR (offline DOM)", 
     await browser.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test("issue 322: Files wins over body fragments; unsupported body titles stay rejected", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  const filename = "japanese_paper.pdf";
+  const title = "日本語の論文における学習支援の検討";
+  const fragments = [
+    "e.g., Janis & Terwilliger,",
+    "J. Natl. Inst. Public Health, 66 (6) : 2017",
+    "J. Natl. Inst. Public Health, 69 (5) : 2020",
+    "Vibrio parahaemolyticus",
+    "本稿は、学習支援についての学術研究をレビューすることを目",
+  ];
+  const pdf = `${title}\n山田 太郎\n要旨\n${fragments.join("\n")}\n${"学習支援について検討した。".repeat(30)}`;
+  for (const fragment of fragments) {
+    for (const filesPaste of ["", `${filename}\n${title}\nTL;DR\nNot addressed in the paper.`]) {
+      for (const text of [undefined, "", "[scanned]", pdf]) {
+        const state = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+        state.filesPaste = filesPaste;
+        state.title = fragment;
+        const card = { ...extractSciSpaceCardMeta(fragment, filename), title: fragment };
+        applyRecordPageCard(state, filename, card, "", text);
+        const accepted = Boolean(filesPaste) && (text === undefined || text === pdf);
+        assert.equal(usableEduShareTitle(state), accepted ? title : "", fragment);
+        assert.equal(state.sciTitleRejected, !accepted);
+        assert.equal(state.filesPaste, filesPaste);
+      }
+    }
+  }
+});
+
+test("issue 322: complete English and Japanese PDF titles and valid headings survive", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  const filename = "paper.pdf";
+  for (const title of ["Deep Residual Learning for Image Recognition", "腸炎ビブリオ Vibrio parahaemolyticus の増殖に関する研究"]) {
+    const pdf = `${title}\nAlice Example\nAbstract\n${"Experimental results and discussion of learning and public health. ".repeat(20)}`;
+    for (const heading of ["", title]) {
+      const state = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+      if (heading) state.filesPaste = `${filename}\n別の日本語論文における学習支援の検討`;
+      applyRecordPageCard(state, filename, extractSciSpaceCardMeta(title, filename), heading, pdf);
+      assert.equal(usableEduShareTitle(state), title);
+      assert.equal(state.sciTitleRejected, false);
+    }
+    const state = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+    const card = extractSciSpaceCardMeta(title, filename);
+    applyRecordPageCard(state, filename, card, "");
+    assert.equal(usableEduShareTitle(state), "", "body requires PDF evidence");
+    applyRecordPageCard(state, filename, card, title);
+    assert.equal(usableEduShareTitle(state), title, "heading keeps no-PDF behavior");
+  }
+});
+
+
+test("issue 322: a record heading does not shorten an already complete saved title", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+  const state = emptyState({ filename: "paper.pdf", inboxPdfPath: "", paperDir: "/tmp" });
+  const heading = "AgROS: A Robot Operating System Based Emulation";
+  state.title = `${heading} Tool for Agricultural Robotics`;
+  applyRecordPageCard(state, state.filename, extractSciSpaceCardMeta(heading, state.filename), heading);
+  assert.equal(state.title, `${heading} Tool for Agricultural Robotics`);
 });
