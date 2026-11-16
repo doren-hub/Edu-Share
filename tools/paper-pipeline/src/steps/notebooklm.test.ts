@@ -299,6 +299,46 @@ async function mountStudioFixture(
   `);
 }
 
+/** Fixed Material DOM from issue 318: native input and tile label are siblings. */
+async function mountMaterialVideoFixture(page: Page, selected: boolean, label = "説明動画"): Promise<void> {
+  await mountStudioFixture(page, {});
+  await page.locator("#customize-dialog").evaluate((el, { selected, label }) => {
+    el.outerHTML = `
+      <mat-dialog-container id="customize-dialog" role="dialog" style="display:none;position:fixed;left:400px;top:100px;width:420px;background:white;z-index:10">
+        <h2 id="customize-title" class="dialog-title-text">動画解説をカスタマイズ</h2>
+        <button aria-label="ダイアログを閉じる" onclick="window.closeCustomize()">×</button>
+        <label class="control-label" id="templateFormat-label">形式</label>
+        <mat-radio-group role="radiogroup" aria-labelledby="templateFormat-label">
+          <mat-radio-button class="mat-mdc-radio-button tile-radio-button ${selected ? "" : "mat-mdc-radio-checked"}">
+            <label class="mdc-form-field" for="mat-radio-0-input">
+              <span class="mdc-radio"><input type="radio" class="mdc-radio__native-control" id="mat-radio-0-input" name="format" value="4" ${selected ? "" : "checked"}></span>
+              <span class="mdc-label"><div class="tile-content"><span class="tile-label">短め</span>
+                <div class="tile-tag">新機能！</div><p class="tile-description">ソースの概要を短くまとめ、要点をすばやく把握できます</p>
+              </div></span>
+            </label>
+          </mat-radio-button>
+          <mat-radio-button id="material-explainer" class="mat-mdc-radio-button tile-radio-button ${selected ? "mat-mdc-radio-checked" : ""}">
+            <label class="mdc-form-field" for="mat-radio-1-input">
+              <span class="mdc-radio"><input type="radio" class="mdc-radio__native-control" id="mat-radio-1-input" name="format" value="1" ${selected ? "checked" : ""}></span>
+              <span class="mdc-label"><div class="tile-content"><span class="tile-label">${label}</span>
+                <p class="tile-description">ソース内の情報を結びつける、構造化された包括的な概要です</p>
+              </div></span>
+            </label>
+          </mat-radio-button>
+        </mat-radio-group>
+        <label id="videoOverviewStyle-label">ビジュアル スタイル</label>
+        <mat-radio-group role="radiogroup" aria-labelledby="videoOverviewStyle-label">
+          <mat-radio-button><label><input id="style-radio" type="radio" name="style" checked><span class="tile-label">説明動画</span></label></mat-radio-button>
+          <button aria-pressed="false" onclick="document.body.dataset.styleTouched='true'">Explainer</button>
+        </mat-radio-group>
+        <mat-dialog-actions>
+          <button onclick="document.body.dataset.later='true'">後で生成</button>
+          <button id="btn-generate-now" onclick="document.body.dataset.generatedFormat=document.getElementById('mat-radio-1-input')?.checked ? 'explainer' : 'short';window.confirmGenerate()">生成</button>
+        </mat-dialog-actions>
+      </mat-dialog-container>`;
+  }, { selected, label });
+}
+
 function makeTempState(partial: Partial<PaperState> = {}): { paperDir: string; state: PaperState } {
   const paperDir = mkdtempSync(join(tmpdir(), "pp-nlm-studio-"));
   const inboxPdfPath = join(paperDir, "input.pdf");
@@ -368,6 +408,53 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
           } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
         });
       }
+    }
+
+    for (const label of ["説明動画", "解説", "Explainer"]) {
+      for (const selected of [false, true]) {
+        await t.test(`実画面のMaterialラジオで${label}を確認して生成（初期選択=${selected}）`, async () => {
+          const page = await context.newPage();
+          const { paperDir, state } = makeTempState();
+          try {
+            await mountMaterialVideoFixture(page, selected, label);
+            assert.equal(await tryKickoffStudio(page, state, "nlm-video", [/動画解説/], 100,
+              { explainerVideo: true, kickoffConfirmMs: 1 }), "started");
+            assert.equal(await page.locator("#mat-radio-1-input").isChecked(), true);
+            assert.equal(await page.locator("#mat-radio-0-input").isChecked(), false);
+            assert.equal(await page.getAttribute("body", "data-generated-format"), "explainer");
+            assert.equal(await page.locator("#style-radio").isChecked(), true);
+            assert.equal(await page.getAttribute("body", "data-style-touched"), null);
+            assert.equal(await page.getAttribute("body", "data-later"), null);
+          } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
+        });
+      }
+    }
+
+    for (const failure of ["disabled", "stale-class", "missing-input", "missing-format"] as const) {
+      await t.test(`実画面のMaterialラジオで選択未確認なら生成しない: ${failure}`, async () => {
+        const page = await context.newPage();
+        const { paperDir, state } = makeTempState();
+        try {
+          await mountMaterialVideoFixture(page, false);
+          await page.locator("#material-explainer").evaluate((el, failure) => {
+            if (failure === "missing-format") {
+              el.closest("mat-radio-group")!.remove();
+              return;
+            }
+            el.querySelector("input")!.disabled = true;
+            if (failure === "stale-class" || failure === "missing-input") el.classList.add("mat-mdc-radio-checked");
+            if (failure === "missing-input") el.querySelector("input")!.remove();
+          }, failure);
+          assert.equal(await tryKickoffStudio(page, state, "nlm-video", [/動画解説/], 100,
+            { explainerVideo: true, kickoffConfirmMs: 1 }), "skipped");
+          assert.equal(await page.getAttribute("body", "data-generated-format"), null);
+          assert.equal(await page.getAttribute("body", "data-style-touched"), null);
+          assert.equal(await page.getAttribute("body", "data-later"), null);
+          assert.equal(await page.locator("#style-radio").isChecked(), true);
+          assert.equal(await page.locator("#customize-dialog").isVisible(), false);
+          assert.equal(loadState(paperDir, state).kickoffFailures?.["nlm-video"], 1);
+        } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
+      });
     }
 
     for (const role of ["radio", "option", "tab", "text"] as const) {
