@@ -1,4 +1,6 @@
 import test from "node:test";
+import { EventEmitter } from "node:events";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,12 +36,12 @@ test("NotebookLM source upload deadlines and resume (offline)", async t => {
     });
 
     for (const name of ["ファイルをアップロード", "Choose file", "PDF"]) {
-      await t.test(`late candidate ${name}: delayed UI spends no chooser budget`, async () => {
+      await t.test(`late candidate ${name}: selects delayed upload UI`, async () => {
         const page = await context.newPage();
         try {
           await page.setContent(`<button onclick="throw new Error('background selected')">パソコンから</button>
             <div role="dialog" id="modal">ソースを追加<div tabindex="-1"><p>デバイスからコンピュータのファイルを選択できます</p></div></div>`);
-          // No input exists until clicking. The correct fifth-or-later label appears after the chooser budget.
+          // Browser coverage checks late label selection; virtual-clock tests below check independent budgets.
           await page.evaluate(label => {
             setTimeout(() => {
               const button = document.createElement("button");
@@ -55,41 +57,12 @@ test("NotebookLM source upload deadlines and resume (offline)", async t => {
             }, 300);
           }, name);
           const listeners = chooserListeners(page);
-          assert.equal(await setSourcePdf(page, pdf, { searchTimeoutMs: 1_500, clickTimeoutMs: 150, chooserTimeoutMs: 150 }), "chooser");
+          assert.equal(await setSourcePdf(page, pdf, { searchTimeoutMs: 15_000, clickTimeoutMs: 5_000, chooserTimeoutMs: 5_000 }), "chooser");
           assert.equal(await page.locator("#selected").evaluate((el: HTMLInputElement) => el.files?.[0]?.name), "input.pdf");
           assert.equal(chooserListeners(page), listeners);
         } finally { await page.close(); }
       });
     }
-
-    await t.test("missing targets obey a single search deadline; no event watcher remains", async () => {
-      const page = await context.newPage();
-      try {
-        await page.setContent('<div role="dialog">ソースを追加</div>');
-        const start = Date.now();
-        const listeners = chooserListeners(page);
-        await assert.rejects(() => setSourcePdf(page, pdf, { searchTimeoutMs: 200 }), /探索期限/);
-        assert.ok(Date.now() - start < 1_000);
-        assert.equal(chooserListeners(page), listeners);
-      } finally { await page.close(); }
-    });
-
-    await t.test("click failure and missing chooser have separate bounded errors and clean listeners", async () => {
-      const page = await context.newPage();
-      try {
-        await page.setContent('<div role="dialog"><button>Upload file</button></div>');
-        const listeners = chooserListeners(page);
-        const start = Date.now();
-        await assert.rejects(() => setSourcePdf(page, pdf, { searchTimeoutMs: 500, clickTimeoutMs: 100, chooserTimeoutMs: 100 }), /filechooser が発生しません/);
-        assert.ok(Date.now() - start < 1_000);
-        assert.equal(chooserListeners(page), listeners);
-        await page.setContent(`<div role="dialog"><button>Upload file</button></div>
-          <div style="position:fixed;inset:0;background:white;z-index:10">blocked</div>`);
-        await assert.rejects(() => setSourcePdf(page, pdf, { searchTimeoutMs: 500, clickTimeoutMs: 100, chooserTimeoutMs: 100 }), /クリックできません/);
-        assert.equal(chooserListeners(page), listeners);
-        await page.waitForTimeout(250); // let the former event deadline pass: no unhandled rejection
-      } finally { await page.close(); }
-    });
 
     await t.test("production NotebookLM step resumes the saved notebook, persists upload and never uploads it twice", async () => {
       const page = await context.newPage();
@@ -125,5 +98,123 @@ test("NotebookLM source upload deadlines and resume (offline)", async t => {
   } finally {
     await browser.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Only this fixture uses virtual time. Playwright and its transport retain real timers
+// in the browser integration test above. No service or persistent profile is used.
+function deadlineFixture(options: {
+  visibleAt?: number;
+  clickDelay?: number;
+  chooserDelay?: number;
+  clickFails?: boolean;
+} = {}) {
+  const events = new EventEmitter();
+  const clickTimeouts: number[] = [];
+  const files: { path: string; timeout: number }[] = [];
+  const empty = { count: async () => 0 };
+  const target = {
+    count: async () => Date.now() >= (options.visibleAt ?? 0) ? 1 : 0,
+    nth: () => target,
+    isVisible: async () => true,
+    isEnabled: async () => true,
+    click: async ({ timeout }: { timeout: number }) => {
+      clickTimeouts.push(timeout);
+      if (options.chooserDelay !== undefined) {
+        setTimeout(() => events.emit("filechooser", {
+          setFiles: async (path: string, { timeout }: { timeout: number }) => {
+            files.push({ path, timeout });
+          },
+        }), options.chooserDelay);
+      }
+      await new Promise<void>((resolve, reject) => setTimeout(
+        () => options.clickFails ? reject(new Error("blocked")) : resolve(),
+        options.clickFails ? timeout : (options.clickDelay ?? 0),
+      ));
+    },
+  };
+  const root = {
+    isVisible: async () => true,
+    locator: () => ({ ...empty, filter: () => empty }),
+    getByRole: (role: string, { name }: { name: RegExp }) =>
+      role === "button" && name.test("Upload file") ? target : empty,
+  };
+  const page = Object.assign(events, {
+    locator: () => ({ count: async () => 1, nth: () => root }),
+    waitForTimeout: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+  }) as unknown as Page;
+  return { page, clickTimeouts, files };
+}
+
+test("source upload deadlines use virtual time independent of browser scheduling", async t => {
+  await t.test("UI search spends no click or chooser budget; chooser includes the click budget", async t => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+    const fixture = deadlineFixture({ visibleAt: 300, clickDelay: 80, chooserDelay: 180 });
+    const upload = setSourcePdf(fixture.page, "fixture.pdf", {
+      searchTimeoutMs: 1_000, clickTimeoutMs: 100, chooserTimeoutMs: 100,
+    });
+    await nextTurn();
+    for (let i = 0; i < 3; i++) {
+      assert.equal(chooserListeners(fixture.page), 0);
+      t.mock.timers.tick(100);
+      await nextTurn();
+    }
+    assert.deepEqual(fixture.clickTimeouts, [100]);
+    assert.equal(chooserListeners(fixture.page), 1);
+    t.mock.timers.tick(80);
+    await nextTurn();
+    t.mock.timers.tick(100);
+    assert.equal(await upload, "chooser");
+    assert.deepEqual(fixture.files, [{ path: "fixture.pdf", timeout: 100 }]);
+    assert.equal(chooserListeners(fixture.page), 0);
+    t.mock.timers.tick(1_000); // cancelled event deadline must have no later effect
+    await nextTurn();
+    assert.equal(chooserListeners(fixture.page), 0);
+  });
+
+  await t.test("missing targets exhaust one search deadline without a chooser listener", async t => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+    const fixture = deadlineFixture({ visibleAt: Infinity });
+    const rejected = assert.rejects(setSourcePdf(fixture.page, "fixture.pdf", {
+      searchTimeoutMs: 200,
+    }), /探索期限/);
+    await nextTurn();
+    t.mock.timers.tick(100);
+    await nextTurn();
+    t.mock.timers.tick(100);
+    await rejected;
+    assert.equal(Date.now(), 200);
+    assert.deepEqual(fixture.clickTimeouts, []);
+    assert.equal(chooserListeners(fixture.page), 0);
+  });
+
+  for (const clickFails of [false, true]) {
+    await t.test(clickFails ? "click deadline fails and cleans its watcher" : "missing chooser exhausts its own deadline", async t => {
+      t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+      const fixture = deadlineFixture({ clickFails });
+      let settled = false;
+      const rejected = assert.rejects(setSourcePdf(fixture.page, "fixture.pdf", {
+        searchTimeoutMs: 1_000, clickTimeoutMs: 100, chooserTimeoutMs: 200,
+      }), clickFails ? /クリックできません/ : /filechooser が発生しません/).then(() => { settled = true; });
+      await nextTurn();
+      assert.equal(chooserListeners(fixture.page), 1);
+      t.mock.timers.tick(clickFails ? 99 : 0);
+      await nextTurn();
+      assert.equal(settled, false);
+      t.mock.timers.tick(clickFails ? 1 : 299);
+      await nextTurn();
+      if (!clickFails) {
+        assert.equal(settled, false);
+        assert.equal(chooserListeners(fixture.page), 1);
+        t.mock.timers.tick(1);
+      }
+      await rejected;
+      assert.deepEqual(fixture.clickTimeouts, [100]);
+      assert.deepEqual(fixture.files, []);
+      assert.equal(chooserListeners(fixture.page), 0);
+      t.mock.timers.tick(1_000);
+      await nextTurn();
+      assert.equal(chooserListeners(fixture.page), 0);
+    });
   }
 });
