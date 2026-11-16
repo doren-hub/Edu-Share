@@ -126,7 +126,7 @@ test("TL;DR 行探索も語中改行の PDF 名を同じ比較関数で認識す
   const { readFilesColumnTldr } = await import("./scispace.ts");
   const { runInNewContext } = await import("node:vm");
   const summary = "The paper presents a detailed analysis of quantum error correction and its experimental validation across several computing platforms.";
-  const filename = { textContent: "phase2_3_\n0_1.pdf", innerText: "phase2_3_\n0_1.pdf", children: [] as unknown[], parentElement: null as unknown };
+  const filename = { closest: () => null, textContent: "phase2_3_\n0_1.pdf", innerText: "phase2_3_\n0_1.pdf", children: [] as unknown[], parentElement: null as unknown };
   const description = { textContent: summary, innerText: summary, children: [] };
   const row = { innerText: `${filename.innerText}\n${summary}`, children: [filename, description], parentElement: null };
   filename.parentElement = row;
@@ -348,5 +348,110 @@ test("Issue #161: author boundary withholds a subtitle prefix but direct abstrac
       assert.equal(usableEduShareTitle(state), withAuthors ? "" : title);
       assert.equal(state.title, title);
     }
+  }
+});
+
+// Offline reproduction: searching mounts the row; clearing search unmounts it.
+test("virtualized Files row: terminal, usable and pending TL;DR (offline DOM)", { timeout: 120_000 }, async t => {
+  const { chromium } = await import("playwright");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { captureSciSpaceCardMeta, readFilesColumnTldr } = await import("./scispace.ts");
+  const browser = await chromium.launch();
+  const dir = mkdtempSync(join(tmpdir(), "scispace-files-"));
+  const filename = "japanese_paper.pdf";
+  const title = "日本語の論文における学習支援の検討";
+  const summary = "This paper presents a detailed analysis of learning support and reports experimental validation of the proposed educational methods.";
+  const folderUrl = "https://example.test/folders/offline";
+  const row = `<tr data-slot="table-row" data-row-id="RID" data-index="0" data-item-index="0">
+    <td data-slot="table-cell"><button role="checkbox" aria-label="Select row" data-test-id="folder-table-row-checkbox-RID"></button></td>
+    <td data-slot="table-cell"><div>
+      <a target="_blank" data-test-id="folder-record-title-RID" href="https://scispace.com/records/offline-RID">${filename}</a>
+      <div><small data-design-system="small">${title}</small>
+        <div><div><span data-design-system="small">2024</span><span>⋅</span><span data-design-system="small">山田 太郎</span></div>
+        <small data-design-system="small">教育工学論文誌</small></div>
+        <div><span data-test-id="folder-record-type-RID">PDF UPLOAD</span><span data-design-system="tiny">Uploaded on 13 Nov 2026</span></div>
+      </div></div></td>
+    <td data-slot="table-cell"><div><div><div><div data-markdown-renderer-content="true"><div><p id="tldr"></p></div></div></div></div></td>
+  </tr>`;
+  try {
+    for (const kind of ["unanswered", "summary", "pending"] as const) {
+      await t.test(kind, async () => {
+        const context = await browser.newContext();
+        let recordRequests = 0;
+        const searches: string[] = [];
+        await context.route("**/*", async route => {
+          if (route.request().url() !== folderUrl) {
+            recordRequests++;
+            await route.abort();
+            return;
+          }
+          await route.fulfill({ contentType: "text/html; charset=utf-8", body: `
+            <div style="margin-left:250px"><button>Upload PDFs</button><button>Sort</button>
+              <button aria-label="Search files" data-test-id="folder-toolbar-search-trigger"
+                onclick="document.querySelector('input').hidden=false">Search</button>
+              <input hidden data-test-id="folder-toolbar-search-input" placeholder="Search by file name">
+            </div><div>Files (218)</div>
+            <table><thead><tr><th></th><th>Name</th><th>TL;DR</th></tr></thead><tbody id="rows">
+              <tr><td></td><td>unrelated.pdf</td><td>Unrelated paper</td></tr>
+            </tbody></table>
+            <script>
+              window.searches = [];
+              const input = document.querySelector('input');
+              input.addEventListener('input', () => {
+                window.searches.push(input.value);
+                window.recordSearch(input.value);
+                clearTimeout(window.pending);
+                document.querySelector('[data-row-id="RID"]')?.remove();
+                if (!input.value) return;
+                document.querySelector('#rows').insertAdjacentHTML('afterbegin', ${JSON.stringify(row)});
+                document.querySelector('#tldr').textContent = ${JSON.stringify(kind === "unanswered" ? "Not addressed in the paper." : kind === "summary" ? summary : "")};
+                if (${kind === "pending"}) window.pending = setTimeout(() => {
+                  document.querySelector('#tldr').textContent = ${JSON.stringify(summary)};
+                }, 4000);
+              });
+            </script>` });
+        });
+        const page = await context.newPage();
+        try {
+          await page.exposeFunction("recordSearch", (query: string) => searches.push(query));
+          await page.goto(folderUrl);
+          await page.locator('input').evaluate((el: HTMLInputElement) => {
+            el.value = "japanese_paper";
+            el.dispatchEvent(new Event("input"));
+          });
+          assert.equal(await readFilesColumnTldr(page, filename), kind === "unanswered" ? "Not addressed in the paper." : kind === "summary" ? summary : "");
+          await page.locator('input').evaluate((el: HTMLInputElement) => {
+            el.value = "";
+            el.dispatchEvent(new Event("input"));
+            (window as unknown as { searches: string[] }).searches = [];
+          });
+          assert.equal(await page.getByText(filename, { exact: true }).count(), 0);
+          searches.length = 0;
+          const state = emptyState({ filename, inboxPdfPath: "", paperDir: dir });
+          state.tldr = "Not addressed in the paper.";
+          const started = Date.now();
+          await captureSciSpaceCardMeta(page, { folderUrl, filename, paperDir: dir, state });
+          assert.ok(Date.now() - started < 30_000, "terminal response must not wait 60 seconds");
+          if (kind === "pending") assert.ok(Date.now() - started >= 4000, "empty cell must wait for generation");
+          assert.equal(state.lastError, "");
+          assert.equal(state.title, title);
+          const card = (await import("../scispace-card.ts")).extractSciSpaceCardMeta(state.filesPaste, filename);
+          assert.equal(card.authors, "山田 太郎");
+          assert.equal(card.publicationYear, "2024");
+          assert.equal(state.venue, "教育工学論文誌");
+          assert.match(state.filesPaste, /japanese_paper\.pdf/);
+          assert.equal(state.tldr, kind === "unanswered" ? "" : summary);
+          assert.equal(recordRequests, kind === "unanswered" ? 1 : 0, "unanswered summary uses the existing record fallback");
+          assert.ok(searches.length > 0 && searches.every(q => q.length > 0), "capture must preserve the file search");
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  } finally {
+    await browser.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
