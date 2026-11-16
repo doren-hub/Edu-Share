@@ -465,10 +465,10 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
           assert.equal(await openVideoCustomize(page), true);
           await page.locator("#format-explainer").evaluate((el, scenario) => {
             document.body.dataset.selectionClicks = "0";
-            const candidate = (index: number) => `<button aria-pressed="false" ${scenario === "disabled-click" ? "disabled" : ""}
+            document.getElementById("customize-dialog")!.style.overflow = "auto";
+            el.outerHTML = Array.from({ length: scenario === "many-candidates" ? 100 : 1 }, (_, index) => `<button aria-pressed="false" ${scenario === "disabled-click" ? "disabled" : ""}
               onclick="document.body.dataset.selectionClicks=String(Number(document.body.dataset.selectionClicks)+1);
-              ${scenario === "delayed-selection" ? "setTimeout(() => this.setAttribute('aria-pressed','true'), 800)" : ""}">Explainer ${index}</button>`;
-            el.outerHTML = Array.from({ length: scenario === "many-candidates" ? 100 : 1 }, (_, i) => candidate(i)).join("");
+              ${scenario === "delayed-selection" ? "setTimeout(() => this.setAttribute('aria-pressed','true'), 800)" : ""}">Explainer ${index}</button>`).join("");
             if (scenario === "disappearing") {
               // Present during discovery but gone while Playwright waits to click.
               const button = document.querySelector('#customize-dialog button[aria-pressed="false"]:not(#format-short)')!;
