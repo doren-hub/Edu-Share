@@ -969,12 +969,16 @@ async function clickStudioTile(page: Page, labels: (string | RegExp)[]): Promise
 const VIDEO_CUSTOMIZE_TITLE = /^(動画解説をカスタマイズ|Customize (?:video|Video Overview))$/i;
 
 async function videoFormatSelected(el: Locator): Promise<boolean> {
-  // Text may be a child of the actual radio/button/option.
+  // Material radio labels and native inputs are on separate branches of the tile.
   return el.evaluate(node => {
-    const control = node.closest("[aria-checked], [aria-selected], [aria-pressed], input[type='radio']");
+    const tile = node.closest("mat-radio-button, label");
+    const radio = node instanceof HTMLInputElement && node.type === "radio"
+      ? node : tile?.querySelector("input[type='radio']");
+    // Native state is authoritative, even when a wrapper has stale ARIA/classes.
+    if (radio instanceof HTMLInputElement) return radio.checked;
+    const control = node.closest("[aria-checked], [aria-selected], [aria-pressed]");
     if (!control) return false;
-    return ["aria-checked", "aria-selected", "aria-pressed"].some(attr => control.getAttribute(attr) === "true") ||
-      (control instanceof HTMLInputElement && control.type === "radio" && control.checked);
+    return ["aria-checked", "aria-selected", "aria-pressed"].some(attr => control.getAttribute(attr) === "true");
   }).catch(() => false);
 }
 
@@ -983,8 +987,13 @@ export async function selectExplainerVideoFormat(page: Page): Promise<void> {
   try {
     const root = await studioCustomizeRoot(page, true);
     if (!root) throw new Error("動画形式: カスタマイズを開けないため生成を中止します（再試行可能）");
-    const groups = [root.getByRole("radio"), root.getByRole("tab"), root.getByRole("button"),
-      root.getByRole("option"), root.getByText(/^(説明動画|説明|解説|解説動画|Explainer)$/i)];
+    const formatGroups = root.getByRole("radiogroup", { name: /^(形式|Format)$/i }).or(
+      root.locator('[role="radiogroup"][aria-labelledby~="templateFormat-label"]'),
+    );
+    // When radio groups exist, never fall back to visual-style controls.
+    const scope = await root.getByRole("radiogroup").count() ? formatGroups : root;
+    const groups = [scope.getByRole("radio"), scope.getByRole("tab"), scope.getByRole("button"),
+      scope.getByRole("option"), scope.getByText(/^(説明動画|説明|解説|解説動画|Explainer)$/i)];
     for (const group of groups) {
       const n = Math.min(await group.count().catch(() => 0), 40);
       for (let i = 0; i < n; i++) {
