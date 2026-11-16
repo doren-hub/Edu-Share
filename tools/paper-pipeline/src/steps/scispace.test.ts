@@ -525,3 +525,22 @@ test("issue 322: a record heading does not shorten an already complete saved tit
   applyRecordPageCard(state, state.filename, extractSciSpaceCardMeta(heading, state.filename), heading);
   assert.equal(state.title, `${heading} Tool for Agricultural Robotics`);
 });
+
+
+test("issue 322: missing heading preserves a saved complete title with empty, shorter or different Files titles", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  const title = "Complete Verified Article Title for Educational Robotics";
+  for (const filesTitle of ["", "Complete Verified Article Title", "Another Valid Article Title"] ) {
+    for (const pdfText of [undefined, `${title}\nAlice Example\nAbstract\n${"Educational robotics experimental results. ".repeat(20)}`]) {
+      const state = emptyState({ filename: "paper.pdf", inboxPdfPath: "", paperDir: "/tmp" });
+      state.title = title;
+      state.filesPaste = filesTitle ? `paper.pdf\n${filesTitle}\nTL;DR\nNot addressed in the paper.` : "";
+      applyRecordPageCard(state, state.filename, extractSciSpaceCardMeta("e.g., Janis & Terwilliger,", state.filename), "", pdfText);
+      assert.equal(state.title, title);
+      assert.equal(usableEduShareTitle(state), title);
+      assert.equal(state.sciTitleRejected, false);
+    }
+  }
+});

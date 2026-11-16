@@ -1545,16 +1545,27 @@ export function applyRecordPageCard(
   const pdfTitle = pdfText
     ? parseFirstPageTitleAndAuthor(pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS)).title ?? ""
     : "";
+  const savedTitle = state.title;
+  const savedTitleUsable = !state.sciTitleRejected && usableRecordTitle(savedTitle, filename) &&
+    (pdfText === undefined || isTitleGroundedInPdfText(savedTitle, pdfText)) &&
+    // Do not preserve the very same unverified body candidate via saved state.
+    (key(savedTitle) !== key(card.title) || key(savedTitle) === key(filesTitle) ||
+      (usableRecordTitle(pdfTitle, filename) && key(savedTitle) === key(pdfTitle)));
   const title = usableRecordTitle(heading, filename) ? heading
     : usableRecordTitle(filesTitle, filename) ? filesTitle
     : usableRecordTitle(card.title, filename) && pdfText &&
       usableRecordTitle(pdfTitle, filename) && key(card.title) === key(pdfTitle) &&
       isTitleGroundedInPdfText(card.title, pdfText) ? card.title : "";
-  // Preserve the existing heading merge rules (e.g. a saved complete title).
-  // Without a heading, a previous body capture must not defeat the selected source.
-  if (!usableRecordTitle(heading, filename)) state.title = filename.replace(/\.pdf$/i, "");
+  // Preserve complete saved titles when only the summary needs filling.
+  // An unsupported body capture must not defeat the selected Files source.
+  if (!usableRecordTitle(heading, filename) && !savedTitleUsable) state.title = filename.replace(/\.pdf$/i, "");
   applyExtractedCard(state, filename, { ...card, title }, [], pdfText);
-  if (!title || titleLooksLikeFilename(state.title, filename)) state.sciTitleRejected = true;
+  if (savedTitleUsable && (!title || state.title === savedTitle)) {
+    state.title = savedTitle;
+    state.sciTitleRejected = false;
+  } else if (!title || titleLooksLikeFilename(state.title, filename)) {
+    state.sciTitleRejected = true;
+  }
 }
 
 export async function captureSciSpaceRecordUrl(
