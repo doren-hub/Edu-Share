@@ -968,7 +968,7 @@ async function clickStudioTile(page: Page, labels: (string | RegExp)[]): Promise
 
 const VIDEO_CUSTOMIZE_TITLE = /^(動画解説をカスタマイズ|Customize (?:video|Video Overview))$/i;
 
-async function videoFormatSelected(el: Locator): Promise<boolean> {
+async function videoFormatSelected(el: Locator, timeout = 3_000): Promise<boolean> {
   // Material radio labels and native inputs are on separate branches of the tile.
   return el.evaluate(node => {
     const tile = node.closest("mat-radio-button, label");
@@ -979,13 +979,24 @@ async function videoFormatSelected(el: Locator): Promise<boolean> {
     const control = node.closest("[aria-checked], [aria-selected], [aria-pressed]");
     if (!control) return false;
     return ["aria-checked", "aria-selected", "aria-pressed"].some(attr => control.getAttribute(attr) === "true");
-  }).catch(() => false);
+  }, undefined, { timeout }).catch(() => false);
 }
 
 /** Fail closed: clicking alone is not proof that the format is selected. */
-export async function selectExplainerVideoFormat(page: Page): Promise<void> {
+export async function selectExplainerVideoFormat(page: Page, timeoutMs = 20_000): Promise<void> {
+  // Do not race this operation against a timer: Playwright actions must settle before
+  // cleanup and before a caller can start another operation on the same page.
+  const deadline = performance.now() + timeoutMs;
+  const remaining = () => {
+    const ms = Math.floor(deadline - performance.now());
+    if (ms <= 0) throw new Error("動画形式の選択がタイムアウトしました");
+    return ms;
+  };
+  let root: Locator | null = null;
   try {
-    const root = await studioCustomizeRoot(page, true);
+    remaining();
+    root = await studioCustomizeRoot(page, true);
+    remaining();
     if (!root) throw new Error("動画形式: カスタマイズを開けないため生成を中止します（再試行可能）");
     const formatGroups = root.getByRole("radiogroup", { name: /^(形式|Format)$/i }).or(
       root.locator('[role="radiogroup"][aria-labelledby~="templateFormat-label"]'),
@@ -995,26 +1006,41 @@ export async function selectExplainerVideoFormat(page: Page): Promise<void> {
     const groups = [scope.getByRole("radio"), scope.getByRole("tab"), scope.getByRole("button"),
       scope.getByRole("option"), scope.getByText(/^(説明動画|説明|解説|解説動画|Explainer)$/i)];
     for (const group of groups) {
+      remaining();
       const n = Math.min(await group.count().catch(() => 0), 40);
       for (let i = 0; i < n; i++) {
+        remaining();
         const el = group.nth(i);
         if (!(await isVisibleNow(el))) continue;
-        const text = `${await innerTextNow(el, 0)} ${await attrNow(el, "aria-label")}`.replace(/\s+/g, " ").trim();
+        // A disappearing candidate must not leave an unlimited (timeout: 0) read.
+        const text = await el.evaluate(node => `${(node as HTMLElement).innerText ?? node.textContent ?? ""} ${node.getAttribute("aria-label") ?? ""}`,
+          undefined, { timeout: remaining() }).catch(() => "");
+        remaining();
         if (/短め|ショート|Short\b|Brief|シネマティック|Cinematic/i.test(text)) continue;
         if (!/説明動画|Explainer|解説動画/i.test(text) && !/(?:^|\s)(説明|解説)(?:\s|$)/.test(text)) continue;
-        if (!(await videoFormatSelected(el))) await el.click({ timeout: 5_000 });
+        const selected = await videoFormatSelected(el, remaining());
+        remaining();
+        if (!selected) await el.click({ timeout: Math.min(5_000, remaining()) });
         for (let attempt = 0; attempt < 10; attempt++) {
-          if (await videoFormatSelected(el)) {
+          const confirmed = await videoFormatSelected(el, remaining());
+          remaining();
+          if (confirmed) {
             log("動画形式: 説明動画の選択状態を確認しました");
             return;
           }
-          await page.waitForTimeout(100);
+          await page.waitForTimeout(Math.min(100, remaining()));
         }
       }
     }
     throw new Error("動画形式: 解説を選べない・選択状態を確認できないため生成を中止します（再試行可能）");
   } catch (error) {
-    await dismissStudioCustomize(page);
+    // Cleanup is a separate, awaited phase (at most one bounded close action).
+    // Never leave a background close that could dismiss the next operation's UI.
+    if (root && await isVisibleNow(root)) {
+      const close = root.getByRole("button", { name: /閉じる|Close|^×$|^✕$/i }).first();
+      if (await isVisibleNow(close)) await close.click({ timeout: 1_000 }).catch(() => undefined);
+      else await page.keyboard.press("Escape").catch(() => undefined);
+    }
     throw error;
   }
 }
@@ -1207,7 +1233,7 @@ async function generateStudioItem(
   }
 
   if (opts.explainerVideo) {
-    await withTimeout(selectExplainerVideoFormat(page), 20_000, "動画形式の選択がタイムアウトしました");
+    await selectExplainerVideoFormat(page);
     const existing = scanStudioVideoOutputs(await studioCardTexts(page));
     log(`Studio: 生成前の ${formatVideoScan(existing)}`);
     if (!shouldKickoffVideo(existing)) {

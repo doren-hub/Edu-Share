@@ -457,6 +457,59 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
       });
     }
 
+    for (const scenario of ["many-candidates", "delayed-selection", "disabled-click", "disappearing"] as const) {
+      await t.test(`形式選択の期限後に後続画面を操作しない: ${scenario}`, async () => {
+        const page = await context.newPage();
+        try {
+          await mountStudioFixture(page, {});
+          assert.equal(await openVideoCustomize(page), true);
+          await page.locator("#format-explainer").evaluate((el, scenario) => {
+            document.body.dataset.selectionClicks = "0";
+            document.getElementById("customize-dialog")!.style.overflow = "auto";
+            el.outerHTML = Array.from({ length: scenario === "many-candidates" ? 100 : 1 }, (_, index) => `<button aria-pressed="false" ${scenario === "disabled-click" ? "disabled" : ""}
+              onclick="document.body.dataset.selectionClicks=String(Number(document.body.dataset.selectionClicks)+1);
+              ${scenario === "delayed-selection" ? "setTimeout(() => this.setAttribute('aria-pressed','true'), 800)" : ""}">Explainer ${index}</button>`).join("");
+            if (scenario === "disappearing") {
+              // Present during discovery but gone while Playwright waits to click.
+              const button = document.querySelector('#customize-dialog button[aria-pressed="false"]:not(#format-short)')!;
+              button.setAttribute("disabled", "");
+              setTimeout(() => button.remove(), 100);
+            }
+          }, scenario);
+          const started = performance.now();
+          await assert.rejects(() => selectExplainerVideoFormat(page, 400), /タイムアウト|Timeout/);
+          assert.ok(performance.now() - started < 2_000, "selection plus awaited cleanup must be bounded");
+          assert.equal(await page.locator("#customize-dialog").isVisible(), false);
+          assert.equal(await page.getAttribute("body", "data-later"), null);
+          assert.deepEqual(await page.evaluate(() => (window as unknown as { __kickedOff: string[] }).__kickedOff), []);
+          const clicks = await page.getAttribute("body", "data-selection-clicks");
+          if (scenario === "many-candidates" || scenario === "delayed-selection") assert.equal(clicks, "1");
+          else assert.equal(clicks, "0");
+          // The caller starts its next operation immediately after rejection.
+          await page.locator("#customize-dialog").evaluate(el => { (el as HTMLElement).style.display = "block"; });
+          await page.waitForTimeout(1_200);
+          assert.equal(await page.locator("#customize-dialog").isVisible(), true);
+          assert.equal(await page.getAttribute("body", "data-selection-clicks"), clicks);
+          assert.equal(await page.getAttribute("body", "data-later"), null);
+          assert.deepEqual(await page.evaluate(() => (window as unknown as { __kickedOff: string[] }).__kickedOff), []);
+        } finally { await page.close(); }
+      });
+    }
+
+    await t.test("期限内の遅延選択は確認して成功する", async () => {
+      const page = await context.newPage();
+      try {
+        await mountStudioFixture(page, {});
+        assert.equal(await openVideoCustomize(page), true);
+        await page.locator("#format-explainer").evaluate(el => {
+          el.setAttribute("onclick", "setTimeout(() => this.setAttribute('aria-pressed','true'), 100)");
+        });
+        await selectExplainerVideoFormat(page, 2_000);
+        assert.equal(await page.locator("#format-explainer").getAttribute("aria-pressed"), "true");
+        assert.equal(await page.locator("#customize-dialog").isVisible(), true);
+      } finally { await page.close(); }
+    });
+
     for (const role of ["radio", "option", "tab", "text"] as const) {
       await t.test(`形式選択の ${role} と選択属性を検証`, async () => {
         const page = await context.newPage();
