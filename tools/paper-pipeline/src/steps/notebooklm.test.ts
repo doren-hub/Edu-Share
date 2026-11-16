@@ -86,6 +86,9 @@ async function mountStudioFixture(
     slideReadyToast?: boolean;
     videoState?: "none" | "generating" | "ready";
     closeVia?: "close-button" | "breadcrumb";
+    videoDialog?: "dialog" | "overlay" | "heading" | "none" | "auto-generate";
+    videoSelected?: boolean;
+    videoSelectable?: boolean;
   },
 ): Promise<void> {
   const quizJson = escapeAttr(makeQuizAppData());
@@ -113,7 +116,7 @@ async function mountStudioFixture(
           <div id="studio-list-view">
             <div id="creation-tiles">
               <button id="tile-audio" onclick="window.openCustomize('audio')">音声解説 chevron_forward</button>
-              <div><button id="tile-video" onclick="document.body.dataset.unsafeGeneration='true'">動画解説 chevron_forward</button><button aria-label="動画解説をカスタマイズ" onclick="window.openCustomize('video')">edit</button></div>
+              <div id="tile-video" role="button" aria-label="動画解説" onclick="window.openCustomize('video')">動画解説<mat-icon role="img">videocam</mat-icon></div>
               <button id="tile-slides" onclick="window.openCustomize('slides')">スライド資料 chevron_forward</button>
               <button id="tile-quiz" onclick="window.openCustomize('quiz')">クイズ chevron_forward</button>
               <button id="tile-flashcards" onclick="window.openCustomize('flashcards')">フラッシュカード chevron_forward</button>
@@ -226,10 +229,12 @@ async function mountStudioFixture(
           </div>
         </div>
 
-        <div id="customize-dialog" role="dialog" style="display:none;position:fixed;left:400px;top:200px;width:420px;height:280px;background:#fff;z-index:10">
+        <div id="customize-dialog" ${opts.videoDialog === "heading" ? "" : opts.videoDialog === "overlay" ? 'class="cdk-overlay-pane"' : 'role="dialog"'} style="display:none;position:fixed;left:400px;top:200px;width:420px;height:280px;background:#fff;z-index:10">
           <div id="customize-title">Studio をカスタマイズ</div>
-          <button onclick="document.body.dataset.format='explainer'">説明動画</button>
+          <button id="format-short" aria-pressed="${!opts.videoSelected}" onclick="this.setAttribute('aria-pressed','true');document.getElementById('format-explainer').setAttribute('aria-pressed','false')">短め</button>
+          <button id="format-explainer" aria-pressed="${!!opts.videoSelected}" onclick="${opts.videoSelectable === false ? "" : "this.setAttribute('aria-pressed','true');document.getElementById('format-short').setAttribute('aria-pressed','false');document.body.dataset.format='explainer'"}">説明動画</button>
           <button onclick="document.body.dataset.format='presenter'">プレゼンターのスライド</button>
+          <button onclick="document.body.dataset.later='true'">後で生成</button>
           <button id="btn-generate-now" onclick="window.confirmGenerate()">生成</button>
           <button onclick="window.closeCustomize()">閉じる</button>
         </div>
@@ -266,6 +271,9 @@ async function mountStudioFixture(
 
           window.openCustomize = function(stage) {
             document.body.dataset.pendingStage = stage;
+            if (stage === 'video' && '${opts.videoDialog}' === 'none') return;
+            if (stage === 'video' && '${opts.videoDialog}' === 'auto-generate') { window.confirmGenerate(); return; }
+            document.getElementById('customize-title').textContent = stage === 'video' ? '動画解説をカスタマイズ' : 'Studio をカスタマイズ';
             document.getElementById('customize-dialog').style.display = 'block';
           };
 
@@ -321,8 +329,7 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
       const page = await context.newPage();
       const { paperDir, state: initial } = makeTempState();
       try {
-        await mountStudioFixture(page, {});
-        await page.getByRole("button", { name: "動画解説をカスタマイズ", exact: true }).evaluate(el => el.remove());
+        await mountStudioFixture(page, { videoSelectable: false });
         let state = initial;
         for (let i = 1; i <= 3; i++) {
           state.kickoffRetryAt = "";
@@ -343,35 +350,70 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
       } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
     });
 
-    await t.test("hover で表示される編集だけを開く", async () => {
-      const page = await context.newPage();
-      try {
-        await mountStudioFixture(page, {});
-        await page.addStyleTag({ content: "#video-edit { visibility: hidden; } div:hover > #video-edit { visibility: visible; }" });
-        await page.getByRole("button", { name: "動画解説をカスタマイズ", exact: true }).evaluate(el => el.id = "video-edit");
-        assert.equal(await openVideoCustomize(page), true);
-        assert.equal(await page.getAttribute("body", "data-unsafe-generation"), null);
-      } finally { await page.close(); }
-    });
+    for (const mode of ["dialog", "overlay", "heading"] as const) {
+      for (const selected of [false, true]) {
+        await t.test(`タイルから ${mode} を開き、説明動画の選択を確認して生成（選択済み=${selected}）`, async () => {
+          const page = await context.newPage();
+          const { paperDir, state } = makeTempState();
+          try {
+            await mountStudioFixture(page, { videoDialog: mode, videoSelected: selected });
+            assert.equal(await tryKickoffStudio(page, state, "nlm-video", [/動画解説/], 100,
+              { explainerVideo: true, kickoffConfirmMs: 1 }), "started");
+            assert.equal(await page.locator("#format-explainer").getAttribute("aria-pressed"), "true");
+            assert.equal(await page.locator("#format-short").getAttribute("aria-pressed"), "false");
+            assert.deepEqual(await page.evaluate(() => (window as unknown as { __kickedOff: string[] }).__kickedOff), ["video"]);
+            assert.equal(await page.getAttribute("body", "data-later"), null);
+            // Already selected controls must not be toggled off by a gratuitous click.
+            assert.equal(await page.getAttribute("body", "data-format"), selected ? null : "explainer");
+          } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
+        });
+      }
+    }
 
-    await t.test("動画は編集から開き、解説を選べない場合は生成しない", async () => {
-      const page = await context.newPage();
-      try {
-        await mountStudioFixture(page, {});
-        await assert.rejects(() => selectExplainerVideoFormat(page), /カスタマイズを開けない/);
-        assert.equal(await openVideoCustomize(page), true);
-        assert.equal(await page.getAttribute("body", "data-unsafe-generation"), null);
-        await selectExplainerVideoFormat(page);
-        assert.equal(await page.getAttribute("body", "data-format"), "explainer");
-        await page.getByRole("button", { name: "説明動画", exact: true }).evaluate(el => el.textContent = "短め");
-        await assert.rejects(() => selectExplainerVideoFormat(page), /解説を選べない/);
-        assert.deepEqual(await page.evaluate(() => (window as unknown as { __kickedOff: string[] }).__kickedOff), []);
-        await page.locator("#customize-dialog").evaluate(el => (el as HTMLElement).style.display = "none");
-        await page.getByRole("button", { name: "動画解説をカスタマイズ", exact: true }).evaluate(el => el.remove());
-        assert.equal(await openVideoCustomize(page), false);
-        assert.equal(await page.getAttribute("body", "data-unsafe-generation"), null);
-      } finally { await page.close(); }
-    });
+    for (const role of ["radio", "option", "tab", "text"] as const) {
+      await t.test(`形式選択の ${role} と選択属性を検証`, async () => {
+        const page = await context.newPage();
+        try {
+          await mountStudioFixture(page, {});
+          await page.locator("#format-explainer").evaluate((el, role) => {
+            const attr = role === "radio" ? "aria-checked" : "aria-selected";
+            el.outerHTML = `<div id="format-explainer" ${role === "text" ? "" : `role="${role}"`} ${attr}="false"
+              onclick="this.setAttribute('${attr}', 'true')"><span>Explainer</span></div>`;
+          }, role);
+          assert.equal(await openVideoCustomize(page), true);
+          await selectExplainerVideoFormat(page);
+          assert.equal(await page.locator("#format-explainer").getAttribute(role === "radio" ? "aria-checked" : "aria-selected"), "true");
+        } finally { await page.close(); }
+      });
+    }
+
+    for (const failure of ["missing-format", "unverifiable", "no-dialog", "auto-generate"] as const) {
+      await t.test(`確認できない動画は生成しない・失敗を保存する: ${failure}`, async () => {
+        const page = await context.newPage();
+        const { paperDir, state } = makeTempState();
+        try {
+          await mountStudioFixture(page, {
+            videoDialog: failure === "no-dialog" ? "none" : failure === "auto-generate" ? "auto-generate" : "heading",
+            videoSelectable: false,
+          });
+          if (failure === "missing-format") await page.locator("#format-explainer").evaluate(el => el.remove());
+          if (failure === "unverifiable") await page.locator("#format-explainer").evaluate(el => {
+            el.removeAttribute("aria-pressed");
+            el.setAttribute("onclick", "document.body.dataset.clicked='true'");
+          });
+          assert.equal(await tryKickoffStudio(page, state, "nlm-video", [/動画解説/], 100,
+            { explainerVideo: true, kickoffConfirmMs: 1 }), "skipped");
+          const saved = loadState(paperDir, state);
+          assert.equal(saved.kickoffFailures?.["nlm-video"], 1);
+          assert.equal(hasStudioStarted(saved, "nlm-video"), false);
+          assert.equal(await page.locator("#customize-dialog").isVisible(), false);
+          assert.equal(await page.getAttribute("body", "data-later"), null);
+          assert.deepEqual(await page.evaluate(() => (window as unknown as { __kickedOff: string[] }).__kickedOff),
+            failure === "auto-generate" ? ["video"] : []);
+          if (failure === "auto-generate") assert.match(saved.lastError ?? "", /カスタマイズ未確認のまま生成開始を検出/);
+        } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
+      });
+    }
 
     await t.test("混在カードから解説だけのメニューを開く", async () => {
       const page = await context.newPage();
