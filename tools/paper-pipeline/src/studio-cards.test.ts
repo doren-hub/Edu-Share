@@ -6,6 +6,7 @@ import {
   STUDIO_RELATIVE_TIME,
   detectStudioCardKind,
   extractStudioIcon,
+  hasSlideDeckInStudioText,
   studioText,
   formatVideoScan,
   isChatCustomizeLabel,
@@ -252,6 +253,79 @@ test("Issue #292: 実測した動画・クイズ・フラッシュカードだ�
     "スライド資料「睡眠時間と寿命」の準備ができました。",
   ]) {
     assert.equal(shouldKickoffSlides([...cards, slide]), false, slide);
+  }
+});
+
+test("Issue #294: Studio パネル全文の動画部品等からスライドを誤判定せず、実在スライドで二重生成を防ぐ", () => {
+  // Studio 見出し、動画カード・長さ表記部品、クイズ、フラッシュカードを含む全文
+  const panels: { lines: string[]; insertAt: number }[] = [
+    // 日本語見出し・ボタン付きパネル、後続の「ソース」見出し直前に挿入
+    {
+      lines: [
+        "Studio collapse_content",
+        "subscriptions 動画解説 chevron_forward",
+        "tablet スライド資料 chevron_forward",
+        "quiz クイズ chevron_forward",
+        "copy フラッシュカード chevron_forward",
+        "videocam 未読 睡眠時間と寿命：長すぎる睡眠の隠れたサイン 1:11 · 短め · 1 件のソース · 5 日前 play_arrow more_vert",
+        "1:11 · 短め · 1 件のソース · 5 日前",
+        "quiz 睡眠時間 クイズ 1 件のソース · 5 日前 more_vert",
+        "copy 睡眠時間 フラッシュカード 1 件のソース · 5 日前 more_vert",
+        "ソース collapse_content",
+      ],
+      insertAt: 9, // 「ソース collapse_content」の直前
+    },
+    // 後続パネルなし（Studio のみ）、末尾に挿入
+    {
+      lines: [
+        "Studio",
+        "subscriptions 動画解説 chevron_forward",
+        "tablet スライド資料 chevron_forward",
+        "videocam 未読 量子力学入門 7:47 · 解説 · 1 件のソース · 昨日 play_arrow more_vert",
+        "7:47 · 解説 · 1 件のソース · 昨日",
+        "quiz 量子力学 クイズ 1 件のソース · 昨日 more_vert",
+        "copy 量子力学 フラッシュカード 1 件のソース · 昨日 more_vert",
+      ],
+      insertAt: -1, // 末尾
+    },
+    // 英語見出し・英語動画表記、後続 Sources 見出し直前に挿入
+    {
+      lines: [
+        "Studio dock_to_left",
+        "subscriptions Video overview chevron_forward",
+        "tablet Slide deck chevron_forward",
+        "quiz Quiz chevron_forward",
+        "copy Flashcards chevron_forward",
+        "videocam Unread Sleep Duration 5:20 · Explainer · 1 件のソース · 3 days ago play_arrow more_vert",
+        "5:20 · Explainer · 1 件のソース · 3 days ago",
+        "quiz Sleep Duration Quiz 1 件のソース · 3 days ago more_vert",
+        "copy Sleep Duration Flashcards 1 件のソース · 3 days ago more_vert",
+        "Sources",
+      ],
+      insertAt: 9, // "Sources" の直前
+    },
+  ];
+
+  for (const { lines, insertAt } of panels) {
+    const panelText = lines.join("\n");
+    // 動画部品や動画カード・クイズ・単語帳のみではスライドとして検出されない
+    assert.equal(hasSlideDeckInStudioText(panelText), false, panelText);
+    // スライド未生成と判定され、スライド生成を開始できる
+    assert.equal(shouldKickoffSlides([panelText]), true, panelText);
+
+    // 同じ全文に実在する tablet スライドカードを追加すると、スライドを検出し二重生成しない
+    for (const slideCard of [
+      "tablet 睡眠時間と寿命 1 件のソース · 5 日前 more_vert",
+      "tablet 未読 睡眠時間と寿命 1 件のソース · 5 日前 more_vert",
+      "tablet 未読 Syntactic and semantic interactions 1 件のソース · 18 時間前 more_vert",
+    ]) {
+      const withSlideLines = [...lines];
+      withSlideLines.splice(insertAt < 0 ? withSlideLines.length : insertAt, 0, slideCard);
+      const panelWithSlide = withSlideLines.join("\n");
+
+      assert.equal(hasSlideDeckInStudioText(panelWithSlide), true, panelWithSlide);
+      assert.equal(shouldKickoffSlides([panelWithSlide]), false, panelWithSlide);
+    }
   }
 });
 
