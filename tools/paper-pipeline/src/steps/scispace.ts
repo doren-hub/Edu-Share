@@ -1545,14 +1545,17 @@ export function applyRecordPageCard(
   const pdfTitle = pdfText
     ? parseFirstPageTitleAndAuthor(pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS)).title ?? ""
     : "";
+  const isPdfTitleFragment = (candidate: string) => usableRecordTitle(pdfTitle, filename) &&
+    Boolean(key(candidate)) && key(candidate) !== key(pdfTitle) && key(pdfTitle).includes(key(candidate));
   const savedTitle = state.title;
   const savedTitleUsable = !state.sciTitleRejected && usableRecordTitle(savedTitle, filename) &&
+    !isPdfTitleFragment(savedTitle) &&
     (pdfText === undefined || isTitleGroundedInPdfText(savedTitle, pdfText)) &&
     // Do not preserve the very same unverified body candidate via saved state.
     (key(savedTitle) !== key(card.title) || key(savedTitle) === key(filesTitle) ||
       (usableRecordTitle(pdfTitle, filename) && key(savedTitle) === key(pdfTitle)));
   const title = usableRecordTitle(heading, filename) ? heading
-    : usableRecordTitle(filesTitle, filename) ? filesTitle
+    : usableRecordTitle(filesTitle, filename) && !isPdfTitleFragment(filesTitle) ? filesTitle
     : usableRecordTitle(card.title, filename) && pdfText &&
       usableRecordTitle(pdfTitle, filename) && key(card.title) === key(pdfTitle) &&
       isTitleGroundedInPdfText(card.title, pdfText) ? card.title : "";

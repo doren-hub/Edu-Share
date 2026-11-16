@@ -544,3 +544,21 @@ test("issue 322: missing heading preserves a saved complete title with empty, sh
     }
   }
 });
+
+
+test("issue 322: an italic fragment in Files cannot bypass PDF title validation", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  const fragment = "Vibrio parahaemolyticus";
+  const title = `腸炎ビブリオ ${fragment} の増殖に関する研究`;
+  const pdf = `${title}\n山田 太郎\n要旨\n${"腸炎ビブリオの増殖について調査した。".repeat(20)}`;
+  for (const bodyTitle of [fragment, title]) {
+    const state = emptyState({ filename: "paper.pdf", inboxPdfPath: "", paperDir: "/tmp" });
+    state.title = fragment;
+    state.filesPaste = `paper.pdf\n${fragment}\nTL;DR\nNot addressed in the paper.`;
+    applyRecordPageCard(state, state.filename, extractSciSpaceCardMeta(bodyTitle, state.filename), "", pdf);
+    assert.equal(usableEduShareTitle(state), bodyTitle === title ? title : "");
+    assert.equal(state.sciTitleRejected, bodyTitle !== title);
+  }
+});
