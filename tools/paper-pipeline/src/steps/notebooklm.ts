@@ -290,8 +290,8 @@ const ANNOUNCEMENT_TEXT =
   /Gemini Notebook の使用方法|上限は 5 時間|バックグラウンド キュー|What's new|新機能/;
 
 async function studioCustomizeVisible(page: Page): Promise<boolean> {
-  const dialog = page.getByRole("dialog");
-  if (!(await isVisibleNow(dialog))) return false;
+  const dialog = await studioCustomizeRoot(page);
+  if (!dialog) return false;
   const t = await innerTextNow(dialog);
   return /後で生成|質問の数|をカスタマイズ|難易度レベル|希望するトピック|Generate later/i.test(t);
 }
@@ -311,8 +311,9 @@ async function dismissPointerBlockers(page: Page): Promise<void> {
 async function dismissStudioCustomize(page: Page): Promise<void> {
   if (!(await studioCustomizeVisible(page))) return;
   log("Studio のカスタマイズ画面を閉じます（後で生成は押しません）");
-  const dialog = page.getByRole("dialog");
-  const close = dialog.getByRole("button", { name: /閉じる|Close/i });
+  const dialog = await studioCustomizeRoot(page);
+  if (!dialog) return;
+  const close = dialog.getByRole("button", { name: /閉じる|Close|^×$|^✕$/i });
   if (await isVisibleNow(close)) {
     await close.first().click({ timeout: 3_000 }).catch(() => undefined);
   } else {
@@ -965,48 +966,75 @@ async function clickStudioTile(page: Page, labels: (string | RegExp)[]): Promise
   return false;
 }
 
-/** Fail closed: callers must not generate unless this selection succeeds. */
-export async function selectExplainerVideoFormat(page: Page): Promise<void> {
-  const root = await studioCustomizeRoot(page);
-  if (!root) throw new Error("動画形式: カスタマイズを開けないため生成を中止します（再試行可能）");
-  const groups = [root.getByRole("radio"), root.getByRole("tab"), root.getByRole("button"),
-    root.locator("[role='option']"), root.getByText(/^(説明動画|説明|解説|解説動画|Explainer)$/i)];
-  for (const group of groups) {
-    const n = Math.min(await group.count().catch(() => 0), 40);
-    for (let i = 0; i < n; i++) {
-      const el = group.nth(i);
-      if (!(await isVisibleNow(el))) continue;
-      const text = `${await innerTextNow(el, 0)} ${await attrNow(el, "aria-label")}`.replace(/\s+/g, " ").trim();
-      if (/短め|ショート|Short\b|Brief|シネマティック|Cinematic/i.test(text)) continue;
-      if (!/説明動画|Explainer|解説動画/i.test(text) && text !== "説明" && text !== "解説") continue;
-      await el.click({ timeout: 5_000 });
-      log(`動画形式: 解説を選択しました（${text.slice(0, 40)}）`);
-      return;
-    }
-  }
-  throw new Error("動画形式: 解説を選べないため生成を中止します（再試行可能）");
+const VIDEO_CUSTOMIZE_TITLE = /^(動画解説をカスタマイズ|Customize (?:video|Video Overview))$/i;
+
+async function videoFormatSelected(el: Locator): Promise<boolean> {
+  // Text may be a child of the actual radio/button/option.
+  return el.evaluate(node => {
+    const control = node.closest("[aria-checked], [aria-selected], [aria-pressed], input[type='radio']");
+    if (!control) return false;
+    return ["aria-checked", "aria-selected", "aria-pressed"].some(attr => control.getAttribute(attr) === "true") ||
+      (control instanceof HTMLInputElement && control.type === "radio" && control.checked);
+  }).catch(() => false);
 }
 
-/** Open the tile's edit control, never its default one-click generation action. */
+/** Fail closed: clicking alone is not proof that the format is selected. */
+export async function selectExplainerVideoFormat(page: Page): Promise<void> {
+  try {
+    const root = await studioCustomizeRoot(page, true);
+    if (!root) throw new Error("動画形式: カスタマイズを開けないため生成を中止します（再試行可能）");
+    const groups = [root.getByRole("radio"), root.getByRole("tab"), root.getByRole("button"),
+      root.getByRole("option"), root.getByText(/^(説明動画|説明|解説|解説動画|Explainer)$/i)];
+    for (const group of groups) {
+      const n = Math.min(await group.count().catch(() => 0), 40);
+      for (let i = 0; i < n; i++) {
+        const el = group.nth(i);
+        if (!(await isVisibleNow(el))) continue;
+        const text = `${await innerTextNow(el, 0)} ${await attrNow(el, "aria-label")}`.replace(/\s+/g, " ").trim();
+        if (/短め|ショート|Short\b|Brief|シネマティック|Cinematic/i.test(text)) continue;
+        if (!/説明動画|Explainer|解説動画/i.test(text) && !/(?:^|\s)(説明|解説)(?:\s|$)/.test(text)) continue;
+        if (!(await videoFormatSelected(el))) await el.click({ timeout: 5_000 });
+        for (let attempt = 0; attempt < 10; attempt++) {
+          if (await videoFormatSelected(el)) {
+            log("動画形式: 説明動画の選択状態を確認しました");
+            return;
+          }
+          await page.waitForTimeout(100);
+        }
+      }
+    }
+    throw new Error("動画形式: 解説を選べない・選択状態を確認できないため生成を中止します（再試行可能）");
+  } catch (error) {
+    await dismissStudioCustomize(page);
+    throw error;
+  }
+}
+
+/** The current UI opens customization by clicking the tile itself. */
 export async function openVideoCustomize(page: Page): Promise<boolean> {
   await openStudio(page);
-  const tiles = page.locator("button, [role='button'], a").filter({ hasText: /動画解説|Video overview|ビデオ概要/i });
+  const tiles = page.getByRole("button", { name: /^(動画解説|Video overview|ビデオ概要)$/i });
   const n = Math.min(await tiles.count(), 20);
   for (let i = 0; i < n; i++) {
     const tile = tiles.nth(i);
-    await tile.hover({ timeout: 2_000 }).catch(() => undefined);
-    const parent = tile.locator("xpath=..");
-    for (const controls of [tile.getByRole("button", { name: /カスタマイズ|Customize|編集|Edit/i }),
-      parent.getByRole("button", { name: /カスタマイズ|Customize|編集|Edit/i }),
-      parent.locator("button, [role='button']").filter({ hasText: /^\s*(edit|edit_square|tune)\s*$/i })]) {
-      for (let j = 0; j < await controls.count(); j++) {
-        const control = controls.nth(j);
-        if (!(await isVisibleNow(control))) continue;
-        await control.click({ timeout: 5_000 });
-        if (await waitForAnyVisible(page, [page.getByRole("dialog"), page.locator(".cdk-overlay-pane")], 4_000)) return true;
-        throw new Error("動画の編集からカスタマイズを開けませんでした");
-      }
+    if (!(await isVisibleNow(tile))) continue;
+    const before = (await studioArtifactCards(page)).filter(card => card.kind === "video").length;
+    await tile.click({ timeout: 5_000 });
+    for (let attempt = 0; attempt < 24; attempt++) {
+      if (await studioCustomizeRoot(page, true)) return true;
+      await page.waitForTimeout(250);
     }
+    const after = (await studioArtifactCards(page)).filter(card => card.kind === "video").length;
+    if (after > before || isVideoGenerationInProgress(await notebookBody(page))) {
+      const message = "動画カスタマイズ未確認のまま生成開始を検出: この開始操作を中止し、形式確認済みの解説動画だけを収集します";
+      warn(message);
+      await dismissStudioCustomize(page);
+      // tryKickoffStudio persists this message and applies the existing bounded retry/cooldown.
+      throw new Error(message);
+    }
+    await dismissStudioCustomize(page);
+    await logVideoCustomizeDiagnostics(page);
+    return false; // Never click a second tile after an unconfirmed action.
   }
   await logVideoCustomizeDiagnostics(page);
   return false;
@@ -1025,12 +1053,33 @@ export async function logVideoCustomizeDiagnostics(page: Page): Promise<void> {
   warn(`動画カスタマイズ: タイル周辺の要素（許可した UI 語のみ） ${JSON.stringify(info).slice(0, 2500)}`);
 }
 
-async function studioCustomizeRoot(page: Page): Promise<Locator | null> {
-  const dialog = page.getByRole("dialog");
-  const overlay = page.locator(".cdk-overlay-pane");
-  if (await isVisibleNow(dialog)) return dialog.first();
-  if (await isVisibleNow(overlay)) return overlay.last();
+async function studioCustomizeRoot(page: Page, videoOnly = false): Promise<Locator | null> {
+  const title = page.getByText(VIDEO_CUSTOMIZE_TITLE);
+  const videoRoots = [
+    page.locator("[role='dialog'], [aria-modal='true'], .cdk-overlay-pane").filter({ has: title }),
+    // Role-less modal: take the nearest heading ancestor containing its Generate button.
+    title.locator("xpath=ancestor::*[not(self::body) and not(self::html) and .//button[normalize-space(.)='生成' or normalize-space(.)='Generate' or normalize-space(.)='今すぐ生成' or normalize-space(.)='Generate now']][1]"),
+  ];
+  const groups = videoOnly ? videoRoots : [...videoRoots, page.getByRole("dialog"), page.locator(".cdk-overlay-pane")];
+  for (const group of groups) {
+    for (let i = 0; i < Math.min(await group.count(), 20); i++) {
+      const root = group.nth(i);
+      if (await isVisibleNow(root)) return root;
+    }
+  }
   return null;
+}
+
+async function clickExplainerGenerate(page: Page): Promise<boolean> {
+  const root = await studioCustomizeRoot(page, true);
+  if (!root) return false;
+  // Recheck after scanning existing outputs, immediately before generation.
+  await selectExplainerVideoFormat(page);
+  // Scope to the confirmed customization; never use the page-wide fallback or Generate later.
+  const button = root.getByRole("button", { name: /^(生成|今すぐ生成|Generate|Generate now)$/i }).first();
+  if (!(await isVisibleNow(button)) || !(await button.isEnabled())) return false;
+  await button.click({ timeout: 5_000 });
+  return true;
 }
 
 async function openStudioCustomizeIfNeeded(page: Page): Promise<Locator | null> {
@@ -1111,7 +1160,7 @@ async function generateStudioItem(
   }
   await dismissSourceDeleteMenu(page);
 
-  let customize = await waitForAnyVisible(
+  let customize = opts.explainerVideo || await waitForAnyVisible(
     page,
     [
       page.getByRole("dialog"),
@@ -1175,9 +1224,16 @@ async function generateStudioItem(
   }
   const outputsBefore = await studioOutputCount(page);
   log(`Studio: 生成前の出力カード ${outputsBefore} 件`);
-  const generated = await clickStudioGenerate(page);
+  let generated: boolean;
+  try {
+    generated = opts.explainerVideo ? await clickExplainerGenerate(page) : await clickStudioGenerate(page);
+  } catch (error) {
+    if (opts.explainerVideo) await dismissStudioCustomize(page);
+    throw error;
+  }
   if (generated) log("Studio: 生成 をクリックしました");
   else {
+    if (opts.explainerVideo) await dismissStudioCustomize(page);
     await logVisibleButtonNames(page);
     const hasGenerateLater = await page.getByRole("button", { name: /後で生成|Generate later/i }).first().isVisible({ timeout: 0 }).catch(() => false);
     if (hasGenerateLater) {
