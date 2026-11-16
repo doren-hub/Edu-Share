@@ -455,6 +455,20 @@ async function loadMoreFilesUntilName(page: Page, filename: string, title = ""):
 
 async function fillFilesListSearch(page: Page, folderUrl: string, query: string): Promise<boolean> {
   await closeFilesColumnSettings(page);
+  const search = page.locator('input[data-test-id="folder-toolbar-search-input"]');
+  if (!(await search.isVisible().catch(() => false))) {
+    const trigger = page.locator('button[data-test-id="folder-toolbar-search-trigger"]');
+    if (await trigger.isVisible().catch(() => false)) {
+      await trigger.click({ timeout: 4_000 }).catch(() => undefined);
+    }
+  }
+  if (await search.isVisible().catch(() => false)) {
+    await search.fill(query, { timeout: 4_000 });
+    await sleep(900);
+    if (await isNotebooksFilesView(page, folderUrl)) return true;
+    await restoreFolderFilesTable(page, folderUrl);
+    return false;
+  }
   await revealFilesToolbarSearch(page);
   const sort = page.getByRole("button", { name: /^Sort$/i }).first();
   if (await sort.isVisible({ timeout: 800 }).catch(() => false)) {
@@ -902,6 +916,7 @@ async function readFilesRowTldr(page: Page, filename: string): Promise<string> {
   if (!(await name.isVisible({ timeout: 500 }).catch(() => false))) return "";
   let loc = name;
   for (let i = 0; i < 12; i++) {
+    if (!(await loc.count().catch(() => 0))) break;
     const t = ((await loc.innerText({ timeout: 1_500 }).catch(() => "")) || "").trim();
     const pdfs = t.match(/[\w.-]+\.pdf/gi) || [];
     const uniq = [...new Set(pdfs.map((p) => p.toLowerCase()))];
@@ -935,6 +950,11 @@ export async function readFilesColumnTldr(page: Page, filename: string): Promise
       const nodes = Array.from(document.querySelectorAll("a, span, div, p, td, li, h2, h3, h4"));
       const hit = nodes.find((el) => looksName(el.textContent || "") &&
         !Array.from(el.children).some((child) => looksName(child.textContent || "")));
+      // Read short terminal responses too; the prose heuristic below deliberately
+      // ignores short text and cannot distinguish them from a pending empty cell.
+      const row = hit && hit.closest('tr, [role="row"]');
+      const rendered = row && row.querySelector('[data-markdown-renderer-content="true"]');
+      if (rendered) return (rendered.innerText || rendered.textContent || "").trim().slice(0, 2000);
       const fromKids = (root) => {
         const whole = ((root.innerText || "") + "");
         const pdfs = whole.match(/[\\w.-]+\\.pdf/gi) || [];
@@ -1002,6 +1022,7 @@ export async function captureSciSpaceCardMeta(
     }
     log("SciSpace: Files の TL;DR 列をコピーします");
     let filesTldr = "";
+    let filesTldrUnanswered = false;
     const until = Date.now() + 60_000;
     let missingNameStreak = 0;
     while (Date.now() < until) {
@@ -1023,14 +1044,20 @@ export async function captureSciSpaceCardMeta(
         missingNameStreak = 0;
       }
       await expandFilesRowAuthors(page, filename, searchTitle);
-      filesTldr = await readFilesRowTldr(page, filename);
-      if (!(descriptionUsable(filesTldr) || tldrUsable(filesTldr))) {
-        filesTldr = await readFilesColumnTldr(page, filename);
+      filesTldr = await readFilesColumnTldr(page, filename);
+      if (!looksLikeUnansweredSciSpaceResponse(filesTldr) && !(descriptionUsable(filesTldr) || tldrUsable(filesTldr))) {
+        filesTldr = await readFilesRowTldr(page, filename);
+      }
+      if (looksLikeUnansweredSciSpaceResponse(filesTldr)) {
+        filesTldrUnanswered = true;
+        filesTldr = "";
+        log("SciSpace: Files の TL;DR は未回答なので、行の書誌を取得し要約は別経路で補います");
+        break;
       }
       if (descriptionUsable(filesTldr) || tldrUsable(filesTldr)) break;
       await sleep(2_000);
     }
-    if (!(descriptionUsable(filesTldr) || tldrUsable(filesTldr))) {
+    if (!filesTldrUnanswered && !(descriptionUsable(filesTldr) || tldrUsable(filesTldr))) {
       const dump = String(
         await page
           .evaluate(
@@ -1061,12 +1088,16 @@ export async function captureSciSpaceCardMeta(
       );
       warn(`Files TL;DR 列が取れません（${filename}）\n${dump.slice(0, 1200)}`);
       await restoreFolderFilesTable(page, folderUrl);
-      await setFilesSearch(page, folderUrl, "");
-      await sleep(1_500);
+      await filterFilesList(page, folderUrl, filename, searchTitle);
       if (!(await isNotebooksFilesView(page, folderUrl))) {
         throw new Error(`SciSpace の Files 表を開けません（${filename}）`);
       }
       filesTldr = await readFilesColumnTldr(page, filename);
+    }
+    // A virtualized row may disappear after restoring the table. Locate it with
+    // the file search still active before deciding that the file is absent.
+    if (!(await filesNameVisible(page, filename, searchTitle))) {
+      await filterFilesList(page, folderUrl, filename, searchTitle);
     }
     if (!(await filesNameVisible(page, filename, searchTitle))) {
       const filled = await fillDummyCardFromKnownIds(filename, state.doi);
