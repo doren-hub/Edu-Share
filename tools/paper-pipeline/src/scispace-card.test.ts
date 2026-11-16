@@ -1329,3 +1329,21 @@ test("Issue #145: 本文・掲載誌を挟むチップや単なる部分一致�
   assert.doesNotMatch(filled, /\+2 More/);
   assert.match(filled, /TL;DR:\n\+3 More/);
 });
+
+
+test("issue 322: citation, running header and prose lines are not title candidates", () => {
+  for (const value of [
+    "e.g., Janis & Terwilliger,", "cf. Janis & Terwilliger", "Janis & Terwilliger,",
+    "J. Natl. Inst. Public Health, 66 (6) : 2017",
+    "J. Natl. Inst. Public Health, 69 (5) : 2020",
+    "本稿は、学術研究をレビューすることを目", "本研究では学習支援を検討する",
+    "This paper presents experimental results",
+  ]) {
+    assert.equal(titleLooksLikeBadSciSpaceCapture(value), true, value);
+    assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${value}`, "paper.pdf").title, "", value);
+  }
+  for (const title of ["日本語の論文における学習支援の検討", "Deep Residual Learning for Image Recognition", "Vibrio parahaemolyticus"]) {
+    assert.equal(titleLooksLikeBadSciSpaceCapture(title), false, title);
+    assert.equal(extractSciSpaceCardMeta(`paper.pdf\n${title}\nTL;DR\nNot addressed in the paper.`, "paper.pdf").title, title);
+  }
+});
