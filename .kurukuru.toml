@@ -18,6 +18,8 @@ deny_files = [".env.local", ".env.*", "!.env.example", "db_cluster-*.backup.gz"]
 setup = "test -d node_modules || npm ci"
 worktree = true
 worktree_path = "../edu-share-app-agy"
+
+[runner.agy]
 args = "--dangerously-skip-permissions"
 
 [review]
