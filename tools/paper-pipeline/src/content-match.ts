@@ -13,6 +13,13 @@ import { type InboxPdf } from "./inbox.ts";
 import { firstLine, log, warn } from "./log.ts";
 import { normalizeDoi, normalizeKey, titlesLikelySame, titleUsableForExistingMatch } from "./match.ts";
 import { emptyState, loadState } from "./state.ts";
+import {
+  isBibliographyLabel,
+  isHeadingWord,
+  isInvalidAuthorValue,
+  isNameSuffix,
+  isValidAuthorName,
+} from "./bibliography.ts";
 
 export type PaperContentKey = {
   doi?: string;
@@ -151,6 +158,85 @@ export function firstAuthorsMatch(a: string, b: string): boolean {
   return normA === normB;
 }
 
+const AFFILIATION_LINE_RE =
+  /\b(?:department|dept|university|college|faculty|school|institute|laboratory|laboratories|centre|center|hospital|consortium|association|division|corporation|inc\.|ltd\.|corp\.)\b|大学|学部|研究科|研究所|センター|機構|株式会社|専攻|学科|@/i;
+
+function cleanExtractedAuthorToken(token: string): string {
+  let s = token.trim();
+  s = s.replace(/(?:[\s\-–—·•]+)?Show\s*Less\s*$/iu, "");
+  s = s.replace(/(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More\s*$/iu, "");
+  s = s.replace(/^[*†‡§#0-9\s]+/, "");
+  s = s.replace(/[*†‡§#0-9]+$/g, "");
+  s = s.replace(/\([^)]*\)/g, "");
+  s = s.replace(/（[^）]*）/g, "");
+  s = s.replace(/[\s,;]+$/g, "");
+  return s.trim();
+}
+
+export function splitFirstPageAuthors(raw: string): string[] {
+  const parts = raw
+    .split(/[,，、;；／/|\n]|(?<=[*†‡§#0-9])\s+(?=[^\s*†‡§#0-9])/)
+    .map((p) => cleanExtractedAuthorToken(p))
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const part of parts) {
+    if (isNameSuffix(part)) {
+      if (out.length > 0) {
+        out[out.length - 1] = `${out[out.length - 1]}, ${part}`;
+      }
+      continue;
+    }
+    out.push(part);
+  }
+  return out;
+}
+
+const TITLE_WORD_RE =
+  /\b(?:for|with|using|through|based|approach|approaches|learning|processing|neural|deep|survey|system|systems|review|networks?|methods?|methodology|analysis|study|studies|models?|towards|via|an|the|of|in|on|to|from|applications?|framework|frameworks|architecture|algorithms?|theory|empirical|evaluation|design|efficient|automated|comparative|introduction|performance|optimization|detection|generation|classification)\b/i;
+
+const JP_TITLE_PHRASE_RE =
+  /(?:における|に関する|について|を用いた|による|のための|の検討|の提案|とその|および|または|比較|調査|開発|設計|評価|考察|研究|報告|概要)/;
+
+export function looksLikePersonName(name: string): boolean {
+  const s = name.replace(/[*†‡§#0-9]/g, "").trim();
+  if (!s || s.length < 2 || s.length > 60) return false;
+  if (TITLE_WORD_RE.test(s) || JP_TITLE_PHRASE_RE.test(s)) return false;
+
+  // Japanese / CJK full name: 2 to 8 characters (Kanji/Hiragana/Katakana)
+  if (/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\s]{2,10}$/u.test(s)) {
+    const clean = s.replace(/\s+/g, "");
+    return clean.length >= 2 && clean.length <= 8;
+  }
+
+  // Latin name: e.g. "Hugh Everett, III", "John Doe", "A. B. Smith"
+  const withoutSuffix = s.replace(/,\s*(?:Jr\.?|Sr\.?|I{2,4}|IV|VI{1,3}|[123](?:st|nd|rd))$/i, "").trim();
+  const tokens = withoutSuffix.split(/\s+/).filter(Boolean);
+  if (tokens.length < 2 || tokens.length > 4) {
+    // Known uppercase organization like "OPENAI"
+    if (tokens.length === 1 && /^[A-Z0-9]{3,12}$/.test(tokens[0]!)) {
+      return true;
+    }
+    return false;
+  }
+
+  // Each token must start with an uppercase letter, or be an accepted name particle (van, de, etc.)
+  const NAME_TOKEN_RE =
+    /^(?:[\p{Lu}][\p{L}\-']+|[\p{Lu}]\.?|(?:van|von|de|del|da|di|der|den|la|le))$/u;
+  return tokens.every((t) => NAME_TOKEN_RE.test(t));
+}
+
+function looksLikeFirstPageAuthorLine(line: string, title?: string): boolean {
+  const t = line.trim();
+  if (t.length < 2 || t.length > 120) return false;
+  if (AFFILIATION_LINE_RE.test(t)) return false;
+  if (isInvalidAuthorValue(t, title)) return false;
+  if (/^https?:\/\//i.test(t)) return false;
+  if (/^[0-9\s.,;:\-_/()]+$/.test(t)) return false;
+  const authors = splitFirstPageAuthors(t);
+  if (authors.length === 0) return false;
+  return authors.every((a) => looksLikePersonName(a) && isValidAuthorName(a, title));
+}
+
 /**
  * 1ページ目テキストから題名と筆頭著者候補を抽出
  */
@@ -166,37 +252,61 @@ export function parseFirstPageTitleAndAuthor(text: string): { title?: string; au
     if (/^arxiv(?:\.org)?[:\s/]/i.test(line)) continue;
     if (/^\[(?:physics|math|cs|gr-qc|hep|cond-mat|astro-ph|quant-ph)[^\]]*\]/i.test(line)) continue;
     if (/^\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}/i.test(line)) continue;
+    if (/^https?:\/\//i.test(line)) continue;
+    if (/^downloaded from/i.test(line)) continue;
     nonHeaderLines.push(line);
   }
 
-  const byIdx = nonHeaderLines.findIndex((l) => /^by\s+[A-Z\p{L}]/iu.test(l));
-  if (byIdx > 0) {
-    const titleLines = nonHeaderLines.slice(0, byIdx);
+  // Explicit by or 著者 / 執筆者 / Authors
+  const explicitIdx = nonHeaderLines.findIndex((l) =>
+    /^(?:by\s+[A-Z\p{L}]|(?:authors?|著者(?:名)?|執筆者)[:：\s])/iu.test(l),
+  );
+  if (explicitIdx > 0) {
+    const titleLines = nonHeaderLines.slice(0, explicitIdx);
     const title = titleLines.join(" ").replace(/\s+/g, " ").trim();
-    const authorLine = nonHeaderLines[byIdx]!.replace(/^by\s+/i, "").trim();
+    const rawAuthor = nonHeaderLines[explicitIdx]!
+      .replace(/^(?:by|(?:authors?|著者(?:名)?|執筆者)[:：])\s*/i, "")
+      .trim();
+    const authors = splitFirstPageAuthors(rawAuthor);
+    const author = authors.find((a) => isValidAuthorName(a, title));
     return {
       title: title || undefined,
-      author: authorLine || undefined,
+      author: author || undefined,
     };
   }
 
-  const abstractIdx = nonHeaderLines.findIndex((l) => /^abstract\b/i.test(l));
-  const candidateLines = abstractIdx > 0 ? nonHeaderLines.slice(0, abstractIdx) : nonHeaderLines.slice(0, 6);
+  const abstractIdx = nonHeaderLines.findIndex((l) =>
+    /^(?:abstract|tl;dr|tldr|要旨|概要|抄録|はじめに|序論|緒言|1\.\s*(?:はじめに|序論|緒言|introduction))\b/i.test(l) ||
+    isHeadingWord(l),
+  );
+  const candidateLines =
+    abstractIdx > 0 ? nonHeaderLines.slice(0, abstractIdx) : nonHeaderLines.slice(0, 8);
 
-  if (candidateLines.length >= 2) {
-    const title = candidateLines[0]!;
-    const author = candidateLines[1]!;
+  if (candidateLines.length === 0) return {};
+
+  let authorLineIdx = -1;
+  for (let i = 1; i < candidateLines.length; i++) {
+    const line = candidateLines[i]!;
+    if (AFFILIATION_LINE_RE.test(line)) continue;
+    if (looksLikeFirstPageAuthorLine(line, candidateLines[0])) {
+      authorLineIdx = i;
+      break;
+    }
+  }
+
+  if (authorLineIdx > 0) {
+    const title = candidateLines.slice(0, authorLineIdx).join(" ").replace(/\s+/g, " ").trim();
+    const line = candidateLines[authorLineIdx]!;
+    const authors = splitFirstPageAuthors(line);
+    const author = authors.find((a) => isValidAuthorName(a, title) && looksLikePersonName(a));
     return {
-      title,
-      author,
-    };
-  } else if (candidateLines.length === 1) {
-    return {
-      title: candidateLines[0],
+      title: title || undefined,
+      author: author || undefined,
     };
   }
 
-  return {};
+  const fullTitle = candidateLines.join(" ").replace(/\s+/g, " ").trim();
+  return { title: fullTitle || undefined };
 }
 
 /**

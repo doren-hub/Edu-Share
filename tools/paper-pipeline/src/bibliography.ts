@@ -1,24 +1,77 @@
 import type { CrossrefWork } from "./crossref.ts";
 import { isScannedPdfText, PDF_TITLE_CHECK_PREFIX_CHARS } from "./pdf-grounding.ts";
 
+const NAME_SUFFIX_RE =
+  /^(?:[Jj][Rr]\.?|[Ss][Rr]\.?|I{2,4}|IV|VI{1,3}|[123](?:st|nd|rd))$/i;
+
+export function isNameSuffix(value: string): boolean {
+  return NAME_SUFFIX_RE.test(value.trim());
+}
+
+const HEADING_WORDS = new Set([
+  "graph", "graphs", "figure", "figures", "table", "tables", "chart", "charts",
+  "index", "indexes", "indices", "contents", "introduction", "introductions",
+  "abstract", "abstracts", "conclusion", "conclusions", "reference", "references",
+  "bibliography", "appendix", "appendixes", "appendices", "overview", "summary",
+  "background", "results", "discussion", "method", "methods", "methodology",
+  "keywords", "acknowledgement", "acknowledgements", "acknowledgment", "acknowledgments",
+  "要旨", "要約", "概要", "目次", "はじめに", "序論", "本論", "結論", "考察",
+  "参考文献", "付録", "謝辞", "図", "表",
+]);
+
+export function isHeadingWord(value: string): boolean {
+  const t = value.trim().toLowerCase().replace(/[:：\s]+$/, "");
+  return HEADING_WORDS.has(t);
+}
+
 /** Standalone UI labels are never bibliographic values. */
 export function isBibliographyLabel(value: string): boolean {
   const text = value.replace(/[:：\s]+$/g, "").trim();
-  return /^(doi|journal|authors?|title|venue|publication|published in|publication year|year|著者|掲載先|掲載誌|タイトル|論文タイトル|発表年|年|不明|unknown|n\/a)$/i.test(text);
+  return /^(doi|journal|authors?|title|venue|publication|published in|publication year|year|著者|掲載先|掲載誌|タイトル|論文タイトル|発表年|年|不明|unknown|n\/a|none|未設定|著者未設定|なし|無|-)$/i.test(text);
+}
+
+export function isInvalidAuthorValue(value: string, title?: string): boolean {
+  const text = value.trim();
+  if (text.length < 2 || text.length > 100) return true;
+  if (/^DOI\s*[:：]?\s*(?:10\.|$)/i.test(text)) return true;
+  if (/^https?:\/\/(?:dx\.)?doi\.org\//i.test(text) || /^10\.\d{4,}\//.test(text)) return true;
+  if (isBibliographyLabel(text)) return true;
+  if (isNameSuffix(text)) return true;
+  if (isHeadingWord(text)) return true;
+  if (/^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/i.test(text)) return true;
+  if (/^(?:[\s\-–—·•]+)?Show\s*Less$/i.test(text)) return true;
+  if (/^[\d\s.,;:\-_/()]+$/.test(text)) return true;
+  if (title) {
+    const tKey = titleKey(title);
+    const aKey = titleKey(text);
+    if (aKey && tKey && (aKey === tKey || (aKey.length >= 8 && tKey.startsWith(aKey)))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isValidAuthorName(value: string, title?: string): boolean {
+  return !isInvalidAuthorValue(value, title);
 }
 
 export function authorsLookInvalid(value: string): boolean {
   const text = value.trim();
-  return (
-    !text ||
-    /^DOI\s*[:：]?\s*10\./i.test(text) ||
-    /^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/i.test(text) ||
-    /^(?:[\s\-–—·•]+)?Show\s*Less$/i.test(text) ||
-    text.split(/[,;·⋅•\n]/).some((part) => isBibliographyLabel(part))
-  );
+  if (!text) return true;
+  if (/^DOI\s*[:：]?\s*(?:10\.|$)/i.test(text)) return true;
+  if (/^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/i.test(text)) return true;
+  if (/^(?:[\s\-–—·•]+)?Show\s*Less$/i.test(text)) return true;
+  if (isNameSuffix(text)) return true;
+  if (isHeadingWord(text)) return true;
+  if (isBibliographyLabel(text)) return true;
+  const parts = text.split(/[,;·⋅•\n]/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 1 && (isNameSuffix(parts[0]!) || isHeadingWord(parts[0]!) || isBibliographyLabel(parts[0]!))) {
+    return true;
+  }
+  return parts.some((part) => isBibliographyLabel(part) && !isNameSuffix(part));
 }
 
-function titleKey(value: string): string {
+export function titleKey(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 

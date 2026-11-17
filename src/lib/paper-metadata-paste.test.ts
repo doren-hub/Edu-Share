@@ -158,3 +158,11 @@ test("Issue #132: splitAuthorNamesForPicklist は Show Less や +N More を著�
   );
   assert.deepEqual(names, ["Alice Smith", "Bob Jones", "Charlie Brown"]);
 });
+
+test("Issue #333: splitAuthorNamesForPicklist は Hugh Everett, III を 1 人として扱い接尾辞単体や DOI・不明を除外する", () => {
+  const names = splitAuthorNamesForPicklist("Hugh Everett, III, John Wheeler, DOI, 不明");
+  assert.deepEqual(names, ["Hugh Everett, III", "John Wheeler"]);
+  assert.deepEqual(splitAuthorNamesForPicklist("III"), []);
+  assert.deepEqual(splitAuthorNamesForPicklist("DOI"), []);
+  assert.deepEqual(splitAuthorNamesForPicklist("不明"), []);
+});

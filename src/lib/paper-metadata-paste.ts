@@ -142,7 +142,14 @@ function looksLikeAuthorLine(s: string): boolean {
 
 export const MAX_METADATA_AUTHORS = 24;
 
-/** カンマ等で区切られた著者名を分割（貼り付け用。Show Less や +N More 等の UI 省略表記は取り除く） */
+const NAME_SUFFIX_PATTERN =
+  /^(?:[Jj][Rr]\.?|[Ss][Rr]\.?|I{2,4}|IV|VI{1,3}|[123](?:st|nd|rd))$/i;
+
+export function isNameSuffix(s: string): boolean {
+  return NAME_SUFFIX_PATTERN.test(s.trim());
+}
+
+/** カンマ等で区切られた著者名を分割（貼り付け用。Show Less や +N More 等の UI 省略表記は取り除き、接尾辞は直前の名前に結合） */
 export function splitAuthorNamesForPicklist(raw: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -157,6 +164,19 @@ export function splitAuthorNamesForPicklist(raw: string): string[] {
       /^(?:(?:\.{2,3}|\u2026)\s*)?\+\s*\d+\s*More$/iu.test(t) ||
       /^(?:[\s\-–—·•]+)?Show\s*less$/iu.test(t)
     ) {
+      continue;
+    }
+    if (isNameSuffix(t)) {
+      if (out.length > 0) {
+        const last = out[out.length - 1]!;
+        seen.delete(last);
+        const combined = `${last}, ${t}`;
+        out[out.length - 1] = combined;
+        seen.add(combined);
+      }
+      continue;
+    }
+    if (/^(?:doi|不明|unknown|n\/a)$/i.test(t)) {
       continue;
     }
     if (seen.has(t)) continue;

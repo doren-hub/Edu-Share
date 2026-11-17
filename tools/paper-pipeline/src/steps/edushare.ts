@@ -1,11 +1,13 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { Locator, Page } from "playwright";
 import { pauseIfBlocked } from "../human.ts";
 import { log, warn } from "../log.ts";
-import { isOtherIndustryValue, pickPaperIndustry, type ExistingPaper } from "../match.ts";
+import { isOtherIndustryValue, pickPaperIndustry, titlesLikelySame, type ExistingPaper } from "../match.ts";
 import {
   stripTldrSnippetNumbers,
   descriptionUsable,
+  doiFromHrefOrText,
   eduShareSciSpaceMetadataPaste,
   extractSciSpaceCardMeta,
   isDummySciSpacePaste,
@@ -22,7 +24,9 @@ import {
   venueLooksLikeBadSciSpaceCapture,
 } from "../scispace-card.ts";
 import {
+  authorFromFilesPaste,
   choosePaperAuthor,
+  FALLBACK_AUTHOR_NAME,
   isAuthorRequiredError,
   materialCarouselShowLabel,
   notebookLmCsvPoolImported,
@@ -31,6 +35,11 @@ import {
   SLIDE_MATERIAL_HEADING,
   VIDEO_MATERIAL_HEADING,
 } from "../edushare-form.ts";
+import { isValidAuthorName, titleKey } from "../bibliography.ts";
+import { PDF_TITLE_CHECK_PREFIX_CHARS } from "../pdf-grounding.ts";
+import { parseFirstPageTitleAndAuthor } from "../content-match.ts";
+import { extractPdfText } from "../pdf-text.ts";
+import { fetchCrossrefWork } from "../crossref.ts";
 import {
   bindEduSharePaper,
   isCompleted,
@@ -324,7 +333,89 @@ async function uploadFormAlert(page: Page): Promise<string> {
   return "";
 }
 
-async function ensurePaperAuthor(page: Page, state: PaperState): Promise<void> {
+export async function ensureExpertNamePicklist(page: Page, name: string): Promise<boolean> {
+  const raw = await page
+    .evaluate(async (val: string) => {
+      const res = await fetch("/api/picklists", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: "expert_name", value: val }),
+      });
+      return JSON.stringify({ ok: res.ok, status: res.status });
+    }, name)
+    .catch(() => "");
+  try {
+    const parsed = JSON.parse(raw) as { ok?: boolean; status?: number };
+    return Boolean(parsed.ok) || parsed.status === 409;
+  } catch {
+    return false;
+  }
+}
+
+async function resolvePaperAuthorContext(
+  state: PaperState,
+  deps = {
+    extractPdfText,
+    fetchCrossrefWork,
+  },
+): Promise<{ pdfText?: string; doiAuthor?: string }> {
+  let pdfText: string | undefined;
+  const pdfPath =
+    state.inboxPdfPath && existsSync(state.inboxPdfPath)
+      ? state.inboxPdfPath
+      : state.paperDir && existsSync(join(state.paperDir, state.filename))
+        ? join(state.paperDir, state.filename)
+        : "";
+  if (pdfPath) {
+    pdfText = await deps.extractPdfText(pdfPath);
+  }
+
+  const fromPaste = authorFromFilesPaste(state.filesPaste, state.title);
+  if (fromPaste) return { pdfText };
+
+  if (pdfText) {
+    const fromPdf = parseFirstPageTitleAndAuthor(pdfText).author;
+    if (fromPdf && isValidAuthorName(fromPdf, state.title)) {
+      return { pdfText };
+    }
+  }
+
+  const prefix = pdfText ? pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS) : "";
+  const doi = state.doi || (prefix ? doiFromHrefOrText(prefix) : "");
+  let doiAuthor: string | undefined;
+  if (doi) {
+    try {
+      const work = await deps.fetchCrossrefWork(doi);
+      if (work && work.authors.length > 0) {
+        const workKey = titleKey(work.title);
+        const titleMatches = state.title
+          ? titlesLikelySame(work.title, state.title)
+          : Boolean(prefix && workKey && titleKey(prefix).includes(workKey));
+        if (titleMatches) {
+          const first = work.authors[0]?.trim();
+          if (first && isValidAuthorName(first, state.title)) {
+            doiAuthor = first;
+          }
+        }
+      }
+    } catch {
+      /* ignore network errors */
+    }
+  }
+
+  return { pdfText, doiAuthor };
+}
+
+export async function ensurePaperAuthor(
+  page: Page,
+  state: PaperState,
+  deps = {
+    extractPdfText,
+    fetchCrossrefWork,
+    ensureExpertNamePicklist,
+  },
+): Promise<void> {
   const select = page.locator("#paper-author-0");
   if (!(await select.isVisible({ timeout: 0 }).catch(() => false))) {
     await select.waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
@@ -337,22 +428,66 @@ async function ensurePaperAuthor(page: Page, state: PaperState): Promise<void> {
   const values = await select.locator("option").evaluateAll((opts) =>
     opts.map((o) => ((o as HTMLOptionElement).value ?? "").trim()),
   );
+
+  const context = await resolvePaperAuthorContext(state, deps);
+
   const choice = choosePaperAuthor({
     current,
     optionValues: values,
     filesPaste: state.filesPaste,
     title: state.title,
     filename: state.filename,
+    pdfText: context.pdfText,
+    doiAuthor: context.doiAuthor,
   });
+
   if (choice.action === "keep") {
     log(`著者（維持）: ${choice.value}`);
+    state.author = choice.value;
+    if (state.paperDir) saveState(state);
     return;
   }
   if (choice.action === "select") {
     await select.selectOption(choice.value);
     log(`著者: ${choice.value}`);
+    state.author = choice.value;
+    if (state.paperDir) saveState(state);
     return;
   }
+
+  // choice.action === "other"
+  // 選択肢にない妥当な著者名の場合、先に選択肢へ追加してから素の名前を選ぶ
+  if (
+    isValidAuthorName(choice.value, state.title) &&
+    choice.value !== FALLBACK_AUTHOR_NAME
+  ) {
+    const added = await deps.ensureExpertNamePicklist(page, choice.value);
+    if (added) {
+      await page
+        .evaluate(
+          ({ selId, name }) => {
+            const sel = document.getElementById(selId) as HTMLSelectElement | null;
+            if (sel && !Array.from(sel.options).some((o) => o.value === name)) {
+              const opt = document.createElement("option");
+              opt.value = name;
+              opt.textContent = name;
+              sel.appendChild(opt);
+            }
+          },
+          { selId: "paper-author-0", name: choice.value },
+        )
+        .catch(() => undefined);
+
+      const selected = await select.selectOption(choice.value).then(() => true).catch(() => false);
+      if (selected) {
+        log(`著者: ${choice.value}`);
+        state.author = choice.value;
+        if (state.paperDir) saveState(state);
+        return;
+      }
+    }
+  }
+
   await select.selectOption("その他");
   await page.waitForTimeout(300);
   const other = page.getByLabel(/著者 1（その他の内容）/);
@@ -361,6 +496,8 @@ async function ensurePaperAuthor(page: Page, state: PaperState): Promise<void> {
   await other.blur();
   await page.waitForTimeout(400);
   log(`著者（その他）: ${choice.value}`);
+  state.author = choice.value;
+  if (state.paperDir) saveState(state);
 }
 
 async function waitForEduSharePaperPage(page: Page, timeoutMs: number): Promise<void> {

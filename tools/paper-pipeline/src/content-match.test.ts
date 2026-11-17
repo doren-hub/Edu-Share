@@ -101,6 +101,76 @@ We re-examine the Schwarzschild problem in general relativity...
   const res2 = parseFirstPageTitleAndAuthor(belText);
   assert.equal(res2.title, "Über das Gravitationsfeld eines Massenpunktes nach der Einsteinschen Theorie");
   assert.equal(res2.author, "Lluís Bel");
+
+  // Issue #333: 日本語の 1 ページ目テキスト（複数著者・所属行の分離）
+  const jaText = `
+深層学習を用いた自然言語処理の動向
+山田 太郎†　佐藤 花子‡
+†東京大学 大学院情報理工学系研究科
+‡京都大学 大学院情報学研究科
+要旨
+本稿では近年の自然言語処理における深層学習技術の発展について概観する。
+`;
+  const resJa = parseFirstPageTitleAndAuthor(jaText);
+  assert.equal(resJa.title, "深層学習を用いた自然言語処理の動向");
+  assert.equal(resJa.author, "山田 太郎");
+
+  // Issue #333: 日本語の明示的な著者ラベル
+  const jaExplicitText = `
+研究開発成果報告書
+著者：田中 次郎
+所属：情報工学研究所
+概要
+本報告では新手法の評価結果を述べる。
+`;
+  const resJaExplicit = parseFirstPageTitleAndAuthor(jaExplicitText);
+  assert.equal(resJaExplicit.title, "研究開発成果報告書");
+  assert.equal(resJaExplicit.author, "田中 次郎");
+
+  // Issue #333: Hugh Everett, III のような接尾辞付き著者が 1 人の名前として扱われる
+  const everettText = `
+Theory of the Universal Wave Function
+Hugh Everett, III
+Department of Physics, Princeton University, Princeton, New Jersey
+Abstract
+This paper proposes a new formulation of quantum mechanics...
+`;
+  const resEverett = parseFirstPageTitleAndAuthor(everettText);
+  assert.equal(resEverett.title, "Theory of the Universal Wave Function");
+  assert.equal(resEverett.author, "Hugh Everett, III");
+
+  // Issue #333: 組織名の著者は受け付けられる
+  const orgText = `
+GPT-4 Technical Report
+OPENAI
+Abstract
+We report the development of GPT-4, a large multimodal model...
+`;
+  const resOrg = parseFirstPageTitleAndAuthor(orgText);
+  assert.equal(resOrg.title, "GPT-4 Technical Report");
+  assert.equal(resOrg.author, "OPENAI");
+
+  // Issue #333: 題名や見出し（Graphs 等）は著者として採用されない
+  const graphsText = `
+Annual Progress Report on Network Analysis
+Graphs
+1. Introduction
+In this report we summarize the results...
+`;
+  const resGraphs = parseFirstPageTitleAndAuthor(graphsText);
+  assert.equal(resGraphs.title, "Annual Progress Report on Network Analysis");
+  assert.equal(resGraphs.author, undefined);
+
+  // Issue #333: 複数行の題名で誤って 2 行目を著者にしない
+  const multiLineTitleText = `
+Deep Learning for
+Natural Language Processing
+Abstract
+This paper provides an overview of deep learning methods for NLP.
+`;
+  const resMulti = parseFirstPageTitleAndAuthor(multiLineTitleText);
+  assert.equal(resMulti.title, "Deep Learning for Natural Language Processing");
+  assert.equal(resMulti.author, undefined);
 });
 
 test("matchPaperContent 実例: 9905030v1 と 9905030v1_ は一致する", () => {

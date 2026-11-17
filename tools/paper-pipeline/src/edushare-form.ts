@@ -1,6 +1,8 @@
 /** Edu Share アップロードフォーム（著者必須など）の判定 */
 
-import { parseYearAuthor } from "./scispace-card.ts";
+import { parseYearAuthor, YEAR_AUTHOR } from "./scispace-card.ts";
+import { isInvalidAuthorValue, isNameSuffix, isValidAuthorName } from "./bibliography.ts";
+import { parseFirstPageTitleAndAuthor } from "./content-match.ts";
 
 const SKIP_AUTHOR_VALUES = new Set(["", "選択してください", "その他"]);
 /** アップロード画面のデモ選択肢。実著者ではない。 */
@@ -83,17 +85,24 @@ export type ChosenPaperAuthor =
   | { action: "select"; value: string }
   | { action: "other"; value: string };
 
-/** デモ著者は捨て、SciSpace 貼り付けの先頭名を優先する */
+/** デモ著者は捨て、SciSpace 貼り付けの先頭名または PDF/DOI 補完を優先する */
 export function choosePaperAuthor(input: {
   current: string;
   optionValues: string[];
   filesPaste: string;
   title: string;
   filename: string;
+  pdfText?: string;
+  doiAuthor?: string;
 }): ChosenPaperAuthor {
   const current = input.current.trim();
-  const fromPaste = authorFromFilesPaste(input.filesPaste);
-  const currentOk = Boolean(current) && current !== "その他" && !isDummyAuthorValue(current);
+  const fromPaste = authorFromFilesPaste(input.filesPaste, input.title);
+  const currentOk =
+    Boolean(current) &&
+    current !== "その他" &&
+    !current.startsWith("その他（") &&
+    !isDummyAuthorValue(current) &&
+    isValidAuthorName(current, input.title);
   if (currentOk && (!fromPaste || authorNamesMatch(current, fromPaste))) {
     return { action: "keep", value: current };
   }
@@ -103,6 +112,8 @@ export function choosePaperAuthor(input: {
       filesPaste: input.filesPaste,
       title: input.title,
       filename: input.filename,
+      pdfText: input.pdfText,
+      doiAuthor: input.doiAuthor,
     });
   const match = input.optionValues
     .map((v) => v.trim())
@@ -112,6 +123,7 @@ export function choosePaperAuthor(input: {
         !SKIP_AUTHOR_VALUES.has(v) &&
         !v.startsWith("その他") &&
         !isDummyAuthorValue(v) &&
+        (v === wanted || isValidAuthorName(v, input.title)) &&
         authorNamesMatch(v, wanted),
     );
   if (match) return { action: "select", value: match };
@@ -123,13 +135,32 @@ export const FALLBACK_AUTHOR_NAME = "著者未設定";
 export function pickAuthorSelectValue(optionValues: string[]): string | null {
   for (const raw of optionValues) {
     const v = raw.trim();
-    if (!v || SKIP_AUTHOR_VALUES.has(v) || v.startsWith("その他") || isDummyAuthorValue(v)) continue;
+    if (!v || SKIP_AUTHOR_VALUES.has(v) || v.startsWith("その他") || isDummyAuthorValue(v) || !isValidAuthorName(v)) continue;
     return v;
   }
   return null;
 }
 
-export function authorFromFilesPaste(paste: string): string {
+export function splitAuthors(raw: string): string[] {
+  const parts = raw
+    .split(/[,，、;；／/\n]/)
+    .map((p) => cleanAuthorName(p))
+    .filter(Boolean);
+  const result: string[] = [];
+  for (const part of parts) {
+    if (isNameSuffix(part)) {
+      if (result.length > 0) {
+        result[result.length - 1] = `${result[result.length - 1]}, ${part}`;
+      }
+      continue;
+    }
+    result.push(part);
+  }
+  return result;
+}
+
+/** 従来のパイプラインと同じ方法で先頭著者文字列を取り出す（バリデーション前・監査用。DOI単独等も検出のためそのまま返す） */
+export function rawAuthorFromFilesPaste(paste: string): string {
   for (const line of paste.split(/\r?\n/)) {
     const m = line.match(/^\s*(?:authors?|著者(?:名)?)\s*[:：]\s*(.+)$/i);
     if (!m) continue;
@@ -137,10 +168,41 @@ export function authorFromFilesPaste(paste: string): string {
     if (first.length >= 2 && !isDummyAuthorValue(first)) return first.slice(0, 80);
   }
   for (const line of paste.split(/\r?\n/)) {
+    const yaMatch = line.trim().match(YEAR_AUTHOR);
+    if (!yaMatch) continue;
+    let rawAuthors = yaMatch[2]!
+      .replace(
+        /^DOI\s*[:：]?\s*(?:https?:\/\/(?:dx\.)?doi\.org\/|10\.\d{4,}\/[^\s\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65\-–—]+)?\s*[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65\-–—]?\s*/iu,
+        "",
+      )
+      .trim();
+    if (!rawAuthors) rawAuthors = yaMatch[2]!.trim(); // e.g. "DOI" itself
+    const first = cleanAuthorName(rawAuthors.split(/[,，、;／/]/)[0]?.trim() ?? "");
+    if (first.length >= 2 && !isDummyAuthorValue(first)) return first.slice(0, 80);
+  }
+  return "";
+}
+
+export function authorFromFilesPaste(paste: string, title?: string): string {
+  for (const line of paste.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:authors?|著者(?:名)?)\s*[:：]\s*(.+)$/i);
+    if (!m) continue;
+    const authors = splitAuthors(m[1]);
+    for (const a of authors) {
+      if (a.length >= 2 && !isDummyAuthorValue(a) && isValidAuthorName(a, title)) {
+        return a.slice(0, 80);
+      }
+    }
+  }
+  for (const line of paste.split(/\r?\n/)) {
     const ya = parseYearAuthor(line);
     if (!ya) continue;
-    const first = cleanAuthorName(ya.authors.split(/[,，、;／/]/)[0]?.trim() ?? "");
-    if (first.length >= 2 && !isDummyAuthorValue(first)) return first.slice(0, 80);
+    const authors = splitAuthors(ya.authors);
+    for (const a of authors) {
+      if (a.length >= 2 && !isDummyAuthorValue(a) && isValidAuthorName(a, title)) {
+        return a.slice(0, 80);
+      }
+    }
   }
   return "";
 }
@@ -149,9 +211,23 @@ export function fallbackAuthorName(input: {
   filesPaste: string;
   title: string;
   filename: string;
+  pdfText?: string;
+  doiAuthor?: string;
 }): string {
-  const fromPaste = authorFromFilesPaste(input.filesPaste);
+  const fromPaste = authorFromFilesPaste(input.filesPaste, input.title);
   if (fromPaste) return fromPaste;
+
+  if (input.pdfText) {
+    const parsed = parseFirstPageTitleAndAuthor(input.pdfText);
+    if (parsed.author && isValidAuthorName(parsed.author, input.title)) {
+      return parsed.author.slice(0, 80);
+    }
+  }
+
+  if (input.doiAuthor && isValidAuthorName(input.doiAuthor, input.title)) {
+    return input.doiAuthor.slice(0, 80);
+  }
+
   return FALLBACK_AUTHOR_NAME;
 }
 
