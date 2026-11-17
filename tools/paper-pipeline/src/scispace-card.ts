@@ -20,7 +20,7 @@ export {
 } from "./pdf-grounding.ts";
 
 const MIDDLE_DOT = String.raw`[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]`;
-const YEAR_AUTHOR = new RegExp(`^((?:19|20)\\d{2})\\s*${MIDDLE_DOT}\\s*(.+)$`, "u");
+export const YEAR_AUTHOR = new RegExp(`^((?:19|20)\\d{2})\\s*${MIDDLE_DOT}\\s*(.+)$`, "u");
 
 const NAV =
   /^(home|agent gallery|templates|files(\s*\(\d+\))?|notebooks(\s*\(\d+\))?|chats(\s*\(\d+\))?|sort|export|share|upload pdfs|pdf upload|column settings|untitled folder|tools|lite|standard quality|en|tl;dr)$/i;
@@ -391,7 +391,9 @@ export function replaceYearAuthorLine(paste: string, yearAuthorLine: string): st
 export function parseYearAuthor(line: string): { year: string; authors: string } | null {
   const m = line.trim().match(YEAR_AUTHOR);
   if (!m) return null;
-  let authors = m[2]!.replace(/^DOI\s*[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]\s*/iu, "").trim();
+  let authors = m[2]!
+    .replace(/^DOI\s*[:：]?\s*(?:https?:\/\/(?:dx\.)?doi\.org\/|10\.\d{4,}\/[^\s\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65\-–—]+)?\s*[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65\-–—]?\s*/iu, "")
+    .trim();
   authors = stripShowLess(authors);
   if (authorsLookInvalid(authors)) return null;
   return { year: m[1]!, authors };

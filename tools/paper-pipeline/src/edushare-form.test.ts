@@ -230,3 +230,139 @@ test("Issue #132: authorFromFilesPaste と choosePaperAuthor は +N More を著�
     { action: "other", value: "Vardhan Dongre" },
   );
 });
+
+test("Issue #333: authorFromFilesPaste は DOI, III, 不明, Graphs を除外し Hugh Everett, III や OPENAI を受け付ける", () => {
+  assert.equal(authorFromFilesPaste("Title: Foo\nAuthors: DOI\n"), "");
+  assert.equal(authorFromFilesPaste("Title: Foo\n2024 ⋅ DOI\n"), "");
+  assert.equal(authorFromFilesPaste("Title: Foo\n2024 ⋅ III\n"), "");
+  assert.equal(authorFromFilesPaste("Title: Foo\n著者: 不明\n"), "");
+  assert.equal(authorFromFilesPaste("Title: Foo\nAuthors: Graphs\n"), "");
+
+  assert.equal(authorFromFilesPaste("Title: Quantum\n2024 ⋅ Hugh Everett, III\n"), "Hugh Everett, III");
+  assert.equal(authorFromFilesPaste("Title: Quantum\nAuthors: Hugh Everett, III, John Wheeler\n"), "Hugh Everett, III");
+  assert.equal(authorFromFilesPaste("Title: GPT\n2024 ⋅ OPENAI\n"), "OPENAI");
+  assert.equal(authorFromFilesPaste("Title: Rover\nAuthors: nasa\n"), "nasa");
+});
+
+test("Issue #333: fallbackAuthorName と choosePaperAuthor: Files に著者がなく PDF 1 ページ目にあるとき PDF 著者を補う（日本語・英語）", () => {
+  const enPdfText = `
+Deep Residual Learning for Image Recognition
+Kaiming He
+Xiangyu Zhang
+Microsoft Research
+Abstract
+Deeper neural networks are more difficult to train...
+`;
+  const jaPdfText = `
+深層学習を用いた自然言語処理の動向
+山田 太郎†　佐藤 花子‡
+†東京大学
+要旨
+本稿では近年の発展を述べる。
+`;
+
+  // 英語 PDF
+  assert.equal(
+    fallbackAuthorName({
+      filesPaste: "paper.pdf\nDeep Residual Learning",
+      title: "Deep Residual Learning for Image Recognition",
+      filename: "paper.pdf",
+      pdfText: enPdfText,
+    }),
+    "Kaiming He",
+  );
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "",
+      optionValues: ["", "その他"],
+      filesPaste: "paper.pdf\nDeep Residual Learning",
+      title: "Deep Residual Learning for Image Recognition",
+      filename: "paper.pdf",
+      pdfText: enPdfText,
+    }),
+    { action: "other", value: "Kaiming He" },
+  );
+
+  // 日本語 PDF
+  assert.equal(
+    fallbackAuthorName({
+      filesPaste: "paper.pdf\n深層学習",
+      title: "深層学習を用いた自然言語処理の動向",
+      filename: "paper.pdf",
+      pdfText: jaPdfText,
+    }),
+    "山田 太郎",
+  );
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "",
+      optionValues: ["", "その他"],
+      filesPaste: "paper.pdf\n深層学習",
+      title: "深層学習を用いた自然言語処理の動向",
+      filename: "paper.pdf",
+      pdfText: jaPdfText,
+    }),
+    { action: "other", value: "山田 太郎" },
+  );
+});
+
+test("Issue #333: fallbackAuthorName と choosePaperAuthor: Files にも PDF 1 ページ目にも著者がなく DOI 照会で著者が返るとき DOI 著者を補う", () => {
+  const scannedPdfText = "Image only scanned document without extracted text\n1. Introduction";
+  assert.equal(
+    fallbackAuthorName({
+      filesPaste: "paper.pdf\nTitle",
+      title: "Title",
+      filename: "paper.pdf",
+      pdfText: scannedPdfText,
+      doiAuthor: "Jane Doe",
+    }),
+    "Jane Doe",
+  );
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "",
+      optionValues: ["", "その他"],
+      filesPaste: "paper.pdf\nTitle",
+      title: "Title",
+      filename: "paper.pdf",
+      pdfText: scannedPdfText,
+      doiAuthor: "Jane Doe",
+    }),
+    { action: "other", value: "Jane Doe" },
+  );
+});
+
+test("Issue #333: choosePaperAuthor: 現在値が DOI や III などのおかしい値の場合は維持せずフォールバックする", () => {
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "DOI",
+      optionValues: ["", "その他"],
+      filesPaste: "",
+      title: "Title",
+      filename: "paper.pdf",
+      doiAuthor: "Jane Doe",
+    }),
+    { action: "other", value: "Jane Doe" },
+  );
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "III",
+      optionValues: ["", "その他"],
+      filesPaste: "",
+      title: "Title",
+      filename: "paper.pdf",
+      doiAuthor: "Hugh Everett, III",
+    }),
+    { action: "other", value: "Hugh Everett, III" },
+  );
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "不明",
+      optionValues: ["", "その他"],
+      filesPaste: "",
+      title: "Title",
+      filename: "paper.pdf",
+    }),
+    { action: "other", value: FALLBACK_AUTHOR_NAME },
+  );
+});

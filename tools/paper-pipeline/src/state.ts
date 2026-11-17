@@ -43,6 +43,7 @@ export type PaperState = {
   eduShareTestUrl: string;
   eduShareTestId: string;
   title: string;
+  author?: string;
   doi: string;
   venue: string;
   filesPaste: string;
@@ -85,6 +86,7 @@ export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath"
     eduShareTestUrl: "",
     eduShareTestId: "",
     title: "",
+    author: "",
     doi: "",
     venue: "",
     filesPaste: "",

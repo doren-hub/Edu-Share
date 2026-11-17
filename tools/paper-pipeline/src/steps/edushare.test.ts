@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Page } from "playwright";
 import { notebookLmCsvStatusLine } from "../edushare-form.ts";
 import { emptyState, markEduUploaded } from "../state.ts";
-import { ensureIndustry, importNotebookLmCsv, notebookLmCsvCardText, usableEduShareTitle, verifyEduSharePaper } from "./edushare.ts";
+import { ensureIndustry, ensurePaperAuthor, importNotebookLmCsv, notebookLmCsvCardText, usableEduShareTitle, verifyEduSharePaper } from "./edushare.ts";
 
 // 見出し → 説明 p → 状態 p → input。両欄の親には rounded クラスがある想定。
 function titleNode(status: string): Element {
@@ -355,6 +355,267 @@ test("CSVプールURLを開けず手元に単語帳CSVがあるときはエラ�
     assert.ok(state.eduUploaded?.includes("nlm-quiz"));
     const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
     assert.ok(!saved.eduUploaded?.includes("nlm-flashcards"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function createFakeAuthorPage(initialOptions: string[]) {
+  let selectedOption = "";
+  let otherFilled = "";
+  const currentOptions = [...initialOptions];
+
+  const fakeSelect = {
+    isVisible: async () => true,
+    waitFor: async () => {},
+    inputValue: async () => selectedOption,
+    locator: () => ({
+      evaluateAll: async (fn: any) =>
+        fn(currentOptions.map((v) => ({ value: v }))),
+    }),
+    selectOption: async (opt: any) => {
+      const val = typeof opt === "string" ? opt : opt.value || "";
+      selectedOption = val;
+      return [val];
+    },
+  };
+
+  const fakeOther = {
+    waitFor: async () => {},
+    fill: async (text: string) => {
+      otherFilled = text;
+    },
+    blur: async () => {},
+  };
+
+  const page = {
+    locator: (sel: string) => {
+      if (sel === "#paper-author-0") return fakeSelect;
+      throw new Error(`Unexpected selector: ${sel}`);
+    },
+    getByLabel: (regex: RegExp) => {
+      if (regex.test("著者 1（その他の内容）")) return fakeOther;
+      throw new Error(`Unexpected label query: ${regex}`);
+    },
+    waitForTimeout: async () => {},
+    evaluate: async (fn: any, arg: any) => {
+      if (typeof fn === "function" && arg?.selId === "paper-author-0") {
+        if (!currentOptions.includes(arg.name)) {
+          currentOptions.push(arg.name);
+        }
+      }
+    },
+  } as unknown as Page;
+
+  return {
+    page,
+    getSelected: () => selectedOption,
+    getOtherFilled: () => otherFilled,
+    getOptions: () => currentOptions,
+  };
+}
+
+test("Issue #333: ensurePaperAuthor: 選択肢にない妥当な著者名のとき、選択肢に追加してから素の名前を選ぶ", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-author-add-"));
+  try {
+    const state = emptyState({ filename: "resnet.pdf", inboxPdfPath: "", paperDir: root });
+    state.filesPaste = "resnet.pdf\nTitle: Deep Residual Learning\nAuthors: Kaiming He, Xiangyu Zhang\n";
+    state.title = "Deep Residual Learning";
+
+    const { page, getSelected } = createFakeAuthorPage(["", "Alice Smith", "その他"]);
+    let picklistAddedName = "";
+    const fakeDeps = {
+      extractPdfText: async () => undefined,
+      fetchCrossrefWork: async () => null,
+      ensureExpertNamePicklist: async (_page: Page, name: string) => {
+        picklistAddedName = name;
+        return true;
+      },
+    };
+
+    await ensurePaperAuthor(page, state, fakeDeps);
+
+    assert.equal(picklistAddedName, "Kaiming He");
+    assert.equal(getSelected(), "Kaiming He");
+    assert.equal(state.author, "Kaiming He");
+
+    const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+    assert.equal(saved.author, "Kaiming He");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Issue #333: ensurePaperAuthor: 選択肢への追加が失敗したとき、「その他」の自由入力に倒れる", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-author-fail-"));
+  try {
+    const state = emptyState({ filename: "resnet.pdf", inboxPdfPath: "", paperDir: root });
+    state.filesPaste = "resnet.pdf\nTitle: Deep Residual Learning\nAuthors: Kaiming He, Xiangyu Zhang\n";
+    state.title = "Deep Residual Learning";
+
+    const { page, getSelected, getOtherFilled } = createFakeAuthorPage(["", "Alice Smith", "その他"]);
+    const fakeDeps = {
+      extractPdfText: async () => undefined,
+      fetchCrossrefWork: async () => null,
+      ensureExpertNamePicklist: async () => false, // 失敗
+    };
+
+    await ensurePaperAuthor(page, state, fakeDeps);
+
+    assert.equal(getSelected(), "その他");
+    assert.equal(getOtherFilled(), "Kaiming He");
+    assert.equal(state.author, "Kaiming He");
+
+    const saved = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
+    assert.equal(saved.author, "Kaiming He");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Issue #333: ensurePaperAuthor: 著者未設定とおかしい値は、選択肢に追加されない", async () => {
+  for (const badAuthor of ["著者未設定", "DOI", "III", "不明", "Graphs"]) {
+    const root = mkdtempSync(join(tmpdir(), "ensure-author-bad-"));
+    try {
+      const state = emptyState({ filename: "paper.pdf", inboxPdfPath: "", paperDir: root });
+      state.filesPaste = badAuthor === "著者未設定" ? "" : `paper.pdf\nAuthors: ${badAuthor}\n`;
+      state.title = "Title";
+
+      const { page, getSelected, getOtherFilled } = createFakeAuthorPage(["", "Alice Smith", "その他"]);
+      let picklistAttempted = false;
+      const fakeDeps = {
+        extractPdfText: async () => undefined,
+        fetchCrossrefWork: async () => null,
+        ensureExpertNamePicklist: async () => {
+          picklistAttempted = true;
+          return true;
+        },
+      };
+
+      await ensurePaperAuthor(page, state, fakeDeps);
+
+      assert.equal(picklistAttempted, false, `${badAuthor} は picklist に追加されてはならない`);
+      assert.equal(getSelected(), "その他");
+      assert.equal(getOtherFilled(), "著者未設定");
+      assert.equal(state.author, "著者未設定");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Issue #333: ensurePaperAuthor: Files に著者がなく PDF 1 ページ目から補完して選択肢に追加・選択する", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-author-pdf-"));
+  try {
+    const pdfPath = join(root, "paper.pdf");
+    writeFileSync(pdfPath, "dummy-pdf");
+    const state = emptyState({ filename: "paper.pdf", inboxPdfPath: pdfPath, paperDir: root });
+    state.filesPaste = "paper.pdf\nタイトルのみで著者行なし";
+    state.title = "自然言語処理の研究";
+
+    const pdfText = `
+自然言語処理の研究
+山田 太郎†
+†東京大学
+要旨
+概要本文...
+`;
+    const { page, getSelected } = createFakeAuthorPage(["", "その他"]);
+    let addedName = "";
+    const fakeDeps = {
+      extractPdfText: async () => pdfText,
+      fetchCrossrefWork: async () => null,
+      ensureExpertNamePicklist: async (_page: Page, name: string) => {
+        addedName = name;
+        return true;
+      },
+    };
+
+    await ensurePaperAuthor(page, state, fakeDeps);
+
+    assert.equal(addedName, "山田 太郎");
+    assert.equal(getSelected(), "山田 太郎");
+    assert.equal(state.author, "山田 太郎");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Issue #333: ensurePaperAuthor: Files にも PDF にも著者がなく DOI 照会から補完する", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-author-doi-"));
+  try {
+    const state = emptyState({ filename: "paper.pdf", inboxPdfPath: join(root, "paper.pdf"), paperDir: root });
+    state.filesPaste = "paper.pdf\n著者なし";
+    state.title = "Attention Is All You Need";
+    state.doi = "10.1234/test.doi";
+
+    const { page, getSelected } = createFakeAuthorPage(["", "その他"]);
+    let addedName = "";
+    const fakeDeps = {
+      extractPdfText: async () => "Image only document",
+      fetchCrossrefWork: async (doi: string) => ({
+        title: "Attention Is All You Need",
+        authors: ["Ashish Vaswani", "Noam Shazeer"],
+        year: "2017",
+        venue: "NeurIPS",
+        doi,
+      }),
+      ensureExpertNamePicklist: async (_page: Page, name: string) => {
+        addedName = name;
+        return true;
+      },
+    };
+
+    await ensurePaperAuthor(page, state, fakeDeps);
+
+    assert.equal(addedName, "Ashish Vaswani");
+    assert.equal(getSelected(), "Ashish Vaswani");
+    assert.equal(state.author, "Ashish Vaswani");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Issue #333: ensurePaperAuthor: 参考文献の引用 DOI や題名不一致の Crossref は採用せず著者未設定に倒す", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-author-ref-"));
+  try {
+    const pdfPath = join(root, "paper.pdf");
+    writeFileSync(pdfPath, "dummy-pdf");
+    // inboxPdfPath は存在しない古いパスだが paperDir/filename に実体があるケース
+    const state = emptyState({
+      filename: "paper.pdf",
+      inboxPdfPath: join(root, "nonexistent-inbox.pdf"),
+      paperDir: root,
+    });
+    state.filesPaste = "paper.pdf\n著者なし";
+    state.title = "Target Paper Title";
+
+    // 3500 文字以降の参考文献にだけ他論文の DOI がある
+    const pdfText = "B".repeat(3500) + "\nReferences\n[1] https://doi.org/10.9999/other.cited.ref\n";
+
+    const { page, getSelected, getOtherFilled } = createFakeAuthorPage(["", "その他"]);
+    let picklistAdded = false;
+    const fakeDeps = {
+      extractPdfText: async () => pdfText,
+      fetchCrossrefWork: async () => ({
+        title: "Completely Different Title",
+        authors: ["Cited Person"],
+        year: "2015",
+        venue: "Cited Venue",
+        doi: "10.9999/other.cited.ref",
+      }),
+      ensureExpertNamePicklist: async () => {
+        picklistAdded = true;
+        return true;
+      },
+    };
+
+    await ensurePaperAuthor(page, state, fakeDeps);
+
+    assert.equal(picklistAdded, false);
+    assert.equal(getSelected(), "その他");
+    assert.equal(getOtherFilled(), "著者未設定");
+    assert.equal(state.author, "著者未設定");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
