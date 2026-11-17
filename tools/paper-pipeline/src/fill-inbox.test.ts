@@ -220,6 +220,7 @@ test("listLibraryPdfs: EPERM と -1743 のとき専用の FillInboxPermissionErr
   assert.throws(
     () => {
       listLibraryPdfs("/protected", {
+        platform: "darwin",
         readdir: () => {
           throw epermError;
         },
@@ -245,6 +246,31 @@ test("listLibraryPdfs: EPERM と -1743 のとき専用の FillInboxPermissionErr
   assert.ok(finderCalled, "readdir が EPERM の際に Finder 経由が試みられること");
 });
 
+test("listLibraryPdfs: Linux 等の非 darwin 環境で EPERM のときは Finder を呼ばず直接 FillInboxPermissionError を投げる", () => {
+  const epermError = Object.assign(new Error("operation not permitted, scandir '/protected'"), { code: "EPERM" });
+  let finderCalled = false;
+  assert.throws(
+    () => {
+      listLibraryPdfs("/protected", {
+        platform: "linux",
+        readdir: () => {
+          throw epermError;
+        },
+        execFinder: () => {
+          finderCalled = true;
+          return "";
+        },
+      });
+    },
+    (err: unknown) => {
+      assert.ok(err instanceof FillInboxPermissionError);
+      assert.ok(err.message.includes("EPERM / -1743"));
+      return true;
+    },
+  );
+  assert.equal(finderCalled, false, "非 darwin 環境では Finder を呼ばないこと");
+});
+
 test("copyPdfsToInbox: copyFileSync が EPERM で Finder が -1743 のとき FillInboxPermissionError を投げる", () => {
   const epermError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
   const appleEventsError = Object.assign(new Error("Command failed"), {
@@ -255,6 +281,7 @@ test("copyPdfsToInbox: copyFileSync が EPERM で Finder が -1743 のとき Fil
   assert.throws(
     () => {
       copyPdfsToInbox(pdfs, "/inbox", {
+        platform: "darwin",
         copyFile: () => {
           throw epermError;
         },
@@ -291,6 +318,7 @@ test("runFillInboxCli: EPERM と -1743 で終了コード 17 と 1〜2 行のエ
     const code = runFillInboxCli(
       ["--source", "/mock/library", "--inbox", inbox, "--work", work],
       {
+        platform: "darwin",
         stat: () => ({ mtimeMs: 100 }),
         readdir: () => {
           throw epermError;

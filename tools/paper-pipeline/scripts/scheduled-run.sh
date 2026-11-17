@@ -179,8 +179,13 @@ NEEDS_FILL=false
 if echo "$DECISION_ENV" | grep -q '^NEEDS_FILL=true'; then
   NEEDS_FILL=true
 fi
-INBOX_COUNT=$(echo "$DECISION_ENV" | grep '^INBOX_COUNT=' | head -n 1 | cut -d= -f2 || true)
-INBOX_COUNT="${INBOX_COUNT:-0}"
+RAW_INBOX_COUNT=$(echo "$DECISION_ENV" | grep '^INBOX_COUNT=' | head -n 1 | cut -d= -f2 || true)
+if [ -z "$RAW_INBOX_COUNT" ]; then
+  log "警告: DECISION_ENV から INBOX_COUNT を取得できませんでした。安全のため 0 件として扱います"
+  INBOX_COUNT=0
+else
+  INBOX_COUNT="$RAW_INBOX_COUNT"
+fi
 
 # -------------------------------------------------------------
 # 3. inbox 未処理論文の補充判定

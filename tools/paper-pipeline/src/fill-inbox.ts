@@ -25,6 +25,7 @@ export type FillInboxDeps = {
   stat?: (path: string) => { mtimeMs: number };
   copyFile?: (src: string, dest: string) => void;
   execFinder?: (script: string, args: string[]) => string;
+  platform?: NodeJS.Platform;
 };
 
 const FINDER_LIST_SCRIPT = `
@@ -175,12 +176,13 @@ export function listLibraryPdfsViaFinder(root: string, deps?: FillInboxDeps): So
 function walkReadable(dir: string, out: SourcePdf[], deps?: FillInboxDeps): void {
   const readdirFn = deps?.readdir ?? ((p) => readdirSync(p, { withFileTypes: true }));
   const statFn = deps?.stat ?? statSync;
+  const platform = deps?.platform ?? process.platform;
 
   let entries: Dirent[];
   try {
     entries = readdirFn(dir, { withFileTypes: true });
   } catch (e) {
-    if (process.platform === "darwin" && isEperm(e)) {
+    if (platform === "darwin" && isEperm(e)) {
       out.push(...listLibraryPdfsViaFinder(dir, deps));
       return;
     }
@@ -201,7 +203,7 @@ function walkReadable(dir: string, out: SourcePdf[], deps?: FillInboxDeps): void
     try {
       mtimeMs = statFn(abs).mtimeMs;
     } catch (e) {
-      if (process.platform === "darwin" && isEperm(e)) {
+      if (platform === "darwin" && isEperm(e)) {
         try {
           const viaFinder = listOneFolderViaFinder(dir, deps).pdfs.find((pdf) => pdf.filename === ent.name);
           if (viaFinder) mtimeMs = viaFinder.mtimeMs;
@@ -340,6 +342,7 @@ function copyViaFinder(src: string, inboxDir: string, deps?: FillInboxDeps): voi
 /** 元のライブラリは残し、inbox 直下へコピーする。同名が既にあればスキップ */
 export function copyPdfsToInbox(pdfs: readonly SourcePdf[], inboxDir: string, deps?: FillInboxDeps): SourcePdf[] {
   const copyFn = deps?.copyFile ?? copyFileSync;
+  const platform = deps?.platform ?? process.platform;
   const copied: SourcePdf[] = [];
   for (const pdf of pdfs) {
     const dest = join(inboxDir, pdf.filename);
@@ -347,7 +350,7 @@ export function copyPdfsToInbox(pdfs: readonly SourcePdf[], inboxDir: string, de
     try {
       copyFn(pdf.absPath, dest);
     } catch (e) {
-      if (process.platform === "darwin" && isEperm(e)) {
+      if (platform === "darwin" && isEperm(e)) {
         try {
           copyViaFinder(pdf.absPath, inboxDir, deps);
         } catch (finderErr) {

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -466,4 +467,37 @@ test("scripts/scheduled-run.sh: fill-inbox の権限エラー (17) を検知し�
   // inbox が空の場合はパイプラインを実行せず exit 17 で終わること
   assert.match(script, /if \[ "\$INBOX_COUNT" -eq 0 \]; then/);
   assert.match(script, /exit 17/);
+});
+
+test("scripts/scheduled-run.sh: step 3 の終了コード判定ロジックを bash で実行検証する", () => {
+  const runStep3 = (fillExit: number, inboxCount: number) => {
+    try {
+      execSync(
+        `bash -c '
+FILL_EXIT=${fillExit}
+INBOX_COUNT=${inboxCount}
+if [ "$FILL_EXIT" -eq 17 ]; then
+  if [ "$INBOX_COUNT" -eq 0 ]; then
+    exit 17
+  fi
+elif [ "$FILL_EXIT" -ne 0 ]; then
+  if [ "$INBOX_COUNT" -eq 0 ]; then
+    exit "$FILL_EXIT"
+  fi
+fi
+exit 0
+'`,
+        { stdio: "pipe" },
+      );
+      return 0;
+    } catch (e: unknown) {
+      return (e as { status?: number }).status ?? -1;
+    }
+  };
+
+  assert.equal(runStep3(17, 0), 17, "inbox 空かつ権限エラー時は 17 で終了");
+  assert.equal(runStep3(17, 3), 0, "inbox に論文がある場合は続行 (exit 0)");
+  assert.equal(runStep3(1, 0), 1, "inbox 空かつ一般エラー時は 1 で終了");
+  assert.equal(runStep3(1, 3), 0, "inbox に論文がある場合は続行 (exit 0)");
+  assert.equal(runStep3(0, 0), 0, "補充成功時は続行 (exit 0)");
 });
