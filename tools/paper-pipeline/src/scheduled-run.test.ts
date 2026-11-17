@@ -1,11 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   countInboxPdfs,
   decideScheduledRun,
   EXIT_ALREADY_RUNNING,
   EXIT_INBOX_ERROR,
   EXIT_LOGIN_REQUIRED,
+  EXIT_PERMISSION_ERROR,
   EXIT_PROCESS_CHECK_ERROR,
   getRunningProcesses,
   isPipelineOrChromeRunning,
@@ -433,4 +439,113 @@ test("runCatchingLogin: noRevealLogin が偽のときは reveal を呼んで再�
 
   assert.equal(revealCount, 1);
   assert.equal(result.value, "success_after_login");
+});
+
+test("EXIT_PERMISSION_ERROR: 終了コード 17 の定数値が保持され既存コードと衝突しない", () => {
+  assert.equal(EXIT_PERMISSION_ERROR, 17);
+  const knownCodes = [
+    EXIT_ALREADY_RUNNING, // 10
+    EXIT_QUOTA, // 11
+    EXIT_QUOTA_UNAVAILABLE, // 12
+    EXIT_INBOX_ERROR, // 13
+    EXIT_PROCESS_CHECK_ERROR, // 14
+    EXIT_LOGIN_REQUIRED, // 15
+    16, // EXIT_WAITING_TIMEOUT
+  ];
+  assert.ok(!knownCodes.includes(EXIT_PERMISSION_ERROR), "既存の終了コード (11, 12, 15, 16 等) と重複しないこと");
+});
+
+test("scripts/scheduled-run.sh: fill-inbox の権限エラー (17) を検知し空 inbox のときは exit 17 する", () => {
+  const scriptPath = fileURLToPath(new URL("../scripts/scheduled-run.sh", import.meta.url));
+  const script = readFileSync(scriptPath, "utf8");
+
+  // INBOX_COUNT を DECISION_ENV から取得していること
+  assert.match(script, /INBOX_COUNT=\$\(echo "\$DECISION_ENV" \| grep '\^INBOX_COUNT='/);
+
+  // FILL_EXIT -eq 17 で「補充できません（macOS の許可が必要です）」を出力すること
+  assert.match(script, /if \[ "\$FILL_EXIT" -eq 17 \]; then/);
+  assert.match(script, /log "警告: 補充できません（macOS の許可が必要です）"/);
+
+  // inbox が空の場合はパイプラインを実行せず exit 17 で終わること
+  assert.match(script, /if \[ "\$INBOX_COUNT" -eq 0 \]; then/);
+  assert.match(script, /exit 17/);
+});
+
+test("scripts/scheduled-run.sh: 実スクリプトをスタブ npm で実行し、空 inbox での権限エラー (17) 終了を検証する", () => {
+  const scriptPath = fileURLToPath(new URL("../scripts/scheduled-run.sh", import.meta.url));
+  const tmp = mkdtempSync(join(tmpdir(), "test-sched-run-"));
+  const mockBin = join(tmp, "bin");
+  mkdirSync(mockBin, { recursive: true });
+
+  const runWithMockNpm = (inboxCount: number, fillExit: number) => {
+    const mockNpm = join(mockBin, "npm");
+    writeFileSync(
+      mockNpm,
+      `#!/bin/sh
+if [ "$1" = "run" ] && [ "$2" = "--silent" ] && [ "$3" = "scheduled-decide" ]; then
+  echo "ACTION=run"
+  echo "NEEDS_FILL=true"
+  echo "INBOX_COUNT=${inboxCount}"
+  echo "EXIT_CODE=0"
+  echo "DETAIL=ok"
+  exit 0
+fi
+if [ "$1" = "run" ] && [ "$2" = "fill-inbox" ]; then
+  echo "補充元ディレクトリの読み込み権限がありません (macOS EPERM / -1743)" >&2
+  exit ${fillExit}
+fi
+if [ "$1" = "start" ]; then
+  echo "pipeline started successfully"
+  exit 0
+fi
+exit 0
+`,
+    );
+    chmodSync(mockNpm, 0o755);
+
+    const lockDir = join(tmp, `lock-${inboxCount}-${fillExit}`);
+    const logFile = join(tmp, `sched-${inboxCount}-${fillExit}.log`);
+    try {
+      execSync(`bash "${scriptPath}"`, {
+        env: {
+          ...process.env,
+          PATH: `${mockBin}:${process.env.PATH}`,
+          SCHEDULED_LOCK_DIR: lockDir,
+          SCHEDULED_LOG_FILE: logFile,
+        },
+        stdio: "pipe",
+      });
+      const logContent = readFileSync(logFile, "utf8");
+      return { exitCode: 0, logContent };
+    } catch (e: unknown) {
+      const status = (e as { status?: number }).status ?? -1;
+      const logContent = readFileSync(logFile, "utf8");
+      return { exitCode: status, logContent };
+    }
+  };
+
+  try {
+    // 1. inbox が空で fill-inbox が 17 の場合: exit 17 で安全に終了し、警告と見送りログが出る
+    const res1 = runWithMockNpm(0, 17);
+    assert.equal(res1.exitCode, 17);
+    assert.match(res1.logContent, /警告: 補充できません（macOS の許可が必要です）/);
+    assert.match(res1.logContent, /inbox が空で補充もできなかったため、パイプラインの実行を見送ります \(終了コード: 17\)/);
+    assert.ok(!res1.logContent.includes("pipeline started successfully"));
+
+    // 2. inbox に既存論文がある場合: 補充エラーでも警告を出した上でパイプラインを続行する
+    const res2 = runWithMockNpm(2, 17);
+    assert.equal(res2.exitCode, 0);
+    assert.match(res2.logContent, /警告: 補充できません（macOS の許可が必要です）/);
+    assert.match(res2.logContent, /inbox に既存の未処理論文 \(2 件\) があるため、パイプラインを続行します/);
+    assert.match(res2.logContent, /pipeline started successfully/);
+
+    // 3. inbox が空で一般エラー (exit 1) の場合: パイプラインを実行せず exit 1 で終了する
+    const res3 = runWithMockNpm(0, 1);
+    assert.equal(res3.exitCode, 1);
+    assert.match(res3.logContent, /警告: 補充に失敗しました \(終了コード: 1\)/);
+    assert.match(res3.logContent, /inbox が空で補充もできなかったため、パイプラインの実行を見送ります \(終了コード: 1\)/);
+    assert.ok(!res3.logContent.includes("pipeline started successfully"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

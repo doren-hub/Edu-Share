@@ -18,6 +18,7 @@ export const EXIT_ALREADY_RUNNING = 10;
 export const EXIT_INBOX_ERROR = 13;
 export const EXIT_PROCESS_CHECK_ERROR = 14;
 export { EXIT_LOGIN_REQUIRED };
+export { EXIT_PERMISSION_ERROR } from "./fill-inbox.ts";
 
 export type RunningCheckResult = {
   running: boolean;
