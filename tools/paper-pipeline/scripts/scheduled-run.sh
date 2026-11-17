@@ -179,6 +179,8 @@ NEEDS_FILL=false
 if echo "$DECISION_ENV" | grep -q '^NEEDS_FILL=true'; then
   NEEDS_FILL=true
 fi
+INBOX_COUNT=$(echo "$DECISION_ENV" | grep '^INBOX_COUNT=' | head -n 1 | cut -d= -f2 || true)
+INBOX_COUNT="${INBOX_COUNT:-0}"
 
 # -------------------------------------------------------------
 # 3. inbox 未処理論文の補充判定
@@ -192,6 +194,23 @@ if [ "$NEEDS_FILL" = true ]; then
     FILL_OUTPUT=$(npm run fill-inbox 2>&1) || FILL_EXIT=$?
     echo "$FILL_OUTPUT" >> "$LOG_FILE"
     log "fill-inbox の実行が完了しました (終了コード: $FILL_EXIT)"
+    if [ "$FILL_EXIT" -eq 17 ]; then
+      log "警告: 補充できません（macOS の許可が必要です）"
+      if [ "$INBOX_COUNT" -eq 0 ]; then
+        log "inbox が空で補充もできなかったため、パイプラインの実行を見送ります (終了コード: 17)"
+        exit 17
+      else
+        log "inbox に既存の未処理論文 ($INBOX_COUNT 件) があるため、パイプラインを続行します"
+      fi
+    elif [ "$FILL_EXIT" -ne 0 ]; then
+      log "警告: 補充に失敗しました (終了コード: $FILL_EXIT)"
+      if [ "$INBOX_COUNT" -eq 0 ]; then
+        log "inbox が空で補充もできなかったため、パイプラインの実行を見送ります (終了コード: $FILL_EXIT)"
+        exit "$FILL_EXIT"
+      else
+        log "inbox に既存の未処理論文 ($INBOX_COUNT 件) があるため、パイプラインを続行します"
+      fi
+    fi
   fi
 else
   log "inbox の未処理論文は十分にあるため、補充をスキップします"

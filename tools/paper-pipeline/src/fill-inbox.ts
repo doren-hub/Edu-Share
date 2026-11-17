@@ -5,10 +5,26 @@ import { join } from "node:path";
 import { listExistingWorkPapers, listInboxPdfs } from "./inbox.ts";
 import { normalizePdfFilename } from "./match.ts";
 
+export const EXIT_PERMISSION_ERROR = 17;
+
+export class FillInboxPermissionError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "FillInboxPermissionError";
+  }
+}
+
 export type SourcePdf = {
   filename: string;
   absPath: string;
   mtimeMs: number;
+};
+
+export type FillInboxDeps = {
+  readdir?: (path: string, options?: { withFileTypes?: boolean }) => Dirent[];
+  stat?: (path: string) => { mtimeMs: number };
+  copyFile?: (src: string, dest: string) => void;
+  execFinder?: (script: string, args: string[]) => string;
 };
 
 const FINDER_LIST_SCRIPT = `
@@ -43,8 +59,66 @@ on run argv
 end run
 `;
 
-function isEperm(e: unknown): boolean {
+export function isEperm(e: unknown): boolean {
   return typeof e === "object" && e !== null && "code" in e && (e as NodeJS.ErrnoException).code === "EPERM";
+}
+
+export function isPermissionError(e: unknown): boolean {
+  if (e instanceof FillInboxPermissionError) return true;
+  if (!e || typeof e !== "object") return false;
+  if ("code" in e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") return true;
+  }
+  const stderr = typeof (e as { stderr?: unknown }).stderr === "string"
+    ? (e as { stderr: string }).stderr
+    : Buffer.isBuffer((e as { stderr?: unknown }).stderr)
+      ? (e as { stderr: Buffer }).stderr.toString("utf8")
+      : "";
+  const message = typeof (e as { message?: unknown }).message === "string"
+    ? (e as { message: string }).message
+    : "";
+  const combined = `${stderr}\n${message}`;
+
+  if (combined.includes("-1743")) return true;
+  if (/Apple\s*Events/i.test(combined)) return true;
+  if (/operation not permitted/i.test(combined)) return true;
+  if (/permission denied/i.test(combined)) return true;
+  if (/errAEEventNotPermitted/i.test(combined)) return true;
+
+  return false;
+}
+
+export function formatPermissionErrorMessage(dir?: string): string {
+  const target = dir ? ` (${dir})` : "";
+  return [
+    `補充元ディレクトリ${target}の読み込み権限がありません (macOS EPERM / -1743)。`,
+    "システム設定で実行元に許可を与えるか、保護対象外のフォルダ（PAPER_SOURCE_DIR）を指定するか、手動で補充してください。",
+  ].join("\n");
+}
+
+function defaultExecFinder(script: string, args: string[]): string {
+  return execFileSync("osascript", ["-e", script, "--", ...args], {
+    encoding: "utf8",
+    timeout: 120_000,
+    maxBuffer: 8 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function runFinder(script: string, args: string[], dir: string, deps?: FillInboxDeps): string {
+  const execFn = deps?.execFinder ?? defaultExecFinder;
+  try {
+    return execFn(script, args);
+  } catch (e) {
+    if (isPermissionError(e)) {
+      throw new FillInboxPermissionError(formatPermissionErrorMessage(dir), e);
+    }
+    const stderr = typeof (e as { stderr?: unknown })?.stderr === "string"
+      ? (e as { stderr: string }).stderr.trim()
+      : "";
+    throw new Error(stderr || "Finder の操作に失敗しました", { cause: e });
+  }
 }
 
 /** Finder が返す「年-月-日 深夜からの秒」をローカル時刻のミリ秒にする */
@@ -77,17 +151,13 @@ export function parseFinderLibraryListing(text: string): { pdfs: SourcePdf[]; di
   return { pdfs, dirs };
 }
 
-function listOneFolderViaFinder(dir: string): { pdfs: SourcePdf[]; dirs: string[] } {
-  const text = execFileSync("osascript", ["-e", FINDER_LIST_SCRIPT, "--", dir], {
-    encoding: "utf8",
-    timeout: 120_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
+function listOneFolderViaFinder(dir: string, deps?: FillInboxDeps): { pdfs: SourcePdf[]; dirs: string[] } {
+  const text = runFinder(FINDER_LIST_SCRIPT, [dir], dir, deps);
   return parseFinderLibraryListing(text);
 }
 
 /** macOS の書類フォルダなど、プロセスから読めない場所を Finder 経由で歩く */
-export function listLibraryPdfsViaFinder(root: string): SourcePdf[] {
+export function listLibraryPdfsViaFinder(root: string, deps?: FillInboxDeps): SourcePdf[] {
   const out: SourcePdf[] = [];
   const pending = [root];
   const seen = new Set<string>();
@@ -95,21 +165,27 @@ export function listLibraryPdfsViaFinder(root: string): SourcePdf[] {
     const dir = pending.pop()!;
     if (seen.has(dir)) continue;
     seen.add(dir);
-    const { pdfs, dirs } = listOneFolderViaFinder(dir);
+    const { pdfs, dirs } = listOneFolderViaFinder(dir, deps);
     out.push(...pdfs);
     pending.push(...dirs);
   }
   return out;
 }
 
-function walkReadable(dir: string, out: SourcePdf[]): void {
+function walkReadable(dir: string, out: SourcePdf[], deps?: FillInboxDeps): void {
+  const readdirFn = deps?.readdir ?? ((p) => readdirSync(p, { withFileTypes: true }));
+  const statFn = deps?.stat ?? statSync;
+
   let entries: Dirent[];
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = readdirFn(dir, { withFileTypes: true });
   } catch (e) {
     if (process.platform === "darwin" && isEperm(e)) {
-      out.push(...listLibraryPdfsViaFinder(dir));
+      out.push(...listLibraryPdfsViaFinder(dir, deps));
       return;
+    }
+    if (isPermissionError(e)) {
+      throw new FillInboxPermissionError(formatPermissionErrorMessage(dir), e);
     }
     throw e;
   }
@@ -117,17 +193,26 @@ function walkReadable(dir: string, out: SourcePdf[]): void {
     if (ent.name.startsWith(".")) continue;
     const abs = join(dir, ent.name);
     if (ent.isDirectory()) {
-      walkReadable(abs, out);
+      walkReadable(abs, out, deps);
       continue;
     }
     if (!ent.isFile() || !ent.name.toLowerCase().endsWith(".pdf")) continue;
     let mtimeMs = Number.POSITIVE_INFINITY;
     try {
-      mtimeMs = statSync(abs).mtimeMs;
+      mtimeMs = statFn(abs).mtimeMs;
     } catch (e) {
       if (process.platform === "darwin" && isEperm(e)) {
-        const viaFinder = listOneFolderViaFinder(dir).pdfs.find((pdf) => pdf.filename === ent.name);
-        if (viaFinder) mtimeMs = viaFinder.mtimeMs;
+        try {
+          const viaFinder = listOneFolderViaFinder(dir, deps).pdfs.find((pdf) => pdf.filename === ent.name);
+          if (viaFinder) mtimeMs = viaFinder.mtimeMs;
+        } catch (finderErr) {
+          if (isPermissionError(finderErr)) {
+            throw new FillInboxPermissionError(formatPermissionErrorMessage(dir), finderErr);
+          }
+          throw finderErr;
+        }
+      } else if (isPermissionError(e)) {
+        throw new FillInboxPermissionError(formatPermissionErrorMessage(dir), e);
       }
     }
     out.push({ filename: ent.name, absPath: abs, mtimeMs });
@@ -135,9 +220,9 @@ function walkReadable(dir: string, out: SourcePdf[]): void {
 }
 
 /** ライブラリ内の PDF。隠しファイルと隠しディレクトリは対象外 */
-export function listLibraryPdfs(root: string): SourcePdf[] {
+export function listLibraryPdfs(root: string, deps?: FillInboxDeps): SourcePdf[] {
   const out: SourcePdf[] = [];
-  walkReadable(root, out);
+  walkReadable(root, out, deps);
   return out;
 }
 
@@ -248,29 +333,69 @@ export function pickUnprocessedPdfs(
   return candidates.slice(0, Math.max(0, limit));
 }
 
-function copyViaFinder(src: string, inboxDir: string): void {
-  execFileSync("osascript", ["-e", FINDER_COPY_SCRIPT, "--", src, inboxDir], {
-    encoding: "utf8",
-    timeout: 120_000,
-  });
+function copyViaFinder(src: string, inboxDir: string, deps?: FillInboxDeps): void {
+  runFinder(FINDER_COPY_SCRIPT, [src, inboxDir], inboxDir, deps);
 }
 
 /** 元のライブラリは残し、inbox 直下へコピーする。同名が既にあればスキップ */
-export function copyPdfsToInbox(pdfs: readonly SourcePdf[], inboxDir: string): SourcePdf[] {
+export function copyPdfsToInbox(pdfs: readonly SourcePdf[], inboxDir: string, deps?: FillInboxDeps): SourcePdf[] {
+  const copyFn = deps?.copyFile ?? copyFileSync;
   const copied: SourcePdf[] = [];
   for (const pdf of pdfs) {
     const dest = join(inboxDir, pdf.filename);
     if (existsSync(dest)) continue;
     try {
-      copyFileSync(pdf.absPath, dest);
+      copyFn(pdf.absPath, dest);
     } catch (e) {
-      if (!(process.platform === "darwin" && isEperm(e))) throw e;
-      copyViaFinder(pdf.absPath, inboxDir);
-      if (!existsSync(dest)) {
-        throw new Error(`inbox へコピーできませんでした: ${pdf.filename}`);
+      if (process.platform === "darwin" && isEperm(e)) {
+        try {
+          copyViaFinder(pdf.absPath, inboxDir, deps);
+        } catch (finderErr) {
+          if (isPermissionError(finderErr)) {
+            throw new FillInboxPermissionError(formatPermissionErrorMessage(pdf.absPath), finderErr);
+          }
+          throw finderErr;
+        }
+        if (!existsSync(dest)) {
+          throw new Error(`inbox へコピーできませんでした: ${pdf.filename}`);
+        }
+      } else {
+        if (isPermissionError(e)) {
+          throw new FillInboxPermissionError(formatPermissionErrorMessage(pdf.absPath), e);
+        }
+        throw e;
       }
     }
     copied.push({ ...pdf, absPath: dest });
   }
   return copied;
+}
+
+export type FillInboxOptions = {
+  source: string;
+  count: number;
+  inboxDir: string;
+  workDir: string;
+  duplicatesDir?: string;
+  holdDir?: string;
+};
+
+export type FillInboxResult = {
+  libraryCount: number;
+  pickedCount: number;
+  copiedCount: number;
+  copied: SourcePdf[];
+};
+
+export function fillInbox(options: FillInboxOptions, deps?: FillInboxDeps): FillInboxResult {
+  const library = listLibraryPdfs(options.source, deps);
+  const processed = processedPdfNames(options.inboxDir, options.workDir, options.duplicatesDir, options.holdDir);
+  const picked = pickUnprocessedPdfs(library, processed, options.count);
+  const copied = copyPdfsToInbox(picked, options.inboxDir, deps);
+  return {
+    libraryCount: library.length,
+    pickedCount: picked.length,
+    copiedCount: copied.length,
+    copied,
+  };
 }

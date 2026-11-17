@@ -4,14 +4,19 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  EXIT_PERMISSION_ERROR,
+  FillInboxPermissionError,
   copyPdfsToInbox,
   finderMtimeMs,
+  formatPermissionErrorMessage,
+  isPermissionError,
   listDuplicatePdfNames,
   listLibraryPdfs,
   parseFinderLibraryListing,
   pickUnprocessedPdfs,
   processedPdfNames,
 } from "./fill-inbox.ts";
+import { runFillInboxCli } from "./fill-inbox-cli.ts";
 
 test("parseFinderLibraryListing: PDF の変更日とサブディレクトリを読む", () => {
   const parsed = parseFinderLibraryListing(
@@ -160,6 +165,233 @@ test("fill-inbox: duplicates 配下の論文（work の兄弟ディレクトリ�
       picked.map((p) => p.filename),
       ["fresh-paper.pdf"],
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("isPermissionError: EPERM, EACCES, -1743, Apple Events, FillInboxPermissionError を正しく検出し通常エラーは false", () => {
+  assert.equal(isPermissionError(Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })), true);
+  assert.equal(isPermissionError(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })), true);
+  assert.equal(
+    isPermissionError({
+      message: "Command failed: osascript -e ...",
+      stderr: "execution error: FinderにApple Eventsを送信する権限がありません。 (-1743)",
+    }),
+    true,
+  );
+  assert.equal(
+    isPermissionError({
+      message: "Not authorized to send Apple events to Finder. (-1743)",
+      stderr: "",
+    }),
+    true,
+  );
+  assert.equal(isPermissionError(new FillInboxPermissionError("test")), true);
+
+  // 通常エラー
+  assert.equal(isPermissionError(Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" })), false);
+  assert.equal(isPermissionError(new Error("Generic failure")), false);
+  assert.equal(isPermissionError(null), false);
+  assert.equal(isPermissionError(undefined), false);
+});
+
+test("formatPermissionErrorMessage: 原因と対処の 2 行構成で AppleScript コードを含まない", () => {
+  const msg = formatPermissionErrorMessage("/sample/papers");
+  const lines = msg.split("\n");
+  assert.equal(lines.length, 2);
+  assert.ok(lines[0]!.includes("EPERM / -1743"));
+  assert.ok(lines[0]!.includes("/sample/papers"));
+  assert.ok(lines[1]!.includes("PAPER_SOURCE_DIR"));
+  assert.ok(!msg.includes("tell application"));
+  assert.ok(!msg.includes("osascript"));
+});
+
+test("listLibraryPdfs: EPERM と -1743 のとき専用の FillInboxPermissionError と短いメッセージになる (Finder/実ファイル不使用)", () => {
+  const epermError = Object.assign(new Error("operation not permitted, scandir '/protected'"), { code: "EPERM" });
+  const appleEventsError = Object.assign(
+    new Error("Command failed: osascript -e on run argv tell application Finder end run"),
+    {
+      stderr: "execution error: FinderにApple Eventsを送信する権限がありません。 (-1743)",
+    },
+  );
+
+  let finderCalled = false;
+  assert.throws(
+    () => {
+      listLibraryPdfs("/protected", {
+        readdir: () => {
+          throw epermError;
+        },
+        execFinder: () => {
+          finderCalled = true;
+          throw appleEventsError;
+        },
+      });
+    },
+    (err: unknown) => {
+      assert.ok(err instanceof FillInboxPermissionError);
+      // AppleScript 本文が含まれていないこと
+      assert.ok(!err.message.includes("tell application"));
+      assert.ok(!err.message.includes("on run argv"));
+      // 原因と対処の 2 行で EPERM / -1743 を含むこと
+      const lines = err.message.split("\n");
+      assert.equal(lines.length, 2);
+      assert.ok(err.message.includes("EPERM / -1743"));
+      assert.ok(err.message.includes("PAPER_SOURCE_DIR"));
+      return true;
+    },
+  );
+  assert.ok(finderCalled, "readdir が EPERM の際に Finder 経由が試みられること");
+});
+
+test("copyPdfsToInbox: copyFileSync が EPERM で Finder が -1743 のとき FillInboxPermissionError を投げる", () => {
+  const epermError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+  const appleEventsError = Object.assign(new Error("Command failed"), {
+    stderr: "execution error: FinderにApple Eventsを送信する権限がありません。 (-1743)",
+  });
+
+  const pdfs = [{ filename: "test.pdf", absPath: "/lib/test.pdf", mtimeMs: 100 }];
+  assert.throws(
+    () => {
+      copyPdfsToInbox(pdfs, "/inbox", {
+        copyFile: () => {
+          throw epermError;
+        },
+        execFinder: () => {
+          throw appleEventsError;
+        },
+      });
+    },
+    (err: unknown) => {
+      assert.ok(err instanceof FillInboxPermissionError);
+      assert.ok(!err.message.includes("FINDER_COPY_SCRIPT"));
+      assert.ok(err.message.includes("EPERM / -1743"));
+      return true;
+    },
+  );
+});
+
+test("runFillInboxCli: EPERM と -1743 で終了コード 17 と 1〜2 行のエラーログを出力する", () => {
+  const root = mkdtempSync(join(tmpdir(), "fill-inbox-cli-test-"));
+  const inbox = join(root, "inbox");
+  const work = join(root, "work");
+  mkdirSync(inbox, { recursive: true });
+  mkdirSync(work, { recursive: true });
+
+  const loggedErrors: string[] = [];
+  const loggedOutputs: string[] = [];
+
+  const epermError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+  const appleEventsError = Object.assign(new Error("Command failed: osascript -e on run argv ..."), {
+    stderr: "execution error: FinderにApple Eventsを送信する権限がありません。 (-1743)",
+  });
+
+  try {
+    const code = runFillInboxCli(
+      ["--source", "/mock/library", "--inbox", inbox, "--work", work],
+      {
+        stat: () => ({ mtimeMs: 100 }),
+        readdir: () => {
+          throw epermError;
+        },
+        execFinder: () => {
+          throw appleEventsError;
+        },
+      },
+      {
+        logFn: (msg) => loggedOutputs.push(msg),
+        errorFn: (msg) => loggedErrors.push(msg),
+      },
+    );
+
+    assert.equal(code, EXIT_PERMISSION_ERROR);
+    assert.equal(EXIT_PERMISSION_ERROR, 17);
+    assert.equal(loggedErrors.length, 1);
+    const errMsg = loggedErrors[0]!;
+    const lines = errMsg.split("\n");
+    assert.equal(lines.length, 2);
+    assert.ok(errMsg.includes("EPERM / -1743"));
+    assert.ok(errMsg.includes("PAPER_SOURCE_DIR"));
+    // AppleScript の全文はログに出さない
+    assert.ok(!errMsg.includes("on run argv"));
+    assert.ok(!errMsg.includes("osascript"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runFillInboxCli: statSync が EPERM の場合も終了コード 17 で安全に処理する", () => {
+  const root = mkdtempSync(join(tmpdir(), "fill-inbox-cli-test-"));
+  const inbox = join(root, "inbox");
+  const work = join(root, "work");
+  mkdirSync(inbox, { recursive: true });
+  mkdirSync(work, { recursive: true });
+
+  const loggedErrors: string[] = [];
+  const epermError = Object.assign(new Error("operation not permitted, stat '/protected'"), { code: "EPERM" });
+
+  try {
+    const code = runFillInboxCli(
+      ["--source", "/protected", "--inbox", inbox, "--work", work],
+      {
+        stat: (p: string) => {
+          if (p === "/protected") throw epermError;
+          return { mtimeMs: 100 };
+        },
+      },
+      {
+        errorFn: (msg) => loggedErrors.push(msg),
+      },
+    );
+
+    assert.equal(code, 17);
+    assert.equal(loggedErrors.length, 1);
+    assert.ok(loggedErrors[0]!.includes("EPERM / -1743"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runFillInboxCli: 設定（--source および PAPER_SOURCE_DIR）で補充元を変更できる", () => {
+  const root = mkdtempSync(join(tmpdir(), "fill-inbox-cli-test-"));
+  const inbox = join(root, "inbox");
+  const work = join(root, "work");
+  mkdirSync(inbox, { recursive: true });
+  mkdirSync(work, { recursive: true });
+
+  let accessedDir = "";
+  const loggedOutputs: string[] = [];
+
+  const deps = {
+    stat: () => ({ mtimeMs: 100 }),
+    readdir: (dir: string) => {
+      accessedDir = dir;
+      return [];
+    },
+  };
+
+  try {
+    // 1. --source オプションによる指定
+    const code1 = runFillInboxCli(
+      ["--source", "/custom/source/dir", "--inbox", inbox, "--work", work],
+      deps,
+      { logFn: (msg) => loggedOutputs.push(msg) },
+    );
+    assert.equal(code1, 0);
+    assert.equal(accessedDir, "/custom/source/dir");
+
+    // 2. PAPER_SOURCE_DIR 環境変数による指定
+    const code2 = runFillInboxCli(
+      ["--inbox", inbox, "--work", work],
+      deps,
+      {
+        env: { PAPER_SOURCE_DIR: "/env/source/dir" },
+        logFn: (msg) => loggedOutputs.push(msg),
+      },
+    );
+    assert.equal(code2, 0);
+    assert.equal(accessedDir, "/env/source/dir");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
