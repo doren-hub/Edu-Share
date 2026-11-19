@@ -620,7 +620,7 @@ test("issue 335: restoreFolderFilesTable は検索欄に文字や 0 件表示が
     getByText: (pattern: RegExp | string) => ({
       first: () => ({
         isVisible: async () => {
-          if (typeof pattern === "object" && pattern.test("There are no results")) {
+          if (typeof pattern === "object" && pattern.test("There are no results for")) {
             return hasNoResults;
           }
           return false;
@@ -632,6 +632,129 @@ test("issue 335: restoreFolderFilesTable は検索欄に文字や 0 件表示が
   await restoreFolderFilesTable(page, "https://example.test/folder");
   assert.equal(filledValue, "");
   assert.equal(searchVal, "");
+});
+
+test("issue 335: restoreFolderFilesTable は検索欄を空にしても表が戻らない場合に無限ループせず終了する", async () => {
+  const { restoreFolderFilesTable } = await import("./scispace.ts");
+  let clearCount = 0;
+
+  const page = {
+    url: () => "https://example.test/folder",
+    locator: (selector: string) => {
+      if (selector.includes("folder-toolbar-search-input")) {
+        return {
+          first: () => ({
+            isVisible: async () => true,
+            inputValue: async () => "StuckQuery",
+            fill: async () => {
+              clearCount++;
+            },
+          }),
+        };
+      }
+      return {
+        first: () => ({
+          isVisible: async () => false,
+        }),
+        innerText: async () => "",
+      };
+    },
+    getByRole: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    getByPlaceholder: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    keyboard: {
+      press: async () => {},
+    },
+    getByText: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+  } as unknown as import("playwright").Page;
+
+  await restoreFolderFilesTable(page, "https://example.test/folder");
+  // Exactly 1 clear attempt is made, no infinite mutual recursion
+  assert.equal(clearCount, 1);
+});
+
+test("issue 335: filterFilesList は全検索語が0件のとき Load More やスクロールをスキップして短時間で打ち切る", async () => {
+  const { filterFilesList } = await import("./scispace.ts");
+  let loadMoreChecked = false;
+  let scrollChecked = false;
+
+  const page = {
+    url: () => "https://example.test/folder",
+    locator: (selector: string) => {
+      if (selector.includes("folder-toolbar-search-input")) {
+        return {
+          first: () => ({
+            isVisible: async () => true,
+            inputValue: async () => "",
+            fill: async () => {},
+          }),
+        };
+      }
+      if (selector.includes("table:has(tr)")) {
+        return {
+          first: () => ({
+            isVisible: async () => false,
+          }),
+        };
+      }
+      return {
+        first: () => ({
+          isVisible: async () => false,
+        }),
+        innerText: async () => "",
+      };
+    },
+    getByRole: (role: string, opts?: { name: RegExp }) => ({
+      first: () => ({
+        isVisible: async () => {
+          if (opts?.name && opts.name.test("Load More")) {
+            loadMoreChecked = true;
+          }
+          return false;
+        },
+      }),
+    }),
+    getByPlaceholder: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    keyboard: {
+      press: async () => {},
+    },
+    mouse: {
+      wheel: async () => {
+        scrollChecked = true;
+      },
+    },
+    getByText: (pattern: RegExp | string) => ({
+      first: () => ({
+        isVisible: async () => {
+          if (typeof pattern === "object" && pattern.test("There are no results for")) {
+            return true;
+          }
+          return false;
+        },
+        scrollIntoViewIfNeeded: async () => {},
+      }),
+    }),
+  } as unknown as import("playwright").Page;
+
+  await filterFilesList(page, "https://example.test/folder", "missing.pdf", "Missing Title");
+  // All queries were 0 results, so Load More and scroll wheel must be skipped completely
+  assert.equal(loadMoreChecked, false);
+  assert.equal(scrollChecked, false);
 });
 
 test("issue 335: filterFilesList は検索0件でも検索欄を空にして次の語へ進み、どの戻り方でも検索欄を空にする", async () => {
@@ -689,7 +812,7 @@ test("issue 335: filterFilesList は検索0件でも検索欄を空にして次�
     getByText: (pattern: RegExp | string) => ({
       first: () => ({
         isVisible: async () => {
-          if (typeof pattern === "object" && pattern.test("There are no results")) {
+          if (typeof pattern === "object" && pattern.test("There are no results for")) {
             return currentSearch !== "";
           }
           return false;
@@ -697,9 +820,6 @@ test("issue 335: filterFilesList は検索0件でも検索欄を空にして次�
         scrollIntoViewIfNeeded: async () => {},
       }),
     }),
-    keyboard: {
-      press: async () => {},
-    },
     mouse: {
       wheel: async () => {},
     },
@@ -743,7 +863,7 @@ test("issue 335: filterFilesList は例外発生時でも finally で検索欄�
       if (selector === "body") {
         return {
           innerText: async () =>
-            currentSearch ? `There are no results for "${currentSearch}"` : "Upload PDFs Files (10) Uploaded on",
+            currentSearch ? `Some partial results for "${currentSearch}"` : "Upload PDFs Files (10) Uploaded on",
         };
       }
       return {
@@ -783,4 +903,77 @@ test("issue 335: filterFilesList は例外発生時でも finally で検索欄�
   );
   assert.equal(clearInvoked, true);
   assert.equal(currentSearch, "");
+});
+
+test("issue 335: waitUntilSpecifiedFolderReady は0件表示または検索語があるとき検索欄を空にして表を復元する", async () => {
+  const { waitUntilSpecifiedFolderReady } = await import("./scispace.ts");
+  let searchVal = "LeftoverSearch";
+  let hasTable = false;
+
+  const page = {
+    isClosed: () => false,
+    evaluate: async () => true,
+    goto: async () => {},
+    url: () => "https://example.test/folder",
+    title: async () => "Folder Title",
+    locator: (selector: string) => {
+      if (selector.includes("folder-toolbar-search-input")) {
+        return {
+          first: () => ({
+            isVisible: async () => true,
+            inputValue: async () => searchVal,
+            fill: async (val: string) => {
+              searchVal = val;
+              if (val === "") hasTable = true;
+            },
+          }),
+        };
+      }
+      if (selector.includes("table:has(tr)")) {
+        return {
+          first: () => ({
+            isVisible: async () => hasTable,
+          }),
+        };
+      }
+      return {
+        first: () => ({
+          isVisible: async () => false,
+        }),
+        innerText: async () =>
+          searchVal
+            ? "Upload PDFs Files (10) Sort There are no results for LeftoverSearch"
+            : "Upload PDFs Files (10) Uploaded on",
+      };
+    },
+    getByRole: (role: string, opts?: { name: RegExp }) => ({
+      first: () => ({
+        isVisible: async () => {
+          if (opts?.name && opts.name.test("Upload PDFs")) return true;
+          return false;
+        },
+      }),
+    }),
+    getByPlaceholder: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    keyboard: {
+      press: async () => {},
+    },
+    getByText: (pattern: RegExp | string) => ({
+      first: () => ({
+        isVisible: async () => {
+          if (typeof pattern === "object" && pattern.test("Files")) return true;
+          if (typeof pattern === "object" && pattern.test("There are no results for")) return searchVal !== "";
+          return false;
+        },
+      }),
+    }),
+  } as unknown as import("playwright").Page;
+
+  await waitUntilSpecifiedFolderReady(page, "https://example.test/folder");
+  assert.equal(searchVal, "");
+  assert.equal(hasTable, true);
 });
