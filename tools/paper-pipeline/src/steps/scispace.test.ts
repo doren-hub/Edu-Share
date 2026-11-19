@@ -688,6 +688,8 @@ test("issue 335: filterFilesList は全検索語が0件のとき Load More や�
   const { filterFilesList } = await import("./scispace.ts");
   let loadMoreChecked = false;
   let scrollChecked = false;
+  let currentSearch = "";
+  const queriesRan: string[] = [];
 
   const page = {
     url: () => "https://example.test/folder",
@@ -696,15 +698,18 @@ test("issue 335: filterFilesList は全検索語が0件のとき Load More や�
         return {
           first: () => ({
             isVisible: async () => true,
-            inputValue: async () => "",
-            fill: async () => {},
+            inputValue: async () => currentSearch,
+            fill: async (val: string) => {
+              currentSearch = val;
+              if (val) queriesRan.push(val);
+            },
           }),
         };
       }
       if (selector.includes("table:has(tr)")) {
         return {
           first: () => ({
-            isVisible: async () => false,
+            isVisible: async () => currentSearch === "",
           }),
         };
       }
@@ -712,12 +717,14 @@ test("issue 335: filterFilesList は全検索語が0件のとき Load More や�
         first: () => ({
           isVisible: async () => false,
         }),
-        innerText: async () => "",
+        innerText: async () =>
+          currentSearch ? `There are no results for "${currentSearch}"` : "Upload PDFs Files (10) Uploaded on",
       };
     },
     getByRole: (role: string, opts?: { name: RegExp }) => ({
       first: () => ({
         isVisible: async () => {
+          if (opts?.name && opts.name.test("Upload PDFs")) return true;
           if (opts?.name && opts.name.test("Load More")) {
             loadMoreChecked = true;
           }
@@ -741,8 +748,10 @@ test("issue 335: filterFilesList は全検索語が0件のとき Load More や�
     getByText: (pattern: RegExp | string) => ({
       first: () => ({
         isVisible: async () => {
+          if (typeof pattern === "object" && pattern.test("Files")) return true;
+          if (typeof pattern === "object" && pattern.test("Uploaded on")) return currentSearch === "";
           if (typeof pattern === "object" && pattern.test("There are no results for")) {
-            return true;
+            return currentSearch !== "";
           }
           return false;
         },
@@ -752,9 +761,12 @@ test("issue 335: filterFilesList は全検索語が0件のとき Load More や�
   } as unknown as import("playwright").Page;
 
   await filterFilesList(page, "https://example.test/folder", "missing.pdf", "Missing Title");
+  // Queries were actually attempted
+  assert.ok(queriesRan.length >= 2);
   // All queries were 0 results, so Load More and scroll wheel must be skipped completely
   assert.equal(loadMoreChecked, false);
   assert.equal(scrollChecked, false);
+  assert.equal(currentSearch, "");
 });
 
 test("issue 335: filterFilesList は検索0件でも検索欄を空にして次の語へ進み、どの戻り方でも検索欄を空にする", async () => {

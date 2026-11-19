@@ -219,11 +219,11 @@ async function clickFolderFilesTab(page: Page): Promise<boolean> {
   return false;
 }
 
-let isRestoringFilesTable = false;
+const restoringPages = new WeakSet<Page>();
 
 export async function restoreFolderFilesTable(page: Page, folderUrl: string): Promise<void> {
-  if (isRestoringFilesTable) return;
-  isRestoringFilesTable = true;
+  if (restoringPages.has(page)) return;
+  restoringPages.add(page);
   try {
     if (isAuthUrl(page) || (await needsSciSpaceLogin(page))) return;
     if (!isOnSpecifiedFolder(page, folderUrl)) {
@@ -250,7 +250,7 @@ export async function restoreFolderFilesTable(page: Page, folderUrl: string): Pr
       await sleep(1_200);
     }
   } finally {
-    isRestoringFilesTable = false;
+    restoringPages.delete(page);
   }
 }
 
@@ -803,6 +803,7 @@ export async function filterFilesList(page: Page, folderUrl: string, filename: s
       }
       if (!(await isNotebooksFilesView(page, folderUrl))) {
         warn("SciSpace: Files 表に戻れないので検索しません");
+        log(`SciSpace: Files 一覧に見つかりません（${filename}）`);
         return;
       }
       log(`SciSpace: Files 検索を実行します (${q})`);
