@@ -82,18 +82,53 @@ export async function isNotebooksFilesView(page: Page, folderUrl: string): Promi
   const tldrCol = await page.getByText(/^TL;DR$/).first().isVisible({ timeout: 0 }).catch(() => false);
   const filesCount = await page.getByText(/Files\s*\(\d+\)/).first().isVisible({ timeout: 0 }).catch(() => false);
   const sort = await page.getByRole("button", { name: /^Sort$/i }).first().isVisible({ timeout: 0 }).catch(() => false);
-  const noResults = await page
-    .getByText(/There are no results|Try searching with a better keyword/i)
-    .first()
-    .isVisible({ timeout: 0 })
-    .catch(() => false);
   if (upload && (uploadedOn || tldrCol)) return true;
   if (upload && filesCount && uploadedOn) return true;
   if (upload && filesCount && sort) return true;
-  if (upload && filesCount && noResults) return true;
   const t = await pageText(page);
   if (looksLikeSciSpaceFilesTable(t)) return true;
   return false;
+}
+
+export async function hasFilesNoResults(page: Page): Promise<boolean> {
+  const noResults = page
+    .getByText(/There are no results for|Try searching with a better keyword/i)
+    .first();
+  if (await noResults.isVisible({ timeout: 0 }).catch(() => false)) return true;
+  return false;
+}
+
+export async function readFilesSearchQuery(page: Page): Promise<string> {
+  const search = page.locator('input[data-test-id="folder-toolbar-search-input"]').first();
+  if (await search.isVisible({ timeout: 0 }).catch(() => false)) {
+    return (await search.inputValue().catch(() => "")) || "";
+  }
+  const sort = page.getByRole("button", { name: /^Sort$/i }).first();
+  if (await sort.isVisible({ timeout: 0 }).catch(() => false)) {
+    const sortBox = await sort.boundingBox().catch(() => null);
+    const inputs = page.locator("input:visible");
+    const n = await inputs.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const el = inputs.nth(i);
+      const box = await el.boundingBox().catch(() => null);
+      if (!box) continue;
+      const hint = [
+        (await el.getAttribute("type").catch(() => "")) || "",
+        (await el.getAttribute("placeholder").catch(() => "")) || "",
+        (await el.getAttribute("aria-label").catch(() => "")) || "",
+      ].join(" ");
+      if (!isFilesListSearchHint(hint) && !/^(search|text)$/i.test(hint.trim().split(/\s+/)[0] ?? "")) {
+        continue;
+      }
+      if (/column/i.test(hint)) continue;
+      const nearSort = Boolean(sortBox && Math.abs(box.y - sortBox.y) < 90 && box.x >= sortBox.x - 40);
+      const inFilesHeader = box.x > 220 && box.y > 70 && box.y < 320;
+      if (!nearSort && !inFilesHeader) continue;
+      const val = await el.inputValue().catch(() => "");
+      if (val) return val;
+    }
+  }
+  return "";
 }
 
 function folderPath(folderUrl: string): string {
@@ -184,28 +219,42 @@ async function clickFolderFilesTab(page: Page): Promise<boolean> {
   return false;
 }
 
-async function restoreFolderFilesTable(page: Page, folderUrl: string): Promise<void> {
-  if (isAuthUrl(page) || (await needsSciSpaceLogin(page))) return;
-  if (!isOnSpecifiedFolder(page, folderUrl)) {
-    await gotoSpecifiedFolder(page, folderUrl);
-    await sleep(800);
-  }
-  if (await isNotebooksFilesView(page, folderUrl)) return;
-  const t = await pageText(page);
-  if (looksLikeSciSpaceFilesTable(t)) return;
-  // Files タブを連打すると一覧が閉じて表が消える
-  if (isOnSpecifiedFolder(page, folderUrl) && /Files\s*\(\d+/i.test(t) && !looksLikeSciSpaceChatHome(t)) {
-    return;
-  }
-  if (await filesTabSelected(page)) return;
-  const clicked = await clickFolderFilesTab(page);
-  if (clicked) {
-    log("SciSpace: Files タブを開きます");
-    await sleep(1_200);
+const restoringPages = new WeakSet<Page>();
+
+export async function restoreFolderFilesTable(page: Page, folderUrl: string): Promise<void> {
+  if (restoringPages.has(page)) return;
+  restoringPages.add(page);
+  try {
+    if (isAuthUrl(page) || (await needsSciSpaceLogin(page))) return;
+    if (!isOnSpecifiedFolder(page, folderUrl)) {
+      await gotoSpecifiedFolder(page, folderUrl);
+      await sleep(800);
+    }
+    const searchVal = await readFilesSearchQuery(page);
+    const noResults = await hasFilesNoResults(page);
+    if (searchVal || noResults) {
+      log("SciSpace: 検索欄が残っているため検索欄を空にして表を戻します");
+      await clearFilesListSearch(page, folderUrl);
+    }
+    if (await isNotebooksFilesView(page, folderUrl)) return;
+    const t = await pageText(page);
+    if (looksLikeSciSpaceFilesTable(t)) return;
+    // Files タブを連打すると一覧が閉じて表が消える
+    if (isOnSpecifiedFolder(page, folderUrl) && /Files\s*\(\d+/i.test(t) && !looksLikeSciSpaceChatHome(t)) {
+      return;
+    }
+    if (await filesTabSelected(page)) return;
+    const clicked = await clickFolderFilesTab(page);
+    if (clicked) {
+      log("SciSpace: Files タブを開きます");
+      await sleep(1_200);
+    }
+  } finally {
+    restoringPages.delete(page);
   }
 }
 
-async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Promise<void> {
+export async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Promise<void> {
   log(`SciSpace 指定フォルダを開きます: ${folderUrl}`);
   await assertPageAlive(page);
   if (isAuthUrl(page)) {
@@ -219,6 +268,7 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
   let loggedWait = false;
   let lastBeat = 0;
   let lastFilesClick = 0;
+  let lastClearAt = 0;
   while (Date.now() < deadline) {
     if (page.isClosed() || !(await pageAlive(page))) {
       throw new Error("SciSpace 待ち中にブラウザが閉じられました");
@@ -230,6 +280,8 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
     }
     const botBlocked = await looksLikeBotChallenge(page);
     const loginBlocked = isAuthUrl(page) || (await needsSciSpaceLogin(page));
+    const searchVal = await readFilesSearchQuery(page);
+    const noResults = await hasFilesNoResults(page);
 
     if (botBlocked) {
       log("SciSpace: ボット判定（Cloudflare等）を検出しました");
@@ -240,6 +292,14 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
         log("SciSpace: ログイン画面を検出しました。このウィンドウでログインしてください");
         loggedWait = true;
       }
+    } else if (
+      (noResults || (Boolean(searchVal) && (await pageText(page).then(looksLikeSciSpaceFilesTable)))) &&
+      Date.now() - lastClearAt >= 15_000
+    ) {
+      lastClearAt = Date.now();
+      log("SciSpace: 検索結果0件または検索欄が残っているため検索欄を空にして表を戻します");
+      await clearFilesListSearch(page, folderUrl);
+      lastFilesClick = Date.now();
     } else if (Date.now() - lastFilesClick >= 15_000) {
       lastFilesClick = Date.now();
       await restoreFolderFilesTable(page, folderUrl);
@@ -278,6 +338,8 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
         hasTable,
         hasUploadBtn,
         hasFilesTab,
+        hasNoResults: noResults,
+        hasSearchQuery: Boolean(searchVal),
       });
 
       log(
@@ -286,7 +348,13 @@ async function waitUntilSpecifiedFolderReady(page: Page, folderUrl: string): Pro
           url,
           title,
           state: classified.state,
-          elements: { hasTable, hasFilesTab, hasUploadBtn },
+          elements: {
+            hasTable,
+            hasFilesTab,
+            hasUploadBtn,
+            hasNoResults: noResults,
+            hasSearchQuery: Boolean(searchVal),
+          },
         }),
       );
     }
@@ -330,7 +398,13 @@ function usableSciSpacePaste(
   return card.paste.slice(0, 4000);
 }
 
-async function setFilesSearch(page: Page, folderUrl: string, query: string): Promise<boolean> {
+async function setFilesSearch(
+  page: Page,
+  folderUrl: string,
+  query: string,
+  opts?: { restoreOnFail?: boolean },
+): Promise<boolean> {
+  const shouldRestore = opts?.restoreOnFail ?? (query !== "");
   const typed = await Promise.race([
     page
       .evaluate((q) => {
@@ -369,9 +443,14 @@ async function setFilesSearch(page: Page, folderUrl: string, query: string): Pro
   ]);
   if (!typed) return false;
   await sleep(800);
+  if (query !== "" && (await hasFilesNoResults(page))) {
+    return false;
+  }
   if (!(await isNotebooksFilesView(page, folderUrl))) {
     warn("SciSpace: 検索でフォルダの Files を出たので戻ります");
-    await restoreFolderFilesTable(page, folderUrl);
+    if (shouldRestore) {
+      await restoreFolderFilesTable(page, folderUrl);
+    }
     return false;
   }
   return true;
@@ -455,11 +534,17 @@ async function loadMoreFilesUntilName(page: Page, filename: string, title = ""):
   return filesNameVisible(page, filename, title);
 }
 
-async function fillFilesListSearch(page: Page, folderUrl: string, query: string): Promise<boolean> {
+export async function fillFilesListSearch(
+  page: Page,
+  folderUrl: string,
+  query: string,
+  opts?: { restoreOnFail?: boolean },
+): Promise<boolean> {
+  const shouldRestore = opts?.restoreOnFail ?? (query !== "");
   await closeFilesColumnSettings(page);
-  const search = page.locator('input[data-test-id="folder-toolbar-search-input"]');
+  const search = page.locator('input[data-test-id="folder-toolbar-search-input"]').first();
   if (!(await search.isVisible().catch(() => false))) {
-    const trigger = page.locator('button[data-test-id="folder-toolbar-search-trigger"]');
+    const trigger = page.locator('button[data-test-id="folder-toolbar-search-trigger"]').first();
     if (await trigger.isVisible().catch(() => false)) {
       await trigger.click({ timeout: 4_000 }).catch(() => undefined);
     }
@@ -468,7 +553,12 @@ async function fillFilesListSearch(page: Page, folderUrl: string, query: string)
     await search.fill(query, { timeout: 4_000 });
     await sleep(900);
     if (await isNotebooksFilesView(page, folderUrl)) return true;
-    await restoreFolderFilesTable(page, folderUrl);
+    if (query !== "" && (await hasFilesNoResults(page))) {
+      return false;
+    }
+    if (shouldRestore) {
+      await restoreFolderFilesTable(page, folderUrl);
+    }
     return false;
   }
   await revealFilesToolbarSearch(page);
@@ -496,12 +586,43 @@ async function fillFilesListSearch(page: Page, folderUrl: string, query: string)
       await el.fill(query).catch(() => undefined);
       await sleep(900);
       if (await isNotebooksFilesView(page, folderUrl)) return true;
+      if (query !== "" && (await hasFilesNoResults(page))) {
+        return false;
+      }
       warn("SciSpace: 一覧検索で Files を出たので戻ります");
-      await restoreFolderFilesTable(page, folderUrl);
+      if (shouldRestore) {
+        await restoreFolderFilesTable(page, folderUrl);
+      }
       return false;
     }
   }
-  return setFilesSearch(page, folderUrl, query);
+  return setFilesSearch(page, folderUrl, query, opts);
+}
+
+export async function clickFilesSearchClearButton(page: Page): Promise<boolean> {
+  const candidates = [
+    page.locator('button[data-test-id="folder-toolbar-search-clear"]'),
+    page.locator('button[aria-label*="clear" i]'),
+    page.locator('button[aria-label*="クリア" i]'),
+    page.locator('button[title*="clear" i]'),
+    page.locator('button[title*="クリア" i]'),
+    page.locator('button:has-text("×")'),
+  ];
+  for (const loc of candidates) {
+    const el = loc.first();
+    if (await el.isVisible({ timeout: 0 }).catch(() => false)) {
+      await el.click({ timeout: 1000 }).catch(() => undefined);
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function clearFilesListSearch(page: Page, folderUrl: string): Promise<boolean> {
+  await clickFilesSearchClearButton(page).catch(() => false);
+  await fillFilesListSearch(page, folderUrl, "", { restoreOnFail: false });
+  await sleep(400);
+  return isNotebooksFilesView(page, folderUrl);
 }
 
 function filenameNeedles(filename: string, title = ""): string[] {
@@ -664,7 +785,7 @@ async function scrollFilesForName(page: Page, filename: string, title = ""): Pro
   return filesNameVisible(page, filename, title);
 }
 
-async function filterFilesList(page: Page, folderUrl: string, filename: string, title = ""): Promise<void> {
+export async function filterFilesList(page: Page, folderUrl: string, filename: string, title = ""): Promise<void> {
   await closeFilesColumnSettings(page);
   if (!(await isNotebooksFilesView(page, folderUrl))) {
     await restoreFolderFilesTable(page, folderUrl);
@@ -673,30 +794,61 @@ async function filterFilesList(page: Page, folderUrl: string, filename: string, 
 
   const stem = filename.replace(/\.pdf$/i, "");
   const queries = [title.slice(0, 48), stem, filename, stem.replace(/\./g, " ")].filter((q) => q.trim().length >= 4);
-  for (const q of queries) {
-    if (!(await isNotebooksFilesView(page, folderUrl))) {
-      await restoreFolderFilesTable(page, folderUrl);
+
+  try {
+    let allQueriesEmpty = queries.length > 0;
+    for (const q of queries) {
+      if (!(await isNotebooksFilesView(page, folderUrl))) {
+        await restoreFolderFilesTable(page, folderUrl);
+      }
+      if (!(await isNotebooksFilesView(page, folderUrl))) {
+        warn(`SciSpace: Files 表に戻れず検索できませんでした（${filename}）`);
+        return;
+      }
+      log(`SciSpace: Files 検索を実行します (${q})`);
+      const searchSuccess = await fillFilesListSearch(page, folderUrl, q);
+      await sleep(400);
+
+      const noResults = await hasFilesNoResults(page);
+      if (noResults) {
+        log(`SciSpace: Files 検索が 0 件でした (${q})。検索欄を空にして表を戻します`);
+        await clearFilesListSearch(page, folderUrl);
+        continue;
+      }
+      allQueriesEmpty = false;
+
+      if (searchSuccess && (await filesNameVisible(page, filename, title))) {
+        return;
+      }
+
+      await clearFilesListSearch(page, folderUrl);
     }
-    if (!(await isNotebooksFilesView(page, folderUrl))) {
-      warn("SciSpace: Files 表に戻れないので検索しません");
+
+    await clearFilesListSearch(page, folderUrl);
+
+    if (allQueriesEmpty) {
+      log(`SciSpace: Files 一覧に見つかりません（${filename}）`);
       return;
     }
-    if (await fillFilesListSearch(page, folderUrl, q)) {
-      await sleep(400);
-      if (await filesNameVisible(page, filename, title)) return;
+
+    await closeFilesColumnSettings(page);
+    const listing = await pageText(page);
+    if (
+      filesListNeedsLoadMore(listing) ||
+      (await page.getByRole("button", { name: /^Load More$/i }).first().isVisible({ timeout: 400 }).catch(() => false))
+    ) {
+      if (await loadMoreFilesUntilName(page, filename, title)) return;
+    }
+    await scrollFilesForName(page, filename, title);
+
+    if (!(await filesNameVisible(page, filename, title))) {
+      log(`SciSpace: Files 一覧に見つかりません（${filename}）`);
+    }
+  } finally {
+    if (!(await filesNameVisible(page, filename, title).catch(() => false))) {
+      await clearFilesListSearch(page, folderUrl).catch(() => undefined);
     }
   }
-  await fillFilesListSearch(page, folderUrl, "");
-  await sleep(400);
-  await closeFilesColumnSettings(page);
-  const listing = await pageText(page);
-  if (
-    filesListNeedsLoadMore(listing) ||
-    (await page.getByRole("button", { name: /^Load More$/i }).first().isVisible({ timeout: 400 }).catch(() => false))
-  ) {
-    if (await loadMoreFilesUntilName(page, filename, title)) return;
-  }
-  await scrollFilesForName(page, filename, title);
 }
 
 type FilesCardCandidates = { texts: string[]; dois: string[] };

@@ -109,7 +109,7 @@ test("語中の改行も空白も除いて PDF 名を比較する", () => {
   assert.equal(pageShowsPdfFilename("another.pdf", "phase2_3_0_1.pdf"), false);
 });
 
-test("classifySciSpaceWaitState: ボット判定・ログイン画面・Files表・読み込み中を区別する", () => {
+test("classifySciSpaceWaitState: ボット判定・ログイン画面・Files表・読み込み中・検索結果0件を区別する", () => {
   assert.deepEqual(
     classifySciSpaceWaitState({ isBotChallenge: true }),
     { state: "bot_challenge", stateLabel: "ボット判定" },
@@ -128,6 +128,24 @@ test("classifySciSpaceWaitState: ボット判定・ログイン画面・Files表
   );
   assert.deepEqual(
     classifySciSpaceWaitState({ hasFilesTab: true, hasTable: false, hasUploadBtn: false }),
+    { state: "loading", stateLabel: "読み込み中" },
+  );
+  assert.deepEqual(
+    classifySciSpaceWaitState({
+      hasTable: false,
+      hasFilesTab: true,
+      hasUploadBtn: true,
+      hasNoResults: true,
+      hasSearchQuery: true,
+    }),
+    { state: "empty_search", stateLabel: "検索結果0件" },
+  );
+  assert.deepEqual(
+    classifySciSpaceWaitState({
+      hasTable: false,
+      hasNoResults: true,
+      hasSearchQuery: false,
+    }),
     { state: "loading", stateLabel: "読み込み中" },
   );
 });
