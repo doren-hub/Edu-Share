@@ -66,11 +66,12 @@ export function filenameWithoutWhitespace(value: string): string {
 export const SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS = 60_000;
 export const SCISPACE_HEADED_FOLDER_TIMEOUT_MS = 15 * 60_000;
 
-export type SciSpaceWaitState = "ready" | "login" | "bot_challenge" | "loading";
+export type SciSpaceWaitState = "ready" | "login" | "bot_challenge" | "empty_search" | "loading";
 
 export const SCISPACE_WAIT_STATE_LABELS: Record<SciSpaceWaitState, string> = {
   login: "ログイン画面",
   bot_challenge: "ボット判定",
+  empty_search: "検索結果0件",
   loading: "読み込み中",
   ready: "Files 表確認",
 };
@@ -79,6 +80,8 @@ export interface SciSpaceFolderElements {
   hasTable: boolean;
   hasFilesTab: boolean;
   hasUploadBtn: boolean;
+  hasNoResults?: boolean;
+  hasSearchQuery?: boolean;
 }
 
 export function classifySciSpaceWaitState(params: {
@@ -88,6 +91,8 @@ export function classifySciSpaceWaitState(params: {
   hasTable?: boolean;
   hasUploadBtn?: boolean;
   hasFilesTab?: boolean;
+  hasNoResults?: boolean;
+  hasSearchQuery?: boolean;
 }): {
   state: SciSpaceWaitState;
   stateLabel: string;
@@ -101,6 +106,9 @@ export function classifySciSpaceWaitState(params: {
   if (params.isReady || (params.hasTable && params.hasUploadBtn)) {
     return { state: "ready", stateLabel: SCISPACE_WAIT_STATE_LABELS.ready };
   }
+  if (params.hasNoResults && (params.hasSearchQuery ?? true) && !params.hasTable) {
+    return { state: "empty_search", stateLabel: SCISPACE_WAIT_STATE_LABELS.empty_search };
+  }
   return { state: "loading", stateLabel: SCISPACE_WAIT_STATE_LABELS.loading };
 }
 
@@ -112,11 +120,18 @@ export function formatSciSpaceWaitLog(params: {
   elements: Partial<SciSpaceFolderElements>;
 }): string {
   const label = SCISPACE_WAIT_STATE_LABELS[params.state] ?? params.state;
-  const elements = [
+  const elementParts = [
     `table:${params.elements.hasTable ? "あり" : "なし"}`,
     `filesTab:${params.elements.hasFilesTab ? "あり" : "なし"}`,
     `uploadBtn:${params.elements.hasUploadBtn ? "あり" : "なし"}`,
-  ].join(", ");
+  ];
+  if (params.elements.hasNoResults !== undefined) {
+    elementParts.push(`noResults:${params.elements.hasNoResults ? "あり" : "なし"}`);
+  }
+  if (params.elements.hasSearchQuery !== undefined) {
+    elementParts.push(`searchQuery:${params.elements.hasSearchQuery ? "あり" : "なし"}`);
+  }
+  const elements = elementParts.join(", ");
   const shortTitle = params.title ? `"${params.title.slice(0, 40)}"` : '""';
   const shortUrl = params.url ? params.url.slice(0, 80) : "(url不明)";
   return `SciSpace 待ち（残り約 ${params.leftSeconds}s, 状態: ${label}） url=${shortUrl} title=${shortTitle} 要素=[${elements}]`;

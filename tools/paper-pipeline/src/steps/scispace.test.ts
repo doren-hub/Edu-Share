@@ -562,3 +562,225 @@ test("issue 322: an italic fragment in Files cannot bypass PDF title validation"
     assert.equal(state.sciTitleRejected, bodyTitle !== title);
   }
 });
+
+test("issue 335: restoreFolderFilesTable は検索欄に文字や 0 件表示があるとき検索欄を空にする", async () => {
+  const { restoreFolderFilesTable } = await import("./scispace.ts");
+  let searchVal = "UnmatchedTitle";
+  let hasNoResults = true;
+  let filledValue = "";
+
+  const page = {
+    url: () => "https://example.test/folder",
+    locator: (selector: string) => {
+      if (selector.includes("folder-toolbar-search-input")) {
+        return {
+          first: () => ({
+            isVisible: async () => true,
+            inputValue: async () => searchVal,
+            fill: async (val: string) => {
+              filledValue = val;
+              searchVal = val;
+              hasNoResults = val !== "";
+            },
+          }),
+        };
+      }
+      if (selector.includes("table:has(tr)")) {
+        return {
+          first: () => ({
+            isVisible: async () => searchVal === "",
+          }),
+        };
+      }
+      if (selector === "body") {
+        return {
+          innerText: async () =>
+            searchVal ? `There are no results for "${searchVal}"` : "Upload PDFs Files (10) Uploaded on",
+        };
+      }
+      return {
+        first: () => ({
+          isVisible: async () => false,
+        }),
+      };
+    },
+    getByRole: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    getByPlaceholder: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    keyboard: {
+      press: async () => {},
+    },
+    getByText: (pattern: RegExp | string) => ({
+      first: () => ({
+        isVisible: async () => {
+          if (typeof pattern === "object" && pattern.test("There are no results")) {
+            return hasNoResults;
+          }
+          return false;
+        },
+      }),
+    }),
+  } as unknown as import("playwright").Page;
+
+  await restoreFolderFilesTable(page, "https://example.test/folder");
+  assert.equal(filledValue, "");
+  assert.equal(searchVal, "");
+});
+
+test("issue 335: filterFilesList は検索0件でも検索欄を空にして次の語へ進み、どの戻り方でも検索欄を空にする", async () => {
+  const { filterFilesList } = await import("./scispace.ts");
+  const searchesTried: string[] = [];
+  let currentSearch = "";
+
+  const page = {
+    url: () => "https://example.test/folder",
+    locator: (selector: string) => {
+      if (selector.includes("folder-toolbar-search-input")) {
+        return {
+          first: () => ({
+            isVisible: async () => true,
+            inputValue: async () => currentSearch,
+            fill: async (val: string) => {
+              currentSearch = val;
+              searchesTried.push(val);
+            },
+          }),
+        };
+      }
+      if (selector.includes("table:has(tr)")) {
+        return {
+          first: () => ({
+            isVisible: async () => currentSearch === "",
+          }),
+        };
+      }
+      if (selector === "body") {
+        return {
+          innerText: async () =>
+            currentSearch ? `There are no results for "${currentSearch}"` : "Upload PDFs Files (10) Uploaded on",
+        };
+      }
+      return {
+        first: () => ({
+          isVisible: async () => false,
+        }),
+      };
+    },
+    getByRole: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    getByPlaceholder: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    keyboard: {
+      press: async () => {},
+    },
+    getByText: (pattern: RegExp | string) => ({
+      first: () => ({
+        isVisible: async () => {
+          if (typeof pattern === "object" && pattern.test("There are no results")) {
+            return currentSearch !== "";
+          }
+          return false;
+        },
+        scrollIntoViewIfNeeded: async () => {},
+      }),
+    }),
+    keyboard: {
+      press: async () => {},
+    },
+    mouse: {
+      wheel: async () => {},
+    },
+  } as unknown as import("playwright").Page;
+
+  await filterFilesList(page, "https://example.test/folder", "missing_report.pdf", "日本語報告書の長い題名テキスト");
+
+  // Several search queries tried
+  assert.ok(searchesTried.length > 2);
+  // The final search query is cleared ("")
+  assert.equal(currentSearch, "");
+});
+
+test("issue 335: filterFilesList は例外発生時でも finally で検索欄を空にする", async () => {
+  const { filterFilesList } = await import("./scispace.ts");
+  let currentSearch = "";
+  let clearInvoked = false;
+
+  const page = {
+    url: () => "https://example.test/folder",
+    locator: (selector: string) => {
+      if (selector.includes("folder-toolbar-search-input")) {
+        return {
+          first: () => ({
+            isVisible: async () => true,
+            inputValue: async () => currentSearch,
+            fill: async (val: string) => {
+              currentSearch = val;
+              if (val === "") clearInvoked = true;
+            },
+          }),
+        };
+      }
+      if (selector.includes("table:has(tr)")) {
+        return {
+          first: () => ({
+            isVisible: async () => currentSearch === "",
+          }),
+        };
+      }
+      if (selector === "body") {
+        return {
+          innerText: async () =>
+            currentSearch ? `There are no results for "${currentSearch}"` : "Upload PDFs Files (10) Uploaded on",
+        };
+      }
+      return {
+        first: () => ({
+          isVisible: async () => false,
+        }),
+      };
+    },
+    getByRole: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    getByPlaceholder: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+    keyboard: {
+      press: async () => {},
+    },
+    mouse: {
+      wheel: async () => {
+        throw new Error("Mouse failure during scroll");
+      },
+    },
+    getByText: () => ({
+      first: () => ({
+        isVisible: async () => false,
+      }),
+    }),
+  } as unknown as import("playwright").Page;
+
+  await assert.rejects(
+    () => filterFilesList(page, "https://example.test/folder", "crash.pdf", "Crash Test Title"),
+    /Mouse failure during scroll/,
+  );
+  assert.equal(clearInvoked, true);
+  assert.equal(currentSearch, "");
+});
