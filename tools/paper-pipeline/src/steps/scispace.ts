@@ -802,8 +802,7 @@ export async function filterFilesList(page: Page, folderUrl: string, filename: s
         await restoreFolderFilesTable(page, folderUrl);
       }
       if (!(await isNotebooksFilesView(page, folderUrl))) {
-        warn("SciSpace: Files 表に戻れないので検索しません");
-        log(`SciSpace: Files 一覧に見つかりません（${filename}）`);
+        warn(`SciSpace: Files 表に戻れず検索できませんでした（${filename}）`);
         return;
       }
       log(`SciSpace: Files 検索を実行します (${q})`);

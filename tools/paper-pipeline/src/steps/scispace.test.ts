@@ -760,13 +760,27 @@ test("issue 335: filterFilesList は全検索語が0件のとき Load More や�
     }),
   } as unknown as import("playwright").Page;
 
-  await filterFilesList(page, "https://example.test/folder", "missing.pdf", "Missing Title");
+  const loggedLines: string[] = [];
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  (process.stdout as unknown as { write: (...args: unknown[]) => boolean }).write = (
+    chunk: unknown,
+    ...args: unknown[]
+  ) => {
+    loggedLines.push(String(chunk));
+    return (originalStdoutWrite as unknown as (...args: unknown[]) => boolean)(chunk, ...args);
+  };
+  try {
+    await filterFilesList(page, "https://example.test/folder", "missing.pdf", "Missing Title");
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
   // Queries were actually attempted
   assert.ok(queriesRan.length >= 2);
   // All queries were 0 results, so Load More and scroll wheel must be skipped completely
   assert.equal(loadMoreChecked, false);
   assert.equal(scrollChecked, false);
   assert.equal(currentSearch, "");
+  assert.ok(loggedLines.some((l) => l.includes("SciSpace: Files 一覧に見つかりません（missing.pdf）")));
 });
 
 test("issue 335: filterFilesList は検索0件でも検索欄を空にして次の語へ進み、どの戻り方でも検索欄を空にする", async () => {
