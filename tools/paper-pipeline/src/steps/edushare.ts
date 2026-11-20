@@ -36,7 +36,7 @@ import {
   VIDEO_MATERIAL_HEADING,
 } from "../edushare-form.ts";
 import { isValidAuthorName, titleKey } from "../bibliography.ts";
-import { PDF_TITLE_CHECK_PREFIX_CHARS } from "../pdf-grounding.ts";
+import { findReferencesSectionIndex, PDF_TITLE_CHECK_PREFIX_CHARS } from "../pdf-grounding.ts";
 import { parseFirstPageTitleAndAuthor } from "../content-match.ts";
 import { extractPdfText } from "../pdf-text.ts";
 import { fetchCrossrefWork } from "../crossref.ts";
@@ -381,7 +381,9 @@ async function resolvePaperAuthorContext(
     }
   }
 
-  const prefix = pdfText ? pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS) : "";
+  const refIndex = pdfText ? findReferencesSectionIndex(pdfText) : -1;
+  const preRef = pdfText ? (refIndex >= 0 ? pdfText.slice(0, refIndex) : pdfText) : "";
+  const prefix = preRef.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
   const doi = state.doi || (prefix ? doiFromHrefOrText(prefix) : "");
   let doiAuthor: string | undefined;
   if (doi) {

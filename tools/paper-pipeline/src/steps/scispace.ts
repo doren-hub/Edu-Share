@@ -25,6 +25,7 @@ import {
   isTitleGroundedInPdfText,
   isDescriptionGroundedInPdfText,
   isDoiGroundedInPdfText,
+  findReferencesSectionIndex,
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
@@ -1413,7 +1414,10 @@ export async function verifySciSpaceBibliography(
   if (titleLooksTruncated(state.title) || titleHasPdfContinuation(state.title, pdfText)) {
     state.sciTitleRejected = true;
   }
-  const doiToVerify = doiFromHrefOrText(pdfText) || (!state.doi.trim() && candidateDoi ? candidateDoi.trim() : "");
+  const refIndex = findReferencesSectionIndex(pdfText);
+  const preRef = refIndex >= 0 ? pdfText.slice(0, refIndex) : pdfText;
+  const prefix = preRef.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
+  const doiToVerify = (prefix ? doiFromHrefOrText(prefix) : "") || (!state.doi.trim() && candidateDoi ? candidateDoi.trim() : "");
   if (doiToVerify) {
     try {
       const work = await lookup(doiToVerify);

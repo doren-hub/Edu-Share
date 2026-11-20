@@ -5,6 +5,7 @@ import {
   isTitleGroundedInPdfText,
   isDescriptionGroundedInPdfText,
   isDoiGroundedInPdfText,
+  findReferencesSectionIndex,
   extractSignificantWords,
   MIN_PDF_TEXT_CHARS,
 } from "./pdf-grounding.ts";
@@ -205,6 +206,136 @@ ${"Testing prefix grounding boundary logic for issue 337. ".repeat(4)}
 
   // 末尾がピリオド（文末）や空白の場合は完全一致として一致する
   assert.equal(isDoiGroundedInPdfText("10.1000/abc1", pdfWithExactDoi), true);
+});
+
+test("issue 339: findReferencesSectionIndex は参考文献の見出し位置を検出する", () => {
+  assert.equal(findReferencesSectionIndex("Simple text without references"), -1);
+  assert.equal(findReferencesSectionIndex("Title\nReferences\n[1] Paper"), 6);
+  assert.equal(findReferencesSectionIndex("Title\n8. References\n[1] Paper"), 6);
+  assert.equal(findReferencesSectionIndex("Title\n【参考文献】\n[1] 論文"), 6);
+  assert.equal(findReferencesSectionIndex("Title\n引用文献\n[1] 論文"), 6);
+  // 本文中の言及（見出しではない行）は検出しない
+  assert.equal(findReferencesSectionIndex("Title\nWith reference to previous work\nText"), -1);
+});
+
+test("issue 339: isDoiGroundedInPdfText は参考文献の一覧にだけある DOI を採用しない", () => {
+  const pdfText = `
+Preprint Paper Title
+Alice Smith, Bob Jones
+arXiv:2401.00001
+Abstract
+We present a new algorithm for neural processing.
+
+1. Introduction
+Content of introduction...
+
+References
+[1] Some Software, Zenodo, https://doi.org/10.5281/zenodo.1234567
+[2] Another Paper, https://doi.org/10.1016/j.jcp.2020.01.001
+`.trim();
+
+  // 参考文献にある Zenodo DOI や引用論文の DOI は false
+  assert.equal(isDoiGroundedInPdfText("10.5281/zenodo.1234567", pdfText), false);
+  assert.equal(isDoiGroundedInPdfText("10.1016/j.jcp.2020.01.001", pdfText), false);
+});
+
+test("issue 339: isDoiGroundedInPdfText は先頭ページにある DOI を採用する", () => {
+  const pdfText = `
+Published Paper Title
+Alice Smith, Bob Jones
+Journal of Machine Learning, Vol. 10
+DOI: 10.1016/j.jml.2024.100123
+Abstract
+We present a new algorithm for neural processing.
+
+1. Introduction
+Content of introduction...
+
+References
+[1] Some Software, Zenodo, https://doi.org/10.5281/zenodo.1234567
+`.trim();
+
+  // 先頭ページの論文自身の DOI は true
+  assert.equal(isDoiGroundedInPdfText("10.1016/j.jml.2024.100123", pdfText), true);
+  // 参考文献の DOI は false
+  assert.equal(isDoiGroundedInPdfText("10.5281/zenodo.1234567", pdfText), false);
+});
+
+test("issue 339: isDoiGroundedInPdfText は先頭ページと参考文献の両方にある DOI を採用する", () => {
+  const myDoi = "10.1016/j.jml.2024.100123";
+  const pdfText = `
+Published Paper Title
+Alice Smith, Bob Jones
+Journal of Machine Learning, Vol. 10
+DOI: ${myDoi}
+Abstract
+We present a new algorithm for neural processing.
+
+1. Introduction
+Content of introduction...
+
+References
+[1] Alice Smith, Previous version of this paper, https://doi.org/${myDoi}
+[2] Some Software, Zenodo, https://doi.org/10.5281/zenodo.1234567
+`.trim();
+
+  // 先頭ページにあれば（参考文献に重複引用されていても）採用する
+  assert.equal(isDoiGroundedInPdfText(myDoi, pdfText), true);
+  // 参考文献にしかないものは不採用
+  assert.equal(isDoiGroundedInPdfText("10.5281/zenodo.1234567", pdfText), false);
+});
+
+test("issue 339: isDoiGroundedInPdfText は参考文献の見出しがない PDF でも先頭ページの DOI を採用する", () => {
+  const myDoi = "10.1016/j.jml.2024.100123";
+  const pdfText = `
+Short Abstract Title
+Alice Smith, Bob Jones
+DOI: ${myDoi}
+Abstract
+This is a short workshop abstract without a formal references section.
+${"More text content for abstract length requirement. ".repeat(4)}
+`.trim();
+
+  assert.equal(isDoiGroundedInPdfText(myDoi, pdfText), true);
+  assert.equal(isDoiGroundedInPdfText("10.9999/nonexistent", pdfText), false);
+});
+
+test("issue 339: isDoiGroundedInPdfText は日本語の参考文献見出しにも対応する", () => {
+  const myDoi = "10.1234/sice.2024.01";
+  const refDoi = "10.5281/zenodo.9999";
+  const pdfText = `
+教育システム研究論文
+山田太郎
+DOI: ${myDoi}
+概要
+研究内容の要約文。
+
+1. はじめに
+導入文...
+
+【参考文献】
+[1] 参考オープンソースソフトウェア, https://doi.org/${refDoi}
+`.trim();
+
+  assert.equal(isDoiGroundedInPdfText(myDoi, pdfText), true);
+  assert.equal(isDoiGroundedInPdfText(refDoi, pdfText), false);
+});
+
+test("issue 339: isDoiGroundedInPdfText は各ページのヘッダー・フッターにある DOI を採用する", () => {
+  const myDoi = "10.1016/j.jml.2024.100123";
+  const pdfText = `Title Page Without DOI
+Alice Smith
+Abstract text here.
+${"Abstract description text. ".repeat(6)}
+\fJournal of ML 2024, DOI: ${myDoi}
+Section 2. Method
+Body content on page 2.
+References
+[1] Other ref https://doi.org/10.5281/zenodo.12345
+`.trim();
+
+  assert.equal(isDoiGroundedInPdfText(myDoi, pdfText), true);
+  assert.equal(isDoiGroundedInPdfText("10.5281/zenodo.12345", pdfText), false);
 });
 
 

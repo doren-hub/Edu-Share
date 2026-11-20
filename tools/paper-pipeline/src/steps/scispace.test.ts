@@ -1270,3 +1270,113 @@ test("issue 337: verifySciSpaceBibliography は公式書誌で題名と照合で
   assert.equal(stateGenuine.doi, genuineDoi);
 });
 
+test("issue 339: applyRecordPageCard は参考文献の一覧にだけある DOI を保存せず、先頭ページの DOI を保存する", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const filename = "preprint_sample.pdf";
+  const title = "Neural Processing Preprint";
+  const zenodoDoi = "10.5281/zenodo.1234567";
+  const realDoi = "10.1016/j.jcp.2024.001";
+
+  // 1. 参考文献にしか DOI がない場合（プレプリント）: DOI は空のまま
+  const preprintPdf = `
+${title}
+Alice Smith
+Abstract
+Algorithm description.
+${"Background content for testing length. ".repeat(4)}
+References
+[1] Software library https://doi.org/${zenodoDoi}
+`.trim();
+
+  const state1 = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  state1.title = title;
+  const card1 = {
+    title,
+    yearAuthorLine: "2024 · Alice Smith",
+    authors: "Alice Smith",
+    publicationYear: "2024",
+    venue: "",
+    doi: zenodoDoi,
+    paste: "",
+    tldr: "Algorithm description.",
+  };
+  applyRecordPageCard(state1, filename, card1, title, preprintPdf);
+  assert.equal(state1.doi, "");
+
+  // 2. 先頭ページに論文自身の DOI がある場合: 保存される
+  const journalPdf = `
+${title}
+Alice Smith
+DOI: ${realDoi}
+Abstract
+Algorithm description.
+${"Background content for testing length. ".repeat(4)}
+References
+[1] Software library https://doi.org/${zenodoDoi}
+`.trim();
+
+  const state2 = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  state2.title = title;
+  const card2 = {
+    ...card1,
+    doi: realDoi,
+  };
+  applyRecordPageCard(state2, filename, card2, title, journalPdf);
+  assert.equal(state2.doi, realDoi);
+
+  // 3. 先頭ページと参考文献の両方にある場合: 保存される
+  const selfCitePdf = `
+${title}
+Alice Smith
+DOI: ${realDoi}
+Abstract
+Algorithm description.
+${"Background content for testing length. ".repeat(4)}
+References
+[1] Self citation https://doi.org/${realDoi}
+`.trim();
+
+  const state3 = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  state3.title = title;
+  applyRecordPageCard(state3, filename, card2, title, selfCitePdf);
+  assert.equal(state3.doi, realDoi);
+
+  // 4. 参考文献の見出しがない PDF で先頭ページの DOI が保存される
+  const noRefPdf = `
+${title}
+Alice Smith
+DOI: ${realDoi}
+Abstract
+Algorithm description.
+${"Background content for testing length. ".repeat(4)}
+`.trim();
+
+  const state4 = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  state4.title = title;
+  applyRecordPageCard(state4, filename, card2, title, noRefPdf);
+  assert.equal(state4.doi, realDoi);
+});
+
+test("issue 339: verifySciSpaceBibliography は PDF 後方の参考文献から DOI を誤抽出しない", async () => {
+  const { verifySciSpaceBibliography } = await import("./scispace.ts");
+  const filename = "arxiv_paper.pdf";
+  const title = "New Transformer Model";
+  const zenodoDoi = "10.5281/zenodo.9999999";
+  // 3500 文字以降の参考文献にだけ他文献の DOI があるプレプリント
+  const pdfText = `${title}\nAlice Smith\nAbstract\n${"Deep learning model analysis. ".repeat(120)}\nReferences\n[1] Tool https://doi.org/${zenodoDoi}\n`;
+
+  const state = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  state.title = title;
+
+  let lookupCalled = false;
+  await verifySciSpaceBibliography(state, filename, pdfText, async (doi) => {
+    lookupCalled = true;
+    return null;
+  });
+
+  // 参考文献にある DOI を lookup せず、state.doi も空のまま
+  assert.equal(lookupCalled, false);
+  assert.equal(state.doi, "");
+});
+
+
