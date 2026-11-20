@@ -147,7 +147,7 @@ function escapeRegex(s: string): string {
 }
 
 export const REFERENCE_SECTION_HEADING_RE =
-  /(?:^|\r?\n)[ \t]*(?:[【\[]?\s*(?:(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)[\.\s]+|[§#]+\s*)?(?:references?|bibliography|literature\s+cited|works\s+cited)|参考文献(?:・引用文献)?|引用文献|参考資料)\s*[】\]]?)[ \t]*[:：]?[ \t]*(?=\r?\n|$)/i;
+  /(?:^|\r?\n)[ \t]*(?:[【\[]?\s*(?:(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)[\.\s]+|[§#]+\s*)?(?:references?(?:\s+and\s+notes)?|bibliography|literature(?:\s+cited)?|works\s+cited)|参考文献(?:・引用文献)?|引用文献|参考資料|文献)\s*[】\]]?)[ \t]*[:：]?[ \t]*(?=\r?\n|$)/i;
 
 /**
  * PDF 本文内で参考文献一覧の見出しが始まる位置を返す。

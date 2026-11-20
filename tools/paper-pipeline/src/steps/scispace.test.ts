@@ -1369,7 +1369,7 @@ test("issue 339: verifySciSpaceBibliography は PDF 後方の参考文献から 
   state.title = title;
 
   let lookupCalled = false;
-  await verifySciSpaceBibliography(state, filename, pdfText, async (doi) => {
+  await verifySciSpaceBibliography(state, filename, pdfText, async () => {
     lookupCalled = true;
     return null;
   });

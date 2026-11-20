@@ -212,8 +212,11 @@ test("issue 339: findReferencesSectionIndex は参考文献の見出し位置を
   assert.equal(findReferencesSectionIndex("Simple text without references"), -1);
   assert.equal(findReferencesSectionIndex("Title\nReferences\n[1] Paper"), 6);
   assert.equal(findReferencesSectionIndex("Title\n8. References\n[1] Paper"), 6);
+  assert.equal(findReferencesSectionIndex("Title\nReferences and Notes\n[1] Paper"), 6);
+  assert.equal(findReferencesSectionIndex("Title\nLiterature\n[1] Paper"), 6);
   assert.equal(findReferencesSectionIndex("Title\n【参考文献】\n[1] 論文"), 6);
   assert.equal(findReferencesSectionIndex("Title\n引用文献\n[1] 論文"), 6);
+  assert.equal(findReferencesSectionIndex("Title\n文献\n[1] 論文"), 6);
   // 本文中の言及（見出しではない行）は検出しない
   assert.equal(findReferencesSectionIndex("Title\nWith reference to previous work\nText"), -1);
 });
