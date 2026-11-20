@@ -183,4 +183,28 @@ We conducted a comprehensive assessment of all-cause mortality across 195 countr
   assert.equal(isDoiGroundedInPdfText("10.1016/S0140-6736(16)32380-7", undefined), false);
 });
 
+test("issue 337: isDoiGroundedInPdfText は DOI の前方部分一致（より長い別 DOI の接頭辞）を除外する", () => {
+  const pdfWithLongerDoi = `
+Research Paper Title
+Author Name
+DOI: 10.1000/abc12
+More detailed text for PDF length requirements.
+${"Testing prefix grounding boundary logic for issue 337. ".repeat(4)}
+`.trim();
+
+  // 10.1000/abc1 は 10.1000/abc12 の接頭辞にすぎないため不一致とする
+  assert.equal(isDoiGroundedInPdfText("10.1000/abc1", pdfWithLongerDoi), false);
+
+  const pdfWithExactDoi = `
+Research Paper Title
+Author Name
+DOI: 10.1000/abc1.
+Sentence follows with text for length requirement.
+${"Testing prefix grounding boundary logic for issue 337. ".repeat(4)}
+`.trim();
+
+  // 末尾がピリオド（文末）や空白の場合は完全一致として一致する
+  assert.equal(isDoiGroundedInPdfText("10.1000/abc1", pdfWithExactDoi), true);
+});
+
 

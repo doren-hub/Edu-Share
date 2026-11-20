@@ -1098,6 +1098,28 @@ test("issue 337: applyRecordPageCard は途中で切れた DOI は保存しな�
   assert.equal(state.doi, "");
 });
 
+test("issue 337: isAuthorGroundedInPdfFirstPage と groundedAuthorsFromRecordCard は PDF 先頭の人名のみ抽出し本文語句を除外する", async () => {
+  const { isAuthorGroundedInPdfFirstPage, groundedAuthorsFromRecordCard } = await import("./scispace.ts");
+  const title = "Investigation of Polymer Dual Gelation Mechanism";
+  const pdfText = `${title}\nTaro Yamada, Jiro Suzuki\nAbstract\nIn contrast to standard processes, dual gelation occurs at the 95th and 99th percentiles.\n${"Detailed research content for meeting minimum pdf text length. ".repeat(4)}`;
+
+  // 1. 本文語句は人名ではない、または先頭著者に該当しないため false
+  assert.equal(isAuthorGroundedInPdfFirstPage("contrast", pdfText, title), false);
+  assert.equal(isAuthorGroundedInPdfFirstPage("dual gelation", pdfText, title), false);
+  assert.equal(isAuthorGroundedInPdfFirstPage("the 95th and 99th percentiles", pdfText, title), false);
+
+  // 2. 本文先頭の人名は true
+  assert.equal(isAuthorGroundedInPdfFirstPage("Taro Yamada", pdfText, title), true);
+  assert.equal(isAuthorGroundedInPdfFirstPage("Jiro Suzuki", pdfText, title), true);
+
+  // 3. 別論文の著者は false
+  assert.equal(isAuthorGroundedInPdfFirstPage("Christopher Murray", pdfText, title), false);
+
+  // 4. groundedAuthorsFromRecordCard の複合カンマ区切り処理
+  const mixed = "Taro Yamada, dual gelation, Jiro Suzuki, Christopher Murray";
+  assert.equal(groundedAuthorsFromRecordCard(mixed, pdfText, title), "Taro Yamada, Jiro Suzuki");
+});
+
 test("issue 337: applyRecordPageCard はページ全体の文字から取った著者について PDF 先頭ページにある名前だけ採用し本文語句を除外する", async () => {
   const { applyRecordPageCard } = await import("./scispace.ts");
   const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
@@ -1105,7 +1127,7 @@ test("issue 337: applyRecordPageCard はページ全体の文字から取った�
   const filename = "gelation_study.pdf";
   const title = "Investigation of Polymer Dual Gelation Mechanism";
   const realAuthor = "Taro Yamada";
-  const pdfText = `${title}\n${realAuthor}\nAbstract\nIn contrast to standard processes, dual gelation occurs at the 95th and 99th percentiles.\n`;
+  const pdfText = `${title}\n${realAuthor}\nAbstract\nIn contrast to standard processes, dual gelation occurs at the 95th and 99th percentiles.\n${"Detailed research content for meeting minimum pdf text length. ".repeat(4)}`;
 
   // 1. 本文語句 contrast, dual gelation, the 95th and 99th percentiles が著者行として現れた場合
   for (const junkAuthor of ["contrast", "dual gelation", "the 95th and 99th percentiles"]) {
@@ -1114,6 +1136,9 @@ test("issue 337: applyRecordPageCard はページ全体の文字から取った�
     applyRecordPageCard(state, filename, card, title, pdfText);
     // 本文語句はグラウンディングされず除外され、venue等の誤判定にも使われない
     assert.equal(state.venue, "");
+    // 保存された state.filesPaste に本文語句が入らない
+    assert.ok(!state.filesPaste.includes(junkAuthor));
+    assert.equal(extractSciSpaceCardMeta(state.filesPaste, filename).authors, "");
   }
 
   // 2. 正規の著者 Taro Yamada がページ文字から取れ、PDF 先頭にある場合
@@ -1122,12 +1147,72 @@ test("issue 337: applyRecordPageCard はページ全体の文字から取った�
   applyRecordPageCard(state, filename, validCard, title, pdfText);
   // 正規の著者は採用される
   assert.equal(state.venue, "Polymer Journal");
+  assert.equal(extractSciSpaceCardMeta(state.filesPaste, filename).authors, realAuthor);
+  assert.ok(state.filesPaste.includes(realAuthor));
 
   // 3. 別の論文の著者がページ文字から取れたが、今の論文の PDF 先頭にない場合
   const stateForeign = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
   const foreignCard = extractSciSpaceCardMeta(`${filename}\n${title}\n2023 · Christopher Murray`, filename);
   applyRecordPageCard(stateForeign, filename, foreignCard, title, pdfText);
-  // PDF 先頭にない別論文の著者は除外される
+  // PDF 先頭にない別論文の著者は除外され、state.filesPaste に入らない
+  assert.ok(!stateForeign.filesPaste.includes("Christopher Murray"));
+  assert.equal(extractSciSpaceCardMeta(stateForeign.filesPaste, filename).authors, "");
+});
+
+test("issue 337: applyRecordPageCard は pdfText が未定義でも既存の state.filesPaste 著者を破壊しない", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+
+  const filename = "existing_paper.pdf";
+  const title = "Existing Research Paper";
+  const state = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  state.filesPaste = `${filename}\n${title}\n2022 · Alice Brown\nExisting Journal`;
+
+  const card = extractSciSpaceCardMeta(`${filename}\n${title}\n2022 · Bob Green\nExisting Journal`, filename);
+  applyRecordPageCard(state, filename, card, title, undefined);
+
+  // 既存の Files 由来の著者が保持される
+  const parsed = extractSciSpaceCardMeta(state.filesPaste, filename);
+  assert.equal(parsed.authors, "Alice Brown");
+});
+
+test("issue 337: fillMetaFromRecordPage はページを確認できない場合にメタ取得をスキップし state を変更しない", async () => {
+  const { fillMetaFromRecordPage } = await import("./scispace.ts");
+  const filename = "food_study.pdf";
+  const title = "Study on Nutritional Properties of Food";
+  const pdfText = `${title}\nBob Smith\nAbstract\n${"Nutritional analysis content for food science research. ".repeat(4)}\n`;
+
+  const state = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  state.title = title;
+
+  // 直前の別論文（Lancet）の内容が表示されているモックページ
+  const mockPage = {
+    goto: async () => {},
+    locator: (selector: string) => {
+      const el = {
+        first: () => el,
+        innerText: async () => "Global burden of cardiovascular disease\n10.1016/S0140-6736(16)32380-7\nwww.thelancet.com",
+        textContent: async () => "Global burden of cardiovascular disease",
+        getAttribute: async (attr: string) => {
+          if (attr === "content") return "The Lancet global burden study description";
+          return "";
+        },
+      };
+      return el;
+    },
+    title: async () => "Global Burden of Disease - The Lancet",
+    evaluate: async () => "Global burden of cardiovascular disease\n10.1016/S0140-6736(16)32380-7\nwww.thelancet.com",
+    waitForTimeout: async () => {},
+  } as unknown as import("playwright").Page;
+
+  const result = await fillMetaFromRecordPage(mockPage, state, filename, pdfText);
+
+  // 確認できないページからは何も返さず、state も汚染されない
+  assert.deepEqual(result, {});
+  assert.equal(state.title, title);
+  assert.equal(state.doi, "");
+  assert.equal(state.tldr, "");
+  assert.equal(state.filesPaste, "");
 });
 
 test("issue 337: verifySciSpaceBibliography は公式書誌で題名と照合できた DOI（candidateDoi）のみ保存する", async () => {

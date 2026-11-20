@@ -1640,7 +1640,7 @@ async function fillTldrFallbacks(
   }
 }
 
-async function fillMetaFromRecordPage(
+export async function fillMetaFromRecordPage(
   page: Page,
   state: PaperState,
   filename: string,
@@ -1690,9 +1690,10 @@ async function fillMetaFromRecordPage(
   }
 
   if (!pageConfirmed) {
-    warn(`SciSpace: 個別ページが今の論文（${filename}）のものと確認できないため、ページ全体の文字からメタ情報は取得しません`);
-    body = "";
-  } else if (!body) {
+    warn(`SciSpace: 個別ページが今の論文（${filename}）のものと確認できないため、個別ページからのメタ情報取得をスキップします`);
+    return {};
+  }
+  if (!body) {
     body = await pageText(page);
   }
 
@@ -1835,6 +1836,15 @@ export function applyRecordPageCard(
     state.sciTitleRejected = false;
   } else if (!title || titleLooksLikeFilename(state.title, filename)) {
     state.sciTitleRejected = true;
+  }
+
+  // Files 行に著者が無い場合、検証済み著者のみを反映したカード行で補う
+  if (authors && !extractSciSpaceCardMeta(state.filesPaste, filename).authors) {
+    const pasteTitle = usableRecordTitle(heading, filename) ? heading : title || state.title;
+    state.filesPaste = metadataPasteFromCard(
+      { title: pasteTitle, yearAuthorLine, venue: card.venue },
+      filename,
+    );
   }
 }
 
