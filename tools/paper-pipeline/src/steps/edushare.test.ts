@@ -621,3 +621,45 @@ test("Issue #333: ensurePaperAuthor: 参考文献の引用 DOI や題名不一�
   }
 });
 
+test("Issue #341: ensurePaperAuthor: フォーム初期値が無関係な組織名で PDF 先頭にない場合、PDF 著者で上書きする", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ensure-author-ground-"));
+  try {
+    const pdfPath = join(root, "paper.pdf");
+    writeFileSync(pdfPath, "dummy-pdf");
+    const state = emptyState({
+      filename: "paper.pdf",
+      inboxPdfPath: pdfPath,
+      paperDir: root,
+    });
+    state.filesPaste = "paper.pdf\n著者なし";
+    state.title = "Target Paper Title";
+
+    const pdfText = `Target Paper Title\nValid Author\nAbstract\nContent text.\n${"Detailed content meeting minimum length. ".repeat(4)}`;
+
+    const { page, getSelected } = createFakeAuthorPage([
+      "",
+      "Unrelated Organization",
+      "その他",
+    ]);
+    await page.locator("#paper-author-0").selectOption("Unrelated Organization");
+
+    let picklistAddedName = "";
+    const fakeDeps = {
+      extractPdfText: async () => pdfText,
+      fetchCrossrefWork: async () => null,
+      ensureExpertNamePicklist: async (_page: any, name: string) => {
+        picklistAddedName = name;
+        return true;
+      },
+    };
+
+    await ensurePaperAuthor(page, state, fakeDeps);
+
+    assert.equal(picklistAddedName, "Valid Author");
+    assert.equal(getSelected(), "Valid Author");
+    assert.equal(state.author, "Valid Author");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

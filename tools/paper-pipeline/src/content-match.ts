@@ -240,7 +240,11 @@ function looksLikeFirstPageAuthorLine(line: string, title?: string): boolean {
 /**
  * 1ページ目テキストから題名と筆頭著者候補を抽出
  */
-export function parseFirstPageTitleAndAuthor(text: string): { title?: string; author?: string } {
+export function parseFirstPageTitleAndAuthor(text: string): {
+  title?: string;
+  author?: string;
+  authors?: string[];
+} {
   if (!text.trim()) return {};
   const lines = text
     .split(/\r?\n/)
@@ -272,6 +276,7 @@ export function parseFirstPageTitleAndAuthor(text: string): { title?: string; au
     return {
       title: title || undefined,
       author: author || undefined,
+      authors: authors.length > 0 ? authors : undefined,
     };
   }
 
@@ -302,6 +307,7 @@ export function parseFirstPageTitleAndAuthor(text: string): { title?: string; au
     return {
       title: title || undefined,
       author: author || undefined,
+      authors: authors.length > 0 ? authors : undefined,
     };
   }
 

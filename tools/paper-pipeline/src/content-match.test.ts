@@ -171,6 +171,24 @@ This paper provides an overview of deep learning methods for NLP.
   const resMulti = parseFirstPageTitleAndAuthor(multiLineTitleText);
   assert.equal(resMulti.title, "Deep Learning for Natural Language Processing");
   assert.equal(resMulti.author, undefined);
+
+  // Issue #341: parseFirstPageTitleAndAuthor は共著者を含む全著者配列 authors も返す
+  const multiAuthorsText = `
+Deep Residual Learning for Image Recognition
+Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun
+Microsoft Research
+Abstract
+Deeper neural networks are more difficult to train...
+`;
+  const resCoauthors = parseFirstPageTitleAndAuthor(multiAuthorsText);
+  assert.equal(resCoauthors.title, "Deep Residual Learning for Image Recognition");
+  assert.equal(resCoauthors.author, "Kaiming He");
+  assert.deepEqual(resCoauthors.authors, [
+    "Kaiming He",
+    "Xiangyu Zhang",
+    "Shaoqing Ren",
+    "Jian Sun",
+  ]);
 });
 
 test("matchPaperContent 実例: 9905030v1 と 9905030v1_ は一致する", () => {
