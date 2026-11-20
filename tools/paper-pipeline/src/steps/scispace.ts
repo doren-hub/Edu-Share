@@ -55,10 +55,11 @@ import {
 } from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
 import { isAuthorGroundedInPdfFirstPage, splitAuthors } from "../edushare-form.ts";
-export { isAuthorGroundedInPdfFirstPage };
 import { isInteractiveUi, looksLikeBotChallenge, NeedVisibleChromeError, pauseIfBlocked } from "../human.ts";
 import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
 import { saveFailureShot, uploadViaChooserOrInput } from "../ui.ts";
+
+export { isAuthorGroundedInPdfFirstPage };
 
 function filesSearchHint(state: PaperState): string {
   const title = state.title.trim();

@@ -85,10 +85,12 @@ export function isAuthorGroundedInPdfFirstPage(
   author: string,
   pdfText?: string,
   title?: string,
+  options?: { requirePersonName?: boolean },
 ): boolean {
   if (!pdfText || isScannedPdfText(pdfText)) return false;
   const a = author.trim();
-  if (!a || !looksLikePersonName(a) || !isValidAuthorName(a, title)) return false;
+  if (!a || !isValidAuthorName(a, title)) return false;
+  if ((options?.requirePersonName ?? true) && !looksLikePersonName(a)) return false;
   const firstPage = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
   const lowerA = a.toLowerCase();
   if (firstPage.toLowerCase().includes(lowerA)) return true;
@@ -122,8 +124,23 @@ export function choosePaperAuthor(input: {
     isValidAuthorName(current, input.title);
 
   const pdfReadable = Boolean(input.pdfText && !isScannedPdfText(input.pdfText));
-  const currentGroundedInPdf =
-    pdfReadable && isAuthorGroundedInPdfFirstPage(current, input.pdfText, input.title);
+
+  let currentGroundedInPdf = false;
+  if (pdfReadable && input.pdfText) {
+    const parsed = parseFirstPageTitleAndAuthor(input.pdfText);
+    const pdfAuthors =
+      parsed.authors?.filter((a) => isValidAuthorName(a, input.title)) ??
+      (parsed.author ? [parsed.author] : []);
+    if (pdfAuthors.length > 0) {
+      // PDF 先頭に著者行がある場合は、その著者行のいずれかと一致するかで判定（所属組織名の誤維持を防止）
+      currentGroundedInPdf = pdfAuthors.some((a) => authorNamesMatch(current, a));
+    } else {
+      // 著者行が検出できない場合（組織著者など）は、先頭ページの本文グラウンディングで判定（人名制限なし）
+      currentGroundedInPdf = isAuthorGroundedInPdfFirstPage(current, input.pdfText, input.title, {
+        requirePersonName: false,
+      });
+    }
+  }
 
   const shouldKeep =
     currentOk &&

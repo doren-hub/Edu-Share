@@ -399,11 +399,29 @@ test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページにない�
   );
 });
 
-test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページにある名前のときは keep で維持する", () => {
+test("Issue #341: choosePaperAuthor: 所属組織名（例: Microsoft Research）が PDF 先頭にあっても著者行と異なる場合は維持せず PDF 著者を優先する", () => {
   const title = "Deep Residual Learning for Image Recognition";
   const pdfText = `${title}\nKaiming He, Xiangyu Zhang\nMicrosoft Research\nAbstract\nDeeper neural networks are more difficult to train...\n${"Detailed research content meeting minimum length. ".repeat(4)}`;
 
-  // カード著者なしでも、現在の値が PDF 先頭ページの人名であれば keep
+  // 所属組織名「Microsoft Research」は PDF 先頭ページにあるが著者行（Kaiming He, Xiangyu Zhang）ではないため、維持せず PDF 著者を優先
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Microsoft Research",
+      optionValues: ["", "Microsoft Research", "その他"],
+      filesPaste: "",
+      title,
+      filename: "resnet.pdf",
+      pdfText,
+    }),
+    { action: "other", value: "Kaiming He" },
+  );
+});
+
+test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページにある著者（共著者含む）のときは keep で維持する", () => {
+  const title = "Deep Residual Learning for Image Recognition";
+  const pdfText = `${title}\nKaiming He, Xiangyu Zhang\nMicrosoft Research\nAbstract\nDeeper neural networks are more difficult to train...\n${"Detailed research content meeting minimum length. ".repeat(4)}`;
+
+  // 筆頭著者の場合は keep
   assert.deepEqual(
     choosePaperAuthor({
       current: "Kaiming He",
@@ -416,7 +434,22 @@ test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページにある�
     { action: "keep", value: "Kaiming He" },
   );
 
-  // 組織名であっても PDF 先頭ページにある正当な著者であれば keep
+  // 共著者（Xiangyu Zhang）の場合も keep
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Xiangyu Zhang",
+      optionValues: ["", "Xiangyu Zhang", "その他"],
+      filesPaste: "",
+      title,
+      filename: "resnet.pdf",
+      pdfText,
+    }),
+    { action: "keep", value: "Xiangyu Zhang" },
+  );
+});
+
+test("Issue #341: choosePaperAuthor: 著者行がなく組織名が正当な著者である場合（長い英語組織名や日本語組織名）は keep で維持する", () => {
+  // 1. 一般的な短縮組織名（OPENAI）
   const orgTitle = "GPT-4 Technical Report";
   const orgPdfText = `${orgTitle}\nOPENAI\nAbstract\nWe report the development of GPT-4...\n${"Detailed content meeting minimum length. ".repeat(4)}`;
   assert.deepEqual(
@@ -429,6 +462,36 @@ test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページにある�
       pdfText: orgPdfText,
     }),
     { action: "keep", value: "OPENAI" },
+  );
+
+  // 2. 5語以上の長い英語組織名（Japan Society for the Promotion of Science）
+  const jspsTitle = "Annual Report on Scientific Research";
+  const jspsPdfText = `${jspsTitle}\nJapan Society for the Promotion of Science\nAbstract\nSummary of activities...\n${"Detailed content meeting minimum length. ".repeat(4)}`;
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Japan Society for the Promotion of Science",
+      optionValues: ["", "Japan Society for the Promotion of Science", "その他"],
+      filesPaste: "",
+      title: jspsTitle,
+      filename: "jsps.pdf",
+      pdfText: jspsPdfText,
+    }),
+    { action: "keep", value: "Japan Society for the Promotion of Science" },
+  );
+
+  // 3. 9文字以上の長い日本語組織名（国立研究開発法人産業技術総合研究所）
+  const aistTitle = "産総研研究報告";
+  const aistPdfText = `${aistTitle}\n国立研究開発法人産業技術総合研究所\n要旨\n本報告では最新の成果をまとめる。\n${"十分な長さの本文テキストです。".repeat(6)}`;
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "国立研究開発法人産業技術総合研究所",
+      optionValues: ["", "国立研究開発法人産業技術総合研究所", "その他"],
+      filesPaste: "",
+      title: aistTitle,
+      filename: "aist.pdf",
+      pdfText: aistPdfText,
+    }),
+    { action: "keep", value: "国立研究開発法人産業技術総合研究所" },
   );
 });
 
