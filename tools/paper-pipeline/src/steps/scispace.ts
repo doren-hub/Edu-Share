@@ -1645,6 +1645,7 @@ export async function fillMetaFromRecordPage(
   state: PaperState,
   filename: string,
   pdfText?: string,
+  opts?: { initialWaitMs?: number; pollTimeoutMs?: number },
 ): Promise<{ candidateDoi?: string }> {
   log("SciSpace: Files カードが薄いので個別ページからメタを取ります");
   try {
@@ -1653,7 +1654,7 @@ export async function fillMetaFromRecordPage(
     warn(`SciSpace: 個別ページを開けません（${filename}）: ${firstLine(e)}`);
     return {};
   }
-  await sleep(2_500);
+  await sleep(opts?.initialWaitMs ?? 2_500);
 
   const filesCard = extractSciSpaceCardMeta(state.filesPaste, filename);
   const knownTitle = usableRecordTitle(state.title, filename) ? state.title : filesCard.title;
@@ -1664,7 +1665,8 @@ export async function fillMetaFromRecordPage(
   let body = "";
 
   const checkStart = Date.now();
-  while (Date.now() - checkStart < 6_000) {
+  const pollTimeout = opts?.pollTimeoutMs ?? 6_000;
+  while (Date.now() - checkStart < pollTimeout) {
     const h1 = ((await page.locator("h1").first().innerText({ timeout: 2_000 }).catch(() => "")) || "").trim();
     const og = ((await page.locator('meta[property="og:title"]').getAttribute("content").catch(() => "")) || "").trim();
     ogDesc = (
@@ -1686,7 +1688,7 @@ export async function fillMetaFromRecordPage(
       body = sampleText;
       break;
     }
-    await sleep(1_000);
+    await sleep(opts?.pollTimeoutMs !== undefined ? 10 : 1_000);
   }
 
   if (!pageConfirmed) {

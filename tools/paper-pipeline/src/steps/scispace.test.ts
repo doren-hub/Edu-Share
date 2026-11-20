@@ -1176,6 +1176,28 @@ test("issue 337: applyRecordPageCard は pdfText が未定義でも既存の sta
   assert.equal(parsed.authors, "Alice Brown");
 });
 
+test("issue 337: applyRecordPageCard は Files カードに著者のみ無く掲載等がある場合も他の行を壊さず著者を補う", async () => {
+  const { applyRecordPageCard } = await import("./scispace.ts");
+  const { extractSciSpaceCardMeta } = await import("../scispace-card.ts");
+
+  const filename = "poly_study.pdf";
+  const title = "Polymer Characteristics";
+  const realAuthor = "Taro Yamada";
+  const pdfText = `${title}\n${realAuthor}\nAbstract\nPolymer properties analysis.\n${"More background text for length requirements. ".repeat(4)}`;
+
+  const state = emptyState({ filename, inboxPdfPath: "", paperDir: "/tmp" });
+  // Files 由来の行にタイトルと掲載誌のみあり、著者が無い状態
+  state.filesPaste = `${filename}\n${title}\nPolymer Journal`;
+
+  const card = extractSciSpaceCardMeta(`${filename}\n${title}\n2023 · ${realAuthor}\nPolymer Journal`, filename);
+  applyRecordPageCard(state, filename, card, title, pdfText);
+
+  // 著者 Taro Yamada が補われ、タイトルと掲載誌も維持される
+  const parsed = extractSciSpaceCardMeta(state.filesPaste, filename);
+  assert.equal(parsed.authors, realAuthor);
+  assert.equal(parsed.venue, "Polymer Journal");
+});
+
 test("issue 337: fillMetaFromRecordPage はページを確認できない場合にメタ取得をスキップし state を変更しない", async () => {
   const { fillMetaFromRecordPage } = await import("./scispace.ts");
   const filename = "food_study.pdf";
@@ -1205,7 +1227,7 @@ test("issue 337: fillMetaFromRecordPage はページを確認できない場合�
     waitForTimeout: async () => {},
   } as unknown as import("playwright").Page;
 
-  const result = await fillMetaFromRecordPage(mockPage, state, filename, pdfText);
+  const result = await fillMetaFromRecordPage(mockPage, state, filename, pdfText, { initialWaitMs: 0, pollTimeoutMs: 10 });
 
   // 確認できないページからは何も返さず、state も汚染されない
   assert.deepEqual(result, {});
