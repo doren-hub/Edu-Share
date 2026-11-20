@@ -6,6 +6,7 @@ import {
   choosePaperAuthor,
   cleanAuthorName,
   fallbackAuthorName,
+  isAuthorGroundedInPdfFirstPage,
   isAuthorRequiredError,
   isDummyAuthorValue,
   materialCarouselShowLabel,
@@ -362,6 +363,133 @@ test("Issue #333: choosePaperAuthor: 現在値が DOI や III などのおかし
       filesPaste: "",
       title: "Title",
       filename: "paper.pdf",
+    }),
+    { action: "other", value: FALLBACK_AUTHOR_NAME },
+  );
+});
+
+test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページにない無関係な名前のとき、維持せず PDF 著者に置き換える", () => {
+  const title = "Deep Residual Learning for Image Recognition";
+  const pdfText = `${title}\nKaiming He, Xiangyu Zhang\nMicrosoft Research\nAbstract\nDeeper neural networks are more difficult to train...\n${"Detailed research content meeting minimum length. ".repeat(4)}`;
+
+  // カード著者なし、フォーム現在値が無関係な組織名「Some Organization」（PDF 先頭ページにない）
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Some Organization",
+      optionValues: ["", "Some Organization", "その他"],
+      filesPaste: "",
+      title,
+      filename: "resnet.pdf",
+      pdfText,
+    }),
+    { action: "other", value: "Kaiming He" },
+  );
+
+  // 選択肢に PDF 著者がある場合は select で選ばれる
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Some Organization",
+      optionValues: ["", "Some Organization", "Kaiming He", "その他"],
+      filesPaste: "",
+      title,
+      filename: "resnet.pdf",
+      pdfText,
+    }),
+    { action: "select", value: "Kaiming He" },
+  );
+});
+
+test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページにある名前のときは keep で維持する", () => {
+  const title = "Deep Residual Learning for Image Recognition";
+  const pdfText = `${title}\nKaiming He, Xiangyu Zhang\nMicrosoft Research\nAbstract\nDeeper neural networks are more difficult to train...\n${"Detailed research content meeting minimum length. ".repeat(4)}`;
+
+  // カード著者なしでも、現在の値が PDF 先頭ページの人名であれば keep
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Kaiming He",
+      optionValues: ["", "Kaiming He", "その他"],
+      filesPaste: "",
+      title,
+      filename: "resnet.pdf",
+      pdfText,
+    }),
+    { action: "keep", value: "Kaiming He" },
+  );
+
+  // 組織名であっても PDF 先頭ページにある正当な著者であれば keep
+  const orgTitle = "GPT-4 Technical Report";
+  const orgPdfText = `${orgTitle}\nOPENAI\nAbstract\nWe report the development of GPT-4...\n${"Detailed content meeting minimum length. ".repeat(4)}`;
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "OPENAI",
+      optionValues: ["", "OPENAI", "その他"],
+      filesPaste: "",
+      title: orgTitle,
+      filename: "gpt4.pdf",
+      pdfText: orgPdfText,
+    }),
+    { action: "keep", value: "OPENAI" },
+  );
+});
+
+test("Issue #341: choosePaperAuthor: PDF の本文が読めない（スキャンなど）ときは今までどおり keep で維持する", () => {
+  const title = "Scanned Historical Paper";
+  const scannedPdfText = "Image only scanned document without extracted text\n1. Introduction";
+
+  // PDF がスキャンの場合は、現在の値を維持する
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Existing Author",
+      optionValues: ["", "Existing Author", "その他"],
+      filesPaste: "",
+      title,
+      filename: "scanned.pdf",
+      pdfText: scannedPdfText,
+    }),
+    { action: "keep", value: "Existing Author" },
+  );
+
+  // pdfText が未指定（undefined）の場合も同様に維持する
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Existing Author",
+      optionValues: ["", "Existing Author", "その他"],
+      filesPaste: "",
+      title,
+      filename: "scanned.pdf",
+    }),
+    { action: "keep", value: "Existing Author" },
+  );
+});
+
+test("Issue #341: choosePaperAuthor: 今の値が PDF 先頭ページになく PDF からも取れないときは DOI 著者、それも無ければ著者未設定に倒す", () => {
+  const title = "Title";
+  // PDF テキストはあるが人名著者行がない
+  const pdfText = `${title}\nAbstract\nThis paper discusses observations without listing authors.\n${"Detailed content meeting minimum length. ".repeat(4)}`;
+
+  // DOI 著者がある場合は DOI 著者に置き換わる
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Unrelated Org",
+      optionValues: ["", "Unrelated Org", "その他"],
+      filesPaste: "",
+      title,
+      filename: "paper.pdf",
+      pdfText,
+      doiAuthor: "Jane Doe",
+    }),
+    { action: "other", value: "Jane Doe" },
+  );
+
+  // DOI 著者もない場合は著者未設定に置き換わる
+  assert.deepEqual(
+    choosePaperAuthor({
+      current: "Unrelated Org",
+      optionValues: ["", "Unrelated Org", "その他"],
+      filesPaste: "",
+      title,
+      filename: "paper.pdf",
+      pdfText,
     }),
     { action: "other", value: FALLBACK_AUTHOR_NAME },
   );

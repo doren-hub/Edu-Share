@@ -2,7 +2,8 @@
 
 import { parseYearAuthor, YEAR_AUTHOR } from "./scispace-card.ts";
 import { isInvalidAuthorValue, isNameSuffix, isValidAuthorName } from "./bibliography.ts";
-import { parseFirstPageTitleAndAuthor } from "./content-match.ts";
+import { looksLikePersonName, parseFirstPageTitleAndAuthor } from "./content-match.ts";
+import { isScannedPdfText, PDF_TITLE_CHECK_PREFIX_CHARS } from "./pdf-grounding.ts";
 
 const SKIP_AUTHOR_VALUES = new Set(["", "選択してください", "その他"]);
 /** アップロード画面のデモ選択肢。実著者ではない。 */
@@ -80,6 +81,22 @@ function authorNamesMatch(a: string, b: string): boolean {
   return x === y || x.startsWith(y) || y.startsWith(x);
 }
 
+export function isAuthorGroundedInPdfFirstPage(
+  author: string,
+  pdfText?: string,
+  title?: string,
+): boolean {
+  if (!pdfText || isScannedPdfText(pdfText)) return false;
+  const a = author.trim();
+  if (!a || !looksLikePersonName(a) || !isValidAuthorName(a, title)) return false;
+  const firstPage = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
+  const lowerA = a.toLowerCase();
+  if (firstPage.toLowerCase().includes(lowerA)) return true;
+  const noSpaceA = a.replace(/\s+/g, "");
+  if (noSpaceA.length >= 2 && firstPage.replace(/\s+/g, "").includes(noSpaceA)) return true;
+  return false;
+}
+
 export type ChosenPaperAuthor =
   | { action: "keep"; value: string }
   | { action: "select"; value: string }
@@ -103,7 +120,18 @@ export function choosePaperAuthor(input: {
     !current.startsWith("その他（") &&
     !isDummyAuthorValue(current) &&
     isValidAuthorName(current, input.title);
-  if (currentOk && (!fromPaste || authorNamesMatch(current, fromPaste))) {
+
+  const pdfReadable = Boolean(input.pdfText && !isScannedPdfText(input.pdfText));
+  const currentGroundedInPdf =
+    pdfReadable && isAuthorGroundedInPdfFirstPage(current, input.pdfText, input.title);
+
+  const shouldKeep =
+    currentOk &&
+    (fromPaste
+      ? authorNamesMatch(current, fromPaste)
+      : !pdfReadable || currentGroundedInPdf);
+
+  if (shouldKeep) {
     return { action: "keep", value: current };
   }
   const wanted =

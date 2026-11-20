@@ -54,7 +54,8 @@ import {
   SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS,
 } from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
-import { splitAuthors } from "../edushare-form.ts";
+import { isAuthorGroundedInPdfFirstPage, splitAuthors } from "../edushare-form.ts";
+export { isAuthorGroundedInPdfFirstPage };
 import { isInteractiveUi, looksLikeBotChallenge, NeedVisibleChromeError, pauseIfBlocked } from "../human.ts";
 import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
 import { saveFailureShot, uploadViaChooserOrInput } from "../ui.ts";
@@ -1767,22 +1768,6 @@ export function isRecordPageConfirmedForPaper(
     }
   }
 
-  return false;
-}
-
-export function isAuthorGroundedInPdfFirstPage(
-  author: string,
-  pdfText?: string,
-  title?: string,
-): boolean {
-  if (!pdfText || isScannedPdfText(pdfText)) return false;
-  const a = author.trim();
-  if (!a || !looksLikePersonName(a) || !isValidAuthorName(a, title)) return false;
-  const firstPage = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
-  const lowerA = a.toLowerCase();
-  if (firstPage.toLowerCase().includes(lowerA)) return true;
-  const noSpaceA = a.replace(/\s+/g, "");
-  if (noSpaceA.length >= 2 && firstPage.replace(/\s+/g, "").includes(noSpaceA)) return true;
   return false;
 }
 
