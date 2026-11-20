@@ -142,3 +142,34 @@ export function isDescriptionGroundedInPdfText(description: string, pdfText: str
   return ratio >= MIN_DESCRIPTION_WORD_MATCH_RATIO && matched >= minMatches;
 }
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * DOI が PDF 本文に含まれているか確かめる。
+ * スキャン PDF や未指定の場合は false。
+ * DOI 直後に DOI を継続する文字が続いている部分一致は除外する。
+ */
+export function isDoiGroundedInPdfText(doi: string, pdfText?: string): boolean {
+  if (!pdfText || isScannedPdfText(pdfText)) return false;
+  const cleanDoi = doi.trim();
+  if (!cleanDoi) return false;
+
+  const escaped = escapeRegex(cleanDoi);
+  // DOI 直後に [a-zA-Z0-9/_\-]、またはドット/開き括弧+英数字が続く場合はより長い別の DOI の部分一致とみなして除外
+  const boundary = `(?![a-zA-Z0-9/_\\-]|\\.[a-zA-Z0-9]|\\([a-zA-Z0-9])`;
+  const pattern = new RegExp(escaped + boundary, "i");
+  if (pattern.test(pdfText)) return true;
+
+  // 改行や空白が挟まるケースの正規化照合
+  const noSpaceDoi = cleanDoi.toLowerCase().replace(/\s+/g, "");
+  const noSpacePdf = pdfText.toLowerCase().replace(/\s+/g, "");
+  const noSpaceEscaped = escapeRegex(noSpaceDoi);
+  const noSpacePattern = new RegExp(noSpaceEscaped + boundary, "i");
+  if (noSpacePattern.test(noSpacePdf)) return true;
+
+  return false;
+}
+
+

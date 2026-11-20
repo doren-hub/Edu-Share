@@ -4,6 +4,7 @@ import {
   isScannedPdfText,
   isTitleGroundedInPdfText,
   isDescriptionGroundedInPdfText,
+  isDoiGroundedInPdfText,
   extractSignificantWords,
   MIN_PDF_TEXT_CHARS,
 } from "./pdf-grounding.ts";
@@ -158,4 +159,52 @@ test("isDescriptionGroundedInPdfText: 日本語の説明が本文と合致すれ
   const foreignDesc = "本研究では、江戸時代中期の幕府勘定所における出納記録を史料批判し、年貢収納の実態を明らかにする。";
   assert.equal(isDescriptionGroundedInPdfText(foreignDesc, samplePdf), false);
 });
+
+test("issue 337: isDoiGroundedInPdfText は DOI が PDF 本文に含まれているかを照合する", () => {
+  const samplePdf = `
+Global Burden of Disease Study 2015
+Christopher J L Murray et al.
+The Lancet, Vol. 388, No. 10053, p1659-1724
+DOI: https://doi.org/10.1016/S0140-6736(16)32380-7
+Abstract
+We conducted a comprehensive assessment of all-cause mortality across 195 countries and territories from 1980 to 2015.
+`.trim();
+
+  // 本文に含まれる DOI（かっこ含む完全なもの）
+  assert.equal(isDoiGroundedInPdfText("10.1016/S0140-6736(16)32380-7", samplePdf), true);
+  // 大文字小文字の差異
+  assert.equal(isDoiGroundedInPdfText("10.1016/s0140-6736(16)32380-7", samplePdf), true);
+  // 本文に含まれない別の DOI
+  assert.equal(isDoiGroundedInPdfText("10.1038/nature12345", samplePdf), false);
+  // スキャン PDF
+  assert.equal(isDoiGroundedInPdfText("10.1016/S0140-6736(16)32380-7", "Page 1"), false);
+  // 空文字
+  assert.equal(isDoiGroundedInPdfText("", samplePdf), false);
+  assert.equal(isDoiGroundedInPdfText("10.1016/S0140-6736(16)32380-7", undefined), false);
+});
+
+test("issue 337: isDoiGroundedInPdfText は DOI の前方部分一致（より長い別 DOI の接頭辞）を除外する", () => {
+  const pdfWithLongerDoi = `
+Research Paper Title
+Author Name
+DOI: 10.1000/abc12
+More detailed text for PDF length requirements.
+${"Testing prefix grounding boundary logic for issue 337. ".repeat(4)}
+`.trim();
+
+  // 10.1000/abc1 は 10.1000/abc12 の接頭辞にすぎないため不一致とする
+  assert.equal(isDoiGroundedInPdfText("10.1000/abc1", pdfWithLongerDoi), false);
+
+  const pdfWithExactDoi = `
+Research Paper Title
+Author Name
+DOI: 10.1000/abc1.
+Sentence follows with text for length requirement.
+${"Testing prefix grounding boundary logic for issue 337. ".repeat(4)}
+`.trim();
+
+  // 末尾がピリオド（文末）や空白の場合は完全一致として一致する
+  assert.equal(isDoiGroundedInPdfText("10.1000/abc1", pdfWithExactDoi), true);
+});
+
 

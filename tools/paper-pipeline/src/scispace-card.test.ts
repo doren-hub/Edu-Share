@@ -594,6 +594,51 @@ test("doiFromHrefOrText: doi.org リンクから DOI を取る", () => {
   assert.equal(doiFromHrefOrText("2023 · DOI · Charles H. Lineweaver"), "");
 });
 
+test("issue 337: doiFromHrefOrText はかっこを含む DOI を途中で切らずに完全に切り出す", () => {
+  // Lancet DOIs e.g. 10.1016/S0140-6736(16)32380-7
+  assert.equal(
+    doiFromHrefOrText("10.1016/S0140-6736(16)32380-7"),
+    "10.1016/S0140-6736(16)32380-7",
+  );
+  assert.equal(
+    doiFromHrefOrText("https://doi.org/10.1016/S0140-6736(16)32380-7"),
+    "10.1016/S0140-6736(16)32380-7",
+  );
+  assert.equal(
+    doiFromHrefOrText("DOI: 10.1016/S0140-6736(16)32380-7."),
+    "10.1016/S0140-6736(16)32380-7",
+  );
+});
+
+test("issue 337: doiFromHrefOrText は外側のかっこを取り除き DOI 内部のかっこは維持する", () => {
+  assert.equal(
+    doiFromHrefOrText("(DOI: 10.1016/S0140-6736(16)32380-7)"),
+    "10.1016/S0140-6736(16)32380-7",
+  );
+  assert.equal(
+    doiFromHrefOrText("[10.1016/S0140-6736(16)32380-7]"),
+    "10.1016/S0140-6736(16)32380-7",
+  );
+  assert.equal(
+    doiFromHrefOrText("(see 10.1119/5.0150209)"),
+    "10.1119/5.0150209",
+  );
+});
+
+test("issue 337: doiFromHrefOrText は途中で切れた閉じていないかっこで終わる DOI は保存しない", () => {
+  // 10.1016/S0140-6736(16 で止まった途中の DOI
+  assert.equal(doiFromHrefOrText("10.1016/S0140-6736(16"), "");
+  assert.equal(doiFromHrefOrText("DOI: 10.1016/S0140-6736(16"), "");
+  assert.equal(doiFromHrefOrText("10.1234/test[open"), "");
+});
+
+test("issue 337: titleLooksLikeBadSciSpaceCapture はサイト URL やドメイン名を題名として拒否する", () => {
+  assert.equal(titleLooksLikeBadSciSpaceCapture("www.thelancet.com"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("https://www.thelancet.com/journals/lancet/article"), true);
+  assert.equal(titleLooksLikeBadSciSpaceCapture("mdpi.com/journal/sensors"), true);
+});
+
+
 test("isolateSciSpaceCardText: 検索欄の stem だけでは隣カードを自分の論文にしない", () => {
   const searchThenNeighbor = [
     "819_1_5.0150209",
