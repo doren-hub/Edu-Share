@@ -146,28 +146,83 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export const REFERENCE_SECTION_HEADING_RE =
+  /(?:^|\r?\n)[ \t]*(?:[【\[]?\s*(?:(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)[\.\s]+|[§#]+\s*)?(?:references?(?:\s+and\s+notes)?|bibliography|literature(?:\s+cited)?|works\s+cited)|参考文献(?:・引用文献)?|引用文献|参考資料|文献)\s*[】\]]?)[ \t]*[:：]?[ \t]*(?=\r?\n|$)/i;
+
+/**
+ * PDF 本文内で参考文献一覧の見出しが始まる位置を返す。
+ * 見出しが存在しない場合は -1 を返す。
+ */
+export function findReferencesSectionIndex(pdfText: string): number {
+  const match = REFERENCE_SECTION_HEADING_RE.exec(pdfText);
+  if (!match) return -1;
+  const newlineLen = match[0].startsWith("\r\n") ? 2 : match[0].startsWith("\n") ? 1 : 0;
+  return match.index + newlineLen;
+}
+
+function testDoiInText(cleanDoi: string, text: string): boolean {
+  if (!text) return false;
+  const escaped = escapeRegex(cleanDoi);
+  // DOI 直後に [a-zA-Z0-9/_\-]、またはドット/開き括弧+英数字が続く場合はより長い別の DOI の部分一致とみなして除外
+  const boundary = `(?![a-zA-Z0-9/_\\-]|\\.[a-zA-Z0-9]|\\([a-zA-Z0-9])`;
+  const pattern = new RegExp(escaped + boundary, "i");
+  if (pattern.test(text)) return true;
+
+  // 改行や空白が挟まるケースの正規化照合
+  const noSpaceDoi = cleanDoi.toLowerCase().replace(/\s+/g, "");
+  const noSpaceText = text.toLowerCase().replace(/\s+/g, "");
+  const noSpaceEscaped = escapeRegex(noSpaceDoi);
+  const noSpacePattern = new RegExp(noSpaceEscaped + boundary, "i");
+  return noSpacePattern.test(noSpaceText);
+}
+
+function isDoiInRunningHeaderOrFooter(cleanDoi: string, text: string): boolean {
+  if (!text.includes("\f")) return false;
+  const pages = text.split("\f");
+  for (let i = 1; i < pages.length; i++) {
+    const page = pages[i]?.trim();
+    if (!page) continue;
+    const lines = page.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) continue;
+    const headerLines = lines.slice(0, 2).join("\n");
+    const footerLines = lines.slice(-2).join("\n");
+    if (testDoiInText(cleanDoi, headerLines) || testDoiInText(cleanDoi, footerLines)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * DOI が PDF 本文に含まれているか確かめる。
  * スキャン PDF や未指定の場合は false。
  * DOI 直後に DOI を継続する文字が続いている部分一致は除外する。
+ * その論文自身の DOI が書かれる場所（先頭ページ、または各ページのヘッダーとフッター）にある場合だけ採用し、
+ * 参考文献の一覧（References、参考文献、引用文献などの見出しより後ろ）にしかない DOI は採用しない。
  */
 export function isDoiGroundedInPdfText(doi: string, pdfText?: string): boolean {
   if (!pdfText || isScannedPdfText(pdfText)) return false;
   const cleanDoi = doi.trim();
   if (!cleanDoi) return false;
 
-  const escaped = escapeRegex(cleanDoi);
-  // DOI 直後に [a-zA-Z0-9/_\-]、またはドット/開き括弧+英数字が続く場合はより長い別の DOI の部分一致とみなして除外
-  const boundary = `(?![a-zA-Z0-9/_\\-]|\\.[a-zA-Z0-9]|\\([a-zA-Z0-9])`;
-  const pattern = new RegExp(escaped + boundary, "i");
-  if (pattern.test(pdfText)) return true;
+  const refIndex = findReferencesSectionIndex(pdfText);
+  const preRefText = refIndex >= 0 ? pdfText.slice(0, refIndex) : pdfText;
 
-  // 改行や空白が挟まるケースの正規化照合
-  const noSpaceDoi = cleanDoi.toLowerCase().replace(/\s+/g, "");
-  const noSpacePdf = pdfText.toLowerCase().replace(/\s+/g, "");
-  const noSpaceEscaped = escapeRegex(noSpaceDoi);
-  const noSpacePattern = new RegExp(noSpaceEscaped + boundary, "i");
-  if (noSpacePattern.test(noSpacePdf)) return true;
+  // 先頭ページ（References 見出し手前の先頭文字、または \f 区切りの先頭ページ）
+  const firstPageLength = Math.max(
+    PDF_TITLE_CHECK_PREFIX_CHARS,
+    preRefText.includes("\f") ? (preRefText.split("\f")[0]?.length ?? 0) : 0,
+  );
+  const firstPage = preRefText.slice(0, firstPageLength);
+
+  if (testDoiInText(cleanDoi, firstPage)) {
+    return true;
+  }
+
+  // 各ページのヘッダー・フッター（References 見出し手前）
+  if (isDoiInRunningHeaderOrFooter(cleanDoi, preRefText)) {
+    return true;
+  }
 
   return false;
 }

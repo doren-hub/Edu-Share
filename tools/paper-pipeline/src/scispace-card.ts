@@ -18,6 +18,8 @@ export {
   isTitleGroundedInPdfText,
   isDescriptionGroundedInPdfText,
   isDoiGroundedInPdfText,
+  findReferencesSectionIndex,
+  REFERENCE_SECTION_HEADING_RE,
 } from "./pdf-grounding.ts";
 
 const MIDDLE_DOT = String.raw`[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]`;

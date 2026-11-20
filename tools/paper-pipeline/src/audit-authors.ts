@@ -5,7 +5,7 @@ import { parseFirstPageTitleAndAuthor } from "./content-match.ts";
 import { fetchCrossrefWork, type CrossrefWork } from "./crossref.ts";
 import { FALLBACK_AUTHOR_NAME, rawAuthorFromFilesPaste } from "./edushare-form.ts";
 import { titlesLikelySame } from "./match.ts";
-import { PDF_TITLE_CHECK_PREFIX_CHARS } from "./pdf-grounding.ts";
+import { findReferencesSectionIndex, PDF_TITLE_CHECK_PREFIX_CHARS } from "./pdf-grounding.ts";
 import { extractPdfText } from "./pdf-text.ts";
 import { doiFromHrefOrText } from "./scispace-card.ts";
 import { type PaperState } from "./state.ts";
@@ -147,7 +147,9 @@ export async function auditAuthors(opts: {
     }
 
     if (!candidateAuthor) {
-      const prefix = pdfText ? pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS) : "";
+      const refIndex = pdfText ? findReferencesSectionIndex(pdfText) : -1;
+      const preRef = pdfText ? (refIndex >= 0 ? pdfText.slice(0, refIndex) : pdfText) : "";
+      const prefix = preRef.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
       const doi = state.doi || (prefix ? doiFromHrefOrText(prefix) : "");
       if (doi) {
         try {
