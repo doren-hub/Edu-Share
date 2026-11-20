@@ -17,6 +17,7 @@ export {
   isScannedPdfText,
   isTitleGroundedInPdfText,
   isDescriptionGroundedInPdfText,
+  isDoiGroundedInPdfText,
 } from "./pdf-grounding.ts";
 
 const MIDDLE_DOT = String.raw`[\u00B7\u2022\u2027\u2219\u22C5\u30FB\uFF65]`;
@@ -416,6 +417,7 @@ function pickTitle(lines: string[], filename: string): string {
         !looksLikePageRange(s) &&
         !looksLikeEditorField(s) &&
         !looksLikeAuthorOrPaperId(s) &&
+        !looksLikeUrlOrDomain(s) &&
         !/^arxiv:/i.test(s) &&
         !/^(this paper|the paper|本研究|本論文)\b/i.test(s),
     ) ?? ""
@@ -575,6 +577,7 @@ export function titleLooksLikeBadSciSpaceCapture(title: string): boolean {
   if (looksLikePageRange(t)) return true;
   if (looksLikeEditorField(t)) return true;
   if (looksLikeAuthorOrPaperId(t)) return true;
+  if (looksLikeUrlOrDomain(t)) return true;
   return false;
 }
 
@@ -812,18 +815,54 @@ function pickTldr(text: string, lines: string[], title: string): string {
   return "";
 }
 
-const DOI_TOKEN = /\b(10\.\d{4,}\/[^\s)\]<>"']+)/i;
+export const DOI_TOKEN = /\b(10\.\d{4,}\/[^\s<>"']+)/i;
+
+export function cleanDoi(rawDoi: string): string {
+  let doi = rawDoi.trim();
+  while (doi) {
+    const prev = doi;
+    doi = doi.replace(/[.,;:\s]+$/, "");
+    if (doi.endsWith(")")) {
+      const openCount = (doi.match(/\(/g) || []).length;
+      const closeCount = (doi.match(/\)/g) || []).length;
+      if (closeCount > openCount) {
+        doi = doi.slice(0, -1);
+      }
+    }
+    if (doi.endsWith("]")) {
+      const openCount = (doi.match(/\[/g) || []).length;
+      const closeCount = (doi.match(/\]/g) || []).length;
+      if (closeCount > openCount) {
+        doi = doi.slice(0, -1);
+      }
+    }
+    if (doi === prev) break;
+  }
+  if (/^10\.\d{4,}\/?$/i.test(doi)) return "";
+  // 閉じていないかっこで終わる、または開閉の数が合わない途中で切れた DOI は保存しない
+  const openParen = (doi.match(/\(/g) || []).length;
+  const closeParen = (doi.match(/\)/g) || []).length;
+  if (openParen !== closeParen) return "";
+  const openBracket = (doi.match(/\[/g) || []).length;
+  const closeBracket = (doi.match(/\]/g) || []).length;
+  if (openBracket !== closeBracket) return "";
+  return doi;
+}
 
 export function doiFromHrefOrText(raw: string): string {
-  const href = raw.match(/https?:\/\/(?:dx\.)?doi\.org\/(10\.\d{4,}\/[^\s)\]<>"'?#]+)/i);
+  const href = raw.match(/https?:\/\/(?:dx\.)?doi\.org\/(10\.\d{4,}\/[^\s<>"'?#]+)/i);
   if (href?.[1]) {
-    return href[1].replace(/[.,;]+$/g, "");
+    const cleaned = cleanDoi(href[1]);
+    if (cleaned) return cleaned;
   }
-  const m = raw.match(DOI_TOKEN);
-  if (!m?.[1]) return "";
-  const doi = m[1].replace(/[.,;]+$/g, "");
-  if (/^10\.\d{4,}\/?$/i.test(doi)) return "";
-  return doi;
+  const tokenRegex = /\b(10\.\d{4,}\/[^\s<>"']+)/gi;
+  for (const m of raw.matchAll(tokenRegex)) {
+    if (m[1]) {
+      const cleaned = cleanDoi(m[1]);
+      if (cleaned) return cleaned;
+    }
+  }
+  return "";
 }
 
 /** SciSpace TL;DR 末尾の出典 snippet 番号（" 1" / " [1]" / 連続番号）を除く */

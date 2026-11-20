@@ -142,3 +142,25 @@ export function isDescriptionGroundedInPdfText(description: string, pdfText: str
   return ratio >= MIN_DESCRIPTION_WORD_MATCH_RATIO && matched >= minMatches;
 }
 
+/**
+ * DOI が PDF 本文に含まれているか確かめる。
+ * スキャン PDF や未指定の場合は false。
+ */
+export function isDoiGroundedInPdfText(doi: string, pdfText?: string): boolean {
+  if (!pdfText || isScannedPdfText(pdfText)) return false;
+  const cleanDoi = doi.trim();
+  if (!cleanDoi) return false;
+
+  const lowerDoi = cleanDoi.toLowerCase();
+  const lowerPdf = pdfText.toLowerCase();
+  if (lowerPdf.includes(lowerDoi)) return true;
+
+  // 改行や空白が挟まるケースの正規化照合
+  const noSpaceDoi = lowerDoi.replace(/\s+/g, "");
+  const noSpacePdf = lowerPdf.replace(/\s+/g, "");
+  if (noSpacePdf.includes(noSpaceDoi)) return true;
+
+  return false;
+}
+
+

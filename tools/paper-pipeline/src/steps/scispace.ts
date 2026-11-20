@@ -21,15 +21,17 @@ import {
   venueLooksLikeBadSciSpaceCapture,
   looksLikePublisherOrPaywall,
   looksLikeUnansweredSciSpaceResponse,
+  looksLikeUrlOrDomain,
   isTitleGroundedInPdfText,
   isDescriptionGroundedInPdfText,
+  isDoiGroundedInPdfText,
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
-import { isShorterTitle, titleHasPdfContinuation, titleLooksTruncated, verifiedReferenceTitle } from "../bibliography.ts";
+import { isShorterTitle, isValidAuthorName, titleHasPdfContinuation, titleLooksTruncated, verifiedReferenceTitle } from "../bibliography.ts";
 import { extractPdfText } from "../pdf-text.ts";
-import { parseFirstPageTitleAndAuthor } from "../content-match.ts";
-import { PDF_TITLE_CHECK_PREFIX_CHARS } from "../pdf-grounding.ts";
+import { looksLikePersonName, parseFirstPageTitleAndAuthor } from "../content-match.ts";
+import { isScannedPdfText, PDF_TITLE_CHECK_PREFIX_CHARS } from "../pdf-grounding.ts";
 import { arxivIdFromFilename, fetchArxivAbstract, fetchArxivAtom, parseArxivAtomAuthors, parseArxivAtomTitle, parseArxivAtomYear } from "../arxiv-abstract.ts";
 import { bibliographicPasteFromWork, fetchCrossrefWork } from "../crossref.ts";
 import {
@@ -39,6 +41,7 @@ import {
 } from "../scispace-record-url.ts";
 import {
   classifySciSpaceWaitState,
+  filenameWithoutWhitespace,
   filesListNeedsLoadMore,
   filesTabClickAllowed,
   formatSciSpaceWaitLog,
@@ -50,6 +53,7 @@ import {
   SCISPACE_HEADLESS_FOLDER_TIMEOUT_MS,
 } from "../scispace-files-view.ts";
 import { firstLine, log, warn } from "../log.ts";
+import { splitAuthors } from "../edushare-form.ts";
 import { isInteractiveUi, looksLikeBotChallenge, NeedVisibleChromeError, pauseIfBlocked } from "../human.ts";
 import { isCompleted, markCompleted, saveState, type PaperState } from "../state.ts";
 import { saveFailureShot, uploadViaChooserOrInput } from "../ui.ts";
@@ -1354,8 +1358,10 @@ export async function captureSciSpaceCardMeta(
       throw new Error(`SciSpace の個別ページ URL が見つかりません（${filename}）`);
     }
 
+    let recordCandidateDoi = "";
     if (sciSpaceMetaStillIncomplete(state, filename) || sciSpaceTldrStillIncomplete(state)) {
-      await fillMetaFromRecordPage(page, state, filename, pdfText);
+      const res = await fillMetaFromRecordPage(page, state, filename, pdfText);
+      if (res?.candidateDoi) recordCandidateDoi = res.candidateDoi;
     }
     if (descriptionUsable(filesTldr) || tldrUsable(filesTldr)) {
       const stripped = stripTldrSnippetNumbers(filesTldr).slice(0, 2000);
@@ -1367,7 +1373,7 @@ export async function captureSciSpaceCardMeta(
       }
     }
 
-    await verifySciSpaceBibliography(state, filename, pdfText);
+    await verifySciSpaceBibliography(state, filename, pdfText, fetchCrossrefWork, recordCandidateDoi);
     if (pdfText !== undefined) {
       if (state.title && !isTitleGroundedInPdfText(state.title, pdfText)) {
         state.title = filename.replace(/\.pdf$/i, "");
@@ -1401,18 +1407,19 @@ export async function verifySciSpaceBibliography(
   filename: string,
   pdfText: string | undefined,
   lookup: typeof fetchCrossrefWork = fetchCrossrefWork,
+  candidateDoi?: string,
 ): Promise<void> {
   if (!pdfText) return;
   if (titleLooksTruncated(state.title) || titleHasPdfContinuation(state.title, pdfText)) {
     state.sciTitleRejected = true;
   }
-  const pdfDoi = doiFromHrefOrText(pdfText);
-  if (pdfDoi) {
+  const doiToVerify = doiFromHrefOrText(pdfText) || (!state.doi.trim() && candidateDoi ? candidateDoi.trim() : "");
+  if (doiToVerify) {
     try {
-      const work = await lookup(pdfDoi);
+      const work = await lookup(doiToVerify);
       const candidate = state.sciTitleRejected || titleLooksLikeFilename(state.title, filename)
         ? extractSciSpaceCardMeta(state.filesPaste, filename).title : state.title;
-      const title = verifiedReferenceTitle(candidate, pdfText, pdfDoi, work);
+      const title = verifiedReferenceTitle(candidate, pdfText, doiToVerify, work);
       if (title) {
         state.title = title;
         state.sciTitleRejected = false;
@@ -1638,50 +1645,149 @@ async function fillMetaFromRecordPage(
   state: PaperState,
   filename: string,
   pdfText?: string,
-): Promise<void> {
+): Promise<{ candidateDoi?: string }> {
   log("SciSpace: Files カードが薄いので個別ページからメタを取ります");
   try {
     await page.goto(state.scispaceUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
   } catch (e) {
     warn(`SciSpace: 個別ページを開けません（${filename}）: ${firstLine(e)}`);
-    return;
+    return {};
   }
   await sleep(2_500);
-  const h1 = ((await page.locator("h1").first().innerText({ timeout: 8_000 }).catch(() => "")) || "").trim();
-  const og = ((await page.locator('meta[property="og:title"]').getAttribute("content").catch(() => "")) || "").trim();
-  const ogDesc = (
-    (await page.locator('meta[property="og:description"]').getAttribute("content").catch(() => "")) ||
-    (await page.locator('meta[name="description"]').getAttribute("content").catch(() => "")) ||
-    ""
-  ).trim();
-  const heading = [og, h1].find((t) => t.length > 12 && usableRecordTitle(t, filename)) ?? "";
-  const body = await pageText(page);
-  const raw = [heading, ogDesc, body].filter(Boolean).join("\n");
-  const card = extractSciSpaceCardMeta(raw, filename);
-  if (isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors) || isDummySciSpacePaste(heading)) {
-    warn("SciSpace: 個別ページもデモカードなので捨てます");
-    return;
+
+  const filesCard = extractSciSpaceCardMeta(state.filesPaste, filename);
+  const knownTitle = usableRecordTitle(state.title, filename) ? state.title : filesCard.title;
+
+  let pageConfirmed = false;
+  let pageHeading = "";
+  let ogDesc = "";
+  let body = "";
+
+  const checkStart = Date.now();
+  while (Date.now() - checkStart < 6_000) {
+    const h1 = ((await page.locator("h1").first().innerText({ timeout: 2_000 }).catch(() => "")) || "").trim();
+    const og = ((await page.locator('meta[property="og:title"]').getAttribute("content").catch(() => "")) || "").trim();
+    ogDesc = (
+      (await page.locator('meta[property="og:description"]').getAttribute("content").catch(() => "")) ||
+      (await page.locator('meta[name="description"]').getAttribute("content").catch(() => "")) ||
+      ""
+    ).trim();
+    pageHeading = [og, h1].find((t) => t.length > 12 && usableRecordTitle(t, filename)) ?? "";
+    const pTitle = await page.title().catch(() => "");
+    const quickText = [pTitle, h1, og, ogDesc].filter(Boolean).join("\n");
+
+    if (isRecordPageConfirmedForPaper(quickText, filename, { knownTitle, pdfText, heading: pageHeading })) {
+      pageConfirmed = true;
+      break;
+    }
+    const sampleText = await pageText(page);
+    if (isRecordPageConfirmedForPaper(sampleText, filename, { knownTitle, pdfText, heading: pageHeading })) {
+      pageConfirmed = true;
+      body = sampleText;
+      break;
+    }
+    await sleep(1_000);
   }
-  if ((!card.title || titleLooksLikeFilename(card.title, filename) || looksLikeSciSpaceNav(card.title) || looksLikeCitationTitle(card.title) || looksLikeVenueLine(card.title)) && heading) {
-    card.title = heading;
+
+  if (!pageConfirmed) {
+    warn(`SciSpace: 個別ページが今の論文（${filename}）のものと確認できないため、ページ全体の文字からメタ情報は取得しません`);
+    body = "";
+  } else if (!body) {
+    body = await pageText(page);
+  }
+
+  const raw = [pageHeading, ogDesc, body].filter(Boolean).join("\n");
+  const card = extractSciSpaceCardMeta(raw, filename);
+  if (isDummySciSpacePaste(card.title) || isDummySciSpacePaste(card.authors) || isDummySciSpacePaste(pageHeading)) {
+    warn("SciSpace: 個別ページもデモカードなので捨てます");
+    return {};
+  }
+  if ((!card.title || titleLooksLikeFilename(card.title, filename) || looksLikeSciSpaceNav(card.title) || looksLikeCitationTitle(card.title) || looksLikeVenueLine(card.title)) && pageHeading) {
+    card.title = pageHeading;
     card.paste = metadataPasteFromCard(card, filename);
   }
   if ((!tldrUsable(card.tldr)) && tldrUsable(ogDesc)) {
     card.tldr = ogDesc.slice(0, 2000);
   }
   await fillTldrFallbacks(page, card, filename);
-  const filesCard = extractSciSpaceCardMeta(state.filesPaste, filename);
   if (venueLooksLikeBadSciSpaceCapture(card.venue) && filesCard.venue) {
     card.venue = filesCard.venue;
     card.paste = metadataPasteFromCard(card, filename);
   }
-  applyRecordPageCard(state, filename, card, heading, pdfText);
+  applyRecordPageCard(state, filename, card, pageHeading, pdfText);
+  return { candidateDoi: card.doi };
 }
 
-function usableRecordTitle(title: string, filename: string): boolean {
+export function usableRecordTitle(title: string, filename: string): boolean {
   return Boolean(title.trim()) && !titleLooksLikeFilename(title, filename) &&
     !titleLooksLikeBadSciSpaceCapture(title) && !looksLikeSciSpaceNav(title) &&
-    !looksLikeCitationTitle(title) && !looksLikeVenueLine(title) && !isDummySciSpacePaste(title);
+    !looksLikeCitationTitle(title) && !looksLikeVenueLine(title) && !isDummySciSpacePaste(title) &&
+    !looksLikeUrlOrDomain(title);
+}
+
+export function isRecordPageConfirmedForPaper(
+  pageContent: string,
+  filename: string,
+  options?: {
+    knownTitle?: string;
+    pdfText?: string;
+    heading?: string;
+  },
+): boolean {
+  if (!pageContent.trim()) return false;
+  const normContent = filenameWithoutWhitespace(pageContent);
+
+  // 1. ファイル名（または stem）が出ていること
+  const stem = filename.replace(/\.pdf$/i, "").trim();
+  if (normContent.includes(filenameWithoutWhitespace(filename))) return true;
+  if (stem.length >= 4 && normContent.includes(filenameWithoutWhitespace(stem))) return true;
+
+  // 2. 既知の題名が出ていること
+  const knownTitle = options?.knownTitle?.trim();
+  if (knownTitle && usableRecordTitle(knownTitle, filename)) {
+    const cleanKnown = filenameWithoutWhitespace(knownTitle);
+    if (cleanKnown.length >= 8 && normContent.includes(cleanKnown)) return true;
+    if (pageContent.toLowerCase().includes(knownTitle.toLowerCase())) return true;
+  }
+
+  // 3. 見出しが PDF 本文でグラウンディングされていること
+  const heading = options?.heading?.trim();
+  if (heading && usableRecordTitle(heading, filename) && options?.pdfText) {
+    if (isTitleGroundedInPdfText(heading, options.pdfText)) {
+      if (pageContent.toLowerCase().includes(heading.toLowerCase())) return true;
+      const cleanHeading = filenameWithoutWhitespace(heading);
+      if (cleanHeading.length >= 8 && normContent.includes(cleanHeading)) return true;
+    }
+  }
+
+  return false;
+}
+
+export function isAuthorGroundedInPdfFirstPage(
+  author: string,
+  pdfText?: string,
+  title?: string,
+): boolean {
+  if (!pdfText || isScannedPdfText(pdfText)) return false;
+  const a = author.trim();
+  if (!a || !looksLikePersonName(a) || !isValidAuthorName(a, title)) return false;
+  const firstPage = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
+  const lowerA = a.toLowerCase();
+  if (firstPage.toLowerCase().includes(lowerA)) return true;
+  const noSpaceA = a.replace(/\s+/g, "");
+  if (noSpaceA.length >= 2 && firstPage.replace(/\s+/g, "").includes(noSpaceA)) return true;
+  return false;
+}
+
+export function groundedAuthorsFromRecordCard(
+  authors: string,
+  pdfText?: string,
+  title?: string,
+): string {
+  if (!authors.trim() || !pdfText || isScannedPdfText(pdfText)) return "";
+  const parts = splitAuthors(authors);
+  const grounded = parts.filter((name) => isAuthorGroundedInPdfFirstPage(name, pdfText, title));
+  return grounded.join(", ");
 }
 
 /** Keep source provenance: body text needs stronger evidence than Files or a heading. */
@@ -1714,7 +1820,16 @@ export function applyRecordPageCard(
   // Preserve complete saved titles when only the summary needs filling.
   // An unsupported body capture must not defeat the selected Files source.
   if (!usableRecordTitle(heading, filename) && !savedTitleUsable) state.title = filename.replace(/\.pdf$/i, "");
-  applyExtractedCard(state, filename, { ...card, title }, [], pdfText);
+
+  // 個別ページのページ全体の文字から取った DOI は、その論文の PDF の本文にある場合だけ採用する
+  const doi = card.doi && isDoiGroundedInPdfText(card.doi, pdfText) ? card.doi : "";
+
+  // ページ全体の文字から取った著者も、PDF の先頭ページにある名前だけ採用する
+  const verifiedAuthors = groundedAuthorsFromRecordCard(card.authors, pdfText, state.title);
+  const authors = verifiedAuthors;
+  const yearAuthorLine = authors ? (card.publicationYear ? `${card.publicationYear}⋅${authors}` : authors) : "";
+
+  applyExtractedCard(state, filename, { ...card, title, doi, authors, yearAuthorLine }, [], pdfText);
   if (savedTitleUsable && (!title || state.title === savedTitle)) {
     state.title = savedTitle;
     state.sciTitleRejected = false;
