@@ -109,9 +109,13 @@ export async function readMappedPdfMatchData(path: string): Promise<PdfMatchData
 }
 
 export function readPdfMatchDataFromPath(path: string): Promise<PdfMatchData | null> {
-  const workerFile = import.meta.url.endsWith(".ts") ? "./pdf-match-worker.ts" : "./pdf-match-worker.js";
+  const fromSource = import.meta.url.endsWith(".ts");
+  const workerFile = fromSource ? "./pdf-match-worker.ts" : "./pdf-match-worker.js";
   return new Promise((resolve, reject) => {
     const child = fork(new URL(workerFile, import.meta.url), [path], {
+      // Source tests need the TypeScript loader. The helper runs as a script
+      // and must not inherit caller-only flags such as --input-type.
+      execArgv: fromSource ? ["--import", import.meta.resolve("tsx")] : [],
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
     let reply: PdfMatchReply | undefined;
