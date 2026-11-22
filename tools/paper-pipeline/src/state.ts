@@ -73,6 +73,8 @@ export type PaperState = {
   eduUploaded: StudioStageId[];
   /** SciSpace カード等の題名が本文と合わない等の理由で弾かれたフラグ。Edu Share への反映を防ぐ */
   sciTitleRejected?: boolean;
+  /** PDF と照合して採用した代替題名。現在の題名と一致するときだけ使う。 */
+  sciTitleFallback?: string;
 };
 
 export function emptyState(partial: Pick<PaperState, "filename" | "inboxPdfPath" | "paperDir">): PaperState {

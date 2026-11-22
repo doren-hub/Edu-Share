@@ -6,8 +6,9 @@ import { firstLine, warn } from "./log.ts";
  * 読み取り失敗時（破損・暗号化・パースエラー等）は警告を出して undefined を返す。
  * これにより、テキスト抽出不可のときにスキャン PDF と誤認してメタ情報を破棄するのを防ぐ。
  * 空バッファや空文字パスの場合は空文字列 "" を返す。
+ * maxPages を指定すると、先頭からそのページ数までのテキストを抽出する。
  */
-export async function extractPdfText(pdfPathOrBuffer: string | Buffer): Promise<string | undefined> {
+export async function extractPdfText(pdfPathOrBuffer: string | Buffer, maxPages?: number): Promise<string | undefined> {
   try {
     let buf: Buffer;
     if (typeof pdfPathOrBuffer === "string") {
@@ -34,7 +35,7 @@ export async function extractPdfText(pdfPathOrBuffer: string | Buffer): Promise<
       options?: { max?: number },
     ) => Promise<{ text: string; numpages: number }>;
 
-    const data = await pdfParse(uint8);
+    const data = await pdfParse(uint8, maxPages === undefined ? undefined : { max: maxPages });
     return data?.text ?? "";
   } catch (err) {
     warn(`PDFテキスト抽出に失敗しました: ${firstLine(err)}`);

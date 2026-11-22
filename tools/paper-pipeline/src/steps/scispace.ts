@@ -29,7 +29,7 @@ import {
   tldrUsable,
   descriptionUsable,
 } from "../scispace-card.ts";
-import { isShorterTitle, isValidAuthorName, titleHasPdfContinuation, titleLooksTruncated, verifiedReferenceTitle } from "../bibliography.ts";
+import { isShorterTitle, isValidAuthorName, titleHasPdfContinuation, titleKey, titleLooksTruncated, verifiedReferenceTitle } from "../bibliography.ts";
 import { extractPdfText } from "../pdf-text.ts";
 import { looksLikePersonName, parseFirstPageTitleAndAuthor } from "../content-match.ts";
 import { isScannedPdfText, PDF_TITLE_CHECK_PREFIX_CHARS } from "../pdf-grounding.ts";
@@ -1388,6 +1388,7 @@ export async function captureSciSpaceCardMeta(
     if (looksLikeUnansweredSciSpaceResponse(state.title)) {
       state.title = filename.replace(/\.pdf$/i, "");
     }
+    await fillMissingSciSpaceTitle(state, pdfText, () => extractPdfText(pdfPath, 1));
     if (looksLikeUnansweredSciSpaceResponse(state.tldr)) {
       state.tldr = "";
     }
@@ -1402,6 +1403,48 @@ export async function captureSciSpaceCardMeta(
     await saveFailureShot(page, paperDir, "scispace-meta");
     throw e;
   }
+}
+
+/** Fill a missing or filename-only title after the SciSpace sources have been checked. */
+export async function fillMissingSciSpaceTitle(
+  state: PaperState,
+  pdfText: string | undefined,
+  readFirstPage: () => Promise<string | undefined>,
+  lookupArxiv: typeof fetchArxivAtom = fetchArxivAtom,
+): Promise<void> {
+  const { filename } = state;
+  if (!titleLooksLikeFilename(state.title.trim(), filename)) return;
+
+  if (pdfText && !isScannedPdfText(pdfText)) {
+    const prefix = ` ${titleKey(pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS))} `;
+    const id = arxivIdFromFilename(filename);
+    let arxivTitle = "";
+    if (id) {
+      try {
+        arxivTitle = parseArxivAtomTitle(await lookupArxiv(id));
+      } catch {
+        warn(`SciSpace: arXiv の題名を取得できませんでした（${id}）`);
+      }
+    }
+
+    const arxivTitleMatches = usableRecordTitle(arxivTitle, filename) &&
+      prefix.includes(` ${titleKey(arxivTitle)} `) &&
+      isTitleGroundedInPdfText(arxivTitle, pdfText);
+    const firstPage = arxivTitleMatches ? "" : await readFirstPage();
+    const title = arxivTitleMatches
+      ? arxivTitle
+      : parseFirstPageTitleAndAuthor(firstPage?.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS) ?? "").title ?? "";
+    if (usableRecordTitle(title, filename) && isTitleGroundedInPdfText(title, pdfText)) {
+      state.title = title;
+      state.sciTitleFallback = title;
+      state.sciTitleRejected = false;
+      log(`SciSpace: ${arxivTitleMatches ? "arXiv の書誌" : "PDF の先頭ページ"}から題名を補いました`);
+      return;
+    }
+  }
+
+  state.sciTitleRejected = true;
+  warn(`SciSpace: PDF で確認できる題名が見つかりません（${filename}）`);
 }
 
 /** Verify against this PDF's DOI, preserving existing metadata when lookup cannot confirm it. */
@@ -1639,7 +1682,10 @@ async function fillTldrFallbacks(
   const arxivId = arxivIdFromFilename(filename);
   if (!arxivId) return;
   log(`SciSpace: arXiv の要旨を取ります (${arxivId})`);
-  const abs = await fetchArxivAbstract(arxivId);
+  const abs = await fetchArxivAbstract(arxivId).catch(() => {
+    warn(`SciSpace: arXiv の要旨を取得できませんでした（${arxivId}）`);
+    return "";
+  });
   if (tldrUsable(abs)) {
     log("SciSpace: arXiv の要旨を TL;DR に使います");
     card.tldr = abs.slice(0, 2000);

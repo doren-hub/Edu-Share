@@ -629,6 +629,7 @@ export function reconcileMetaFromFilesPaste(
     filesPaste: string;
     filename: string;
     sciTitleRejected?: boolean;
+    sciTitleFallback?: string;
   },
 ): boolean {
   const card = extractSciSpaceCardMeta(state.filesPaste, state.filename);
@@ -643,6 +644,7 @@ export function reconcileMetaFromFilesPaste(
 
   if (
     !state.sciTitleRejected &&
+    state.title !== state.sciTitleFallback &&
     filesTitleUsable &&
     (titleLooksLikeBadSciSpaceCapture(state.title) ||
       looksLikeUnansweredSciSpaceResponse(state.title) ||
