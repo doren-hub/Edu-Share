@@ -1,7 +1,93 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyExtractedCard } from "./scispace.ts";
+import { applyExtractedCard, fillMissingSciSpaceTitle } from "./scispace.ts";
+import { reconcileMetaFromFilesPaste } from "../scispace-card.ts";
 import { emptyState } from "../state.ts";
+
+const fallbackTitle = "Comparing Sparse Matrix Algorithms for Graph Analysis";
+const fallbackFirstPage = `${fallbackTitle}
+Authors: Jane Smith, Peter Liu
+Abstract
+We evaluate several sparse matrix algorithms for graph analysis on benchmark problems.`;
+
+function titleFallbackState(filename: string) {
+  const state = emptyState({ filename, inboxPdfPath: `/tmp/${filename}`, paperDir: "/tmp" });
+  state.title = filename.replace(/\.pdf$/i, "");
+  state.sciTitleRejected = true;
+  return state;
+}
+
+test("fillMissingSciSpaceTitle: PDF と一致する arXiv の題名を先に使う", async () => {
+  const state = titleFallbackState("2611.12345v3.pdf");
+  const arxivTitle = fallbackTitle.toLowerCase();
+  await fillMissingSciSpaceTitle(state, fallbackFirstPage, async () => {
+    assert.fail("arXiv で確認できた場合に先頭ページを読み直した");
+  }, async (id) => {
+    assert.equal(id, "2611.12345");
+    return `<entry><title>${arxivTitle}</title></entry>`;
+  });
+  assert.equal(state.title, arxivTitle);
+  assert.equal(state.sciTitleRejected, false);
+
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  state.filesPaste = [state.filename, `${arxivTitle} and unsupported words`, "2026⋅Jane Smith"].join("\n");
+  assert.equal(reconcileMetaFromFilesPaste(state), false);
+  assert.equal(usableEduShareTitle(state), arxivTitle);
+});
+
+test("fillMissingSciSpaceTitle: arXiv の題名が一致しない、または取得できない場合は PDF の先頭ページを使う", async () => {
+  for (const lookupArxiv of [
+    async () => "<entry><title>Comparing Sparse Matrix Algorithms for Climate Change</title></entry>",
+    async () => { throw new Error("timeout"); },
+  ]) {
+    const state = titleFallbackState("2611.12345.pdf");
+    await fillMissingSciSpaceTitle(state, fallbackFirstPage, async () => fallbackFirstPage, lookupArxiv);
+    assert.equal(state.title, fallbackTitle);
+    assert.equal(state.sciTitleRejected, false);
+  }
+});
+
+test("fillMissingSciSpaceTitle: arXiv 以外で空またはファイル名の題名は PDF の先頭ページで補う", async () => {
+  const lookupArxiv = async () => assert.fail("arXiv ID のないファイルを問い合わせた");
+  for (const title of ["", "upload"]) {
+    const state = titleFallbackState("upload.pdf");
+    state.title = title;
+    await fillMissingSciSpaceTitle(state, fallbackFirstPage, async () => fallbackFirstPage, lookupArxiv);
+    assert.equal(state.title, fallbackTitle);
+  }
+});
+
+test("fillMissingSciSpaceTitle: 既存の題名を維持する", async () => {
+  const existing = titleFallbackState("2611.12345.pdf");
+  existing.title = fallbackTitle;
+  existing.sciTitleRejected = false;
+  await fillMissingSciSpaceTitle(existing, fallbackFirstPage, async () => {
+    assert.fail("既存の題名がある場合に先頭ページを読み直した");
+  }, async () => assert.fail("既存の題名がある場合に arXiv を問い合わせた"));
+  assert.equal(existing.title, fallbackTitle);
+  assert.equal(existing.sciTitleFallback, undefined);
+});
+
+test("fillMissingSciSpaceTitle: PDF 本文と一致しない先頭ページの候補は採用しない", async () => {
+  const state = titleFallbackState("upload.pdf");
+  const unrelatedFirstPage = fallbackFirstPage.replace(fallbackTitle, "Quantum Teleportation Across the Danube");
+  await fillMissingSciSpaceTitle(state, fallbackFirstPage, async () => unrelatedFirstPage);
+  assert.equal(state.title, "upload");
+  assert.equal(state.sciTitleRejected, true);
+  assert.equal(state.sciTitleFallback, undefined);
+});
+
+test("fillMissingSciSpaceTitle: 先頭ページに題名がなく書誌も一致しなければ Edu Share へ題名を渡さない", async () => {
+  const state = titleFallbackState("2611.12345v3.pdf");
+  state.sciTitleRejected = false;
+  state.filesPaste = [state.filename, "Quantum Teleportation Across the Danube", "2026⋅Jane Smith"].join("\n");
+  await fillMissingSciSpaceTitle(state, fallbackFirstPage, async () => "", async () =>
+    "<entry><title>Quantum Teleportation Across the Danube</title></entry>");
+  assert.equal(state.title, "2611.12345v3");
+  assert.equal(state.sciTitleRejected, true);
+  const { usableEduShareTitle } = await import("./edushare.ts");
+  assert.equal(usableEduShareTitle(state), "");
+});
 
 test("applyExtractedCard: Not addressed in the paper. は題名・説明に採用せずファイル名にフォールバックする", () => {
   const state = emptyState({ filename: "quantum_paper.pdf", inboxPdfPath: "/tmp/quantum_paper.pdf", paperDir: "/tmp" });

@@ -73,13 +73,16 @@ export function usableEduShareTitle(state: PaperState): string {
     !titleLooksLikeBadSciSpaceCapture(filesTitle);
 
   let t = state.title.trim();
+  const titleFromPdfFallback = t === state.sciTitleFallback;
   const candidateNeedsFallback =
     !t ||
     isDummySciSpacePaste(t) ||
     titleLooksLikeFilename(t, state.filename) ||
     titleLooksLikeBadSciSpaceCapture(t) ||
-    titleLooksLikeVenueOrConference(t, card.venue, state.venue) ||
-    (filesTitleUsable && isTitlePrefixOf(t, filesTitle));
+    (!titleFromPdfFallback && (
+      titleLooksLikeVenueOrConference(t, card.venue, state.venue) ||
+      (filesTitleUsable && isTitlePrefixOf(t, filesTitle))
+    ));
 
   if (candidateNeedsFallback) {
     t = filesTitleUsable ? filesTitle : "";
@@ -575,6 +578,13 @@ export async function runEduShareUpload(
             .waitFor({ timeout: 20_000 })
             .catch(() => undefined);
         }
+      }
+    }
+
+    if (state.title === state.sciTitleFallback) {
+      const title = usableEduShareTitle(state);
+      if (title && !(await fillReactControl(page.getByLabel("タイトル", { exact: true }), title, "タイトル"))) {
+        throw new Error("補完した論文タイトルをアップロード画面に入力できませんでした");
       }
     }
 
