@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   filterDuplicateInboxPdfs,
   loadExistingMatchTargets,
+  type InboxContentKeyCache,
   type MatchTarget,
 } from "./content-match.ts";
 import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts";
@@ -329,9 +330,10 @@ async function main(): Promise<void> {
   const matchTargets: MatchTarget[] = repairMeta
     ? []
     : await loadExistingMatchTargets(cfg.workDir, cfg.duplicatesDir);
+  const cache: InboxContentKeyCache = new Map();
   const items = repairMeta
     ? rawItems
-    : await filterDuplicateInboxPdfs(rawItems, matchTargets, cfg.holdDir);
+    : await filterDuplicateInboxPdfs(rawItems, matchTargets, cfg.holdDir, { cache });
 
   if (cfg.onlyFilename && items.length === 0) {
     log(
@@ -372,7 +374,7 @@ async function main(): Promise<void> {
   const refreshInbox = async () => {
     if (repairMeta || cfg.onlyFilename) return 0;
     const current = listInboxPdfs(cfg.inboxDir, cfg.workDir);
-    const valid = await filterDuplicateInboxPdfs(current, matchTargets, cfg.holdDir);
+    const valid = await filterDuplicateInboxPdfs(current, matchTargets, cfg.holdDir, { cache });
     return addItems(valid);
   };
 

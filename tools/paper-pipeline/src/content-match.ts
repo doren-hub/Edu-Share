@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -12,6 +13,7 @@ import { basename, extname, join } from "node:path";
 import { type InboxPdf } from "./inbox.ts";
 import { firstLine, log, warn } from "./log.ts";
 import { normalizeDoi, normalizeKey, titlesLikelySame, titleUsableForExistingMatch } from "./match.ts";
+import { readPdfMatchData, readPdfMatchDataFromPath } from "./pdf-match-data.ts";
 import { emptyState, loadState } from "./state.ts";
 import {
   isBibliographyLabel,
@@ -322,46 +324,24 @@ export async function extractPaperContentKeyFromPdf(
   pdfPathOrBuffer: string | Buffer,
 ): Promise<PaperContentKey> {
   try {
-    let buf: Buffer;
-    let filename = "";
-    if (typeof pdfPathOrBuffer === "string") {
-      if (!pdfPathOrBuffer || !existsSync(pdfPathOrBuffer)) {
-        return {};
-      }
-      filename = basename(pdfPathOrBuffer);
-      buf = readFileSync(pdfPathOrBuffer);
-    } else {
-      buf = pdfPathOrBuffer;
-    }
-    if (!buf || buf.length === 0) return {};
-
-    const uint8 = new Uint8Array(buf.length);
-    uint8.set(buf);
-
-    const mod = await import("pdf-parse");
-    const pdfParse = (mod.default ?? mod) as (
-      dataBuffer: Buffer | Uint8Array,
-      options?: { max?: number },
-    ) => Promise<{
-      text: string;
-      numpages: number;
-      info?: Record<string, any>;
-      metadata?: Record<string, any>;
-    }>;
-
-    const data = await pdfParse(uint8, { max: 2 });
-    const text = data?.text ?? "";
-    const info = data?.info ?? {};
-    const metadata = data?.metadata ?? {};
+    const fromPath = typeof pdfPathOrBuffer === "string";
+    if (fromPath && (!pdfPathOrBuffer || !existsSync(pdfPathOrBuffer))) return {};
+    const filename = fromPath ? basename(pdfPathOrBuffer) : "";
+    const data = fromPath
+      ? await readPdfMatchDataFromPath(pdfPathOrBuffer)
+      : await readPdfMatchData(pdfPathOrBuffer);
+    if (!data) return {};
+    const { text, info, metadata } = data;
 
     const key: PaperContentKey = {};
 
     // 1. DOI
     const doiMetaCandidate =
-      info.doi ||
-      info.Subject ||
-      info.Keywords ||
-      (metadata._metadata && (metadata._metadata["prism:doi"] || metadata._metadata["dc:identifier"]));
+      info?.doi ||
+      info?.Subject ||
+      info?.Keywords ||
+      metadata?._metadata?.["prism:doi"] ||
+      metadata?._metadata?.["dc:identifier"];
     if (doiMetaCandidate) {
       const d = normalizeDoi(String(doiMetaCandidate));
       if (d) key.doi = d.toLowerCase();
@@ -373,8 +353,8 @@ export async function extractPaperContentKeyFromPdf(
 
     // 2. arXiv ID
     const arxivCandidates = [
-      String(info.Title ?? ""),
-      String(info.Subject ?? ""),
+      String(info?.Title ?? ""),
+      String(info?.Subject ?? ""),
       text.slice(0, 3000),
       filename,
     ];
@@ -387,8 +367,8 @@ export async function extractPaperContentKeyFromPdf(
     }
 
     // 3. Title & First Author
-    const infoTitle = typeof info.Title === "string" ? info.Title.trim() : "";
-    const infoAuthor = typeof info.Author === "string" ? info.Author.trim() : "";
+    const infoTitle = typeof info?.Title === "string" ? info?.Title.trim() : "";
+    const infoAuthor = typeof info?.Author === "string" ? info?.Author.trim() : "";
 
     const parsedFirstPage = parseFirstPageTitleAndAuthor(text);
     if (parsedFirstPage.title) {
@@ -698,6 +678,21 @@ export async function loadExistingMatchTargets(
   return targets;
 }
 
+type PdfStamp = { size: bigint; mtimeNs: bigint };
+export type InboxContentKeyCache = Map<string, PdfStamp & { key: Promise<PaperContentKey> }>;
+
+function inboxPdfStamp(path: string): PdfStamp | undefined {
+  try {
+    return statSync(path, { bigint: true, throwIfNoEntry: false });
+  } catch {
+    return undefined;
+  }
+}
+
+function samePdfStamp(a: PdfStamp | undefined, b: PdfStamp): boolean {
+  return a !== undefined && a.size === b.size && a.mtimeNs === b.mtimeNs;
+}
+
 /**
  * inbox の PDF リストから同一論文を検出し、hold/ へ移動して除外
  * 既に作業中の論文（completed がある、または eduShareTestId がある）や
@@ -707,13 +702,27 @@ export async function filterDuplicateInboxPdfs(
   items: readonly InboxPdf[],
   targets: MatchTarget[],
   holdDir: string,
-  deps = {
-    extractKey: extractPaperContentKeyFromPdf,
-  },
+  { extractKey = extractPaperContentKeyFromPdf, cache }: {
+    extractKey?: (path: string) => Promise<PaperContentKey>;
+    cache?: InboxContentKeyCache;
+  } = {},
 ): Promise<InboxPdf[]> {
   const kept: InboxPdf[] = [];
+  const stamps = new Map(items.map(({ absPath }) => [absPath, inboxPdfStamp(absPath)]));
+  // 完了時に inbox から移動した PDF も同じ実行の照合先に残す。
+  // 同じパスに内容の違う PDF があるときは古い照合先を外す。
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const path = targets[i]?.path;
+    if (!path) continue;
+    const cached = cache?.get(path);
+    if (!cached) continue;
+    const stamp = stamps.get(path) ?? inboxPdfStamp(path);
+    if (stamp && !samePdfStamp(stamp, cached)) targets.splice(i, 1);
+  }
+
   for (const item of items) {
-    if (!existsSync(item.absPath)) continue;
+    const stamp = stamps.get(item.absPath);
+    if (!stamp || !existsSync(item.absPath)) continue;
 
     // 既に作業開始済みの論文は除外対象にしない
     const state = loadState(
@@ -738,12 +747,13 @@ export async function filterDuplicateInboxPdfs(
         (!t.keptPaper || t.keptPaper !== item.stem),
     );
 
-    let key: PaperContentKey;
-    try {
-      key = await deps.extractKey(item.absPath);
-    } catch {
-      key = {};
+    let cached = cache?.get(item.absPath);
+    if (!cached || !samePdfStamp(stamp, cached)) {
+      const key = Promise.resolve().then(() => extractKey(item.absPath)).catch(() => ({}));
+      cached = { size: stamp.size, mtimeNs: stamp.mtimeNs, key };
+      cache?.set(item.absPath, cached);
     }
+    const key = await cached.key;
     const match = findContentDuplicateMatch(key, relevantTargets, item.stem);
     if (match.matched && match.target) {
       const dest = movePdfToHold(item.absPath, holdDir);
