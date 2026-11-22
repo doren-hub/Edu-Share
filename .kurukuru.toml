@@ -22,5 +22,8 @@ worktree_path = "../edu-share-app-agy"
 [runner.agy]
 args = "--dangerously-skip-permissions"
 
+[runner.codex]
+args = "--approve-for-me -c sandbox_workspace_write.network_access=true --add-dir /Users/doren/.local/share/ai-dispatch"
+
 [review]
 read_only = true

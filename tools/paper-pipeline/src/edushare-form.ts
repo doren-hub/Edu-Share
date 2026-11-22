@@ -2,7 +2,8 @@
 
 import { parseYearAuthor, YEAR_AUTHOR } from "./scispace-card.ts";
 import { isInvalidAuthorValue, isNameSuffix, isValidAuthorName } from "./bibliography.ts";
-import { parseFirstPageTitleAndAuthor } from "./content-match.ts";
+import { looksLikePersonName, parseFirstPageTitleAndAuthor } from "./content-match.ts";
+import { isScannedPdfText, PDF_TITLE_CHECK_PREFIX_CHARS } from "./pdf-grounding.ts";
 
 const SKIP_AUTHOR_VALUES = new Set(["", "選択してください", "その他"]);
 /** アップロード画面のデモ選択肢。実著者ではない。 */
@@ -80,6 +81,24 @@ function authorNamesMatch(a: string, b: string): boolean {
   return x === y || x.startsWith(y) || y.startsWith(x);
 }
 
+export function isAuthorGroundedInPdfFirstPage(
+  author: string,
+  pdfText?: string,
+  title?: string,
+  options?: { requirePersonName?: boolean },
+): boolean {
+  if (!pdfText || isScannedPdfText(pdfText)) return false;
+  const a = author.trim();
+  if (!a || !isValidAuthorName(a, title)) return false;
+  if ((options?.requirePersonName ?? true) && !looksLikePersonName(a)) return false;
+  const firstPage = pdfText.slice(0, PDF_TITLE_CHECK_PREFIX_CHARS);
+  const lowerA = a.toLowerCase();
+  if (firstPage.toLowerCase().includes(lowerA)) return true;
+  const noSpaceA = a.replace(/\s+/g, "");
+  if (noSpaceA.length >= 2 && firstPage.replace(/\s+/g, "").includes(noSpaceA)) return true;
+  return false;
+}
+
 export type ChosenPaperAuthor =
   | { action: "keep"; value: string }
   | { action: "select"; value: string }
@@ -103,7 +122,33 @@ export function choosePaperAuthor(input: {
     !current.startsWith("その他（") &&
     !isDummyAuthorValue(current) &&
     isValidAuthorName(current, input.title);
-  if (currentOk && (!fromPaste || authorNamesMatch(current, fromPaste))) {
+
+  const pdfReadable = Boolean(input.pdfText && !isScannedPdfText(input.pdfText));
+
+  let currentGroundedInPdf = false;
+  if (pdfReadable && input.pdfText) {
+    const parsed = parseFirstPageTitleAndAuthor(input.pdfText);
+    const pdfAuthors =
+      parsed.authors?.filter((a) => isValidAuthorName(a, input.title)) ??
+      (parsed.author ? [parsed.author] : []);
+    if (pdfAuthors.length > 0) {
+      // PDF 先頭に著者行がある場合は、その著者行のいずれかと一致するかで判定（所属組織名の誤維持を防止）
+      currentGroundedInPdf = pdfAuthors.some((a) => authorNamesMatch(current, a));
+    } else {
+      // 著者行が検出できない場合（組織著者など）は、先頭ページの本文グラウンディングで判定（人名制限なし）
+      currentGroundedInPdf = isAuthorGroundedInPdfFirstPage(current, input.pdfText, input.title, {
+        requirePersonName: false,
+      });
+    }
+  }
+
+  const shouldKeep =
+    currentOk &&
+    (fromPaste
+      ? authorNamesMatch(current, fromPaste)
+      : !pdfReadable || currentGroundedInPdf);
+
+  if (shouldKeep) {
     return { action: "keep", value: current };
   }
   const wanted =
