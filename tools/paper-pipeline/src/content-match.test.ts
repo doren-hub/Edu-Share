@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync, existsSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync,
+  utimesSync, writeFileSync, writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -15,9 +18,11 @@ import {
   normalizeArxivId,
   normalizeFirstAuthor,
   parseFirstPageTitleAndAuthor,
+  type InboxContentKeyCache,
   type MatchTarget,
   type PaperContentKey,
 } from "./content-match.ts";
+import { readMappedPdfMatchData } from "./pdf-match-data.ts";
 
 test("normalizeArxivId: 各種 arXiv 表記から版番号を無視して正規化できる", () => {
   assert.equal(normalizeArxivId("arXiv:physics/9905030v1 [physics.hist-ph] 12 May 1999"), "physics/9905030");
@@ -290,8 +295,99 @@ test("matchPaperContent: キーが一つも取れない PDF は一致しない�
 test("extractPaperContentKeyFromPdf: 有効な PDF バッファから題名を抽出できる", async () => {
   const base64Pdf =
     "JVBERi0xLjQKJcfsj6IKJSVJbnZvY2F0aW9uOiBncyAtc0RFVklDRT1wZGZ3cml0ZSAtZENvbXBhdGliaWxpdHlMZXZlbD0xLjQgLWROT1BBVVNFIC1kUVVJRVQgLWRCQVRDSCAtc091dHB1dEZpbGU9PyA/ID8KNSAwIG9iago8PC9MZW5ndGggNiAwIFIvRmlsdGVyIC9GbGF0ZURlY29kZT4+CnN0cmVhbQp4nCtUMNAzVDAAQSidnMtloJDOVchlCBZVgFLJuQpOIVz6QeYKhkYKIWlcEMWGCqYGCuYGBgohuVwaLqmpBQpBqcWZKaWJOQo+qYlFeZl56ZohWVyuIVyBQAgA27cZGWVuZHN0cmVhbQplbmRvYmoKNiAwIG9iago5NQplbmRvYmoKNCAwIG9iago8PC9UeXBlL1BhZ2UvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXQovUm90YXRlIDAvUGFyZW50IDMgMCBSCi9SZXNvdXJjZXM8PC9Qcm9jU2V0Wy9QREYgL1RleHRdCi9Gb250IDggMCBSCj4+Ci9Db250ZW50cyA1IDAgUgo+PgplbmRvYmoKMyAwIG9iago8PCAvVHlwZSAvUGFnZXMgL0tpZHMgWwo0IDAgUgpdIC9Db3VudCAxCj4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL0NhdGFsb2cgL1BhZ2VzIDMgMCBSCi9NZXRhZGF0YSAxMCAwIFIKPj4KZW5kb2JqCjggMCBvYmoKPDwvUjcKNyAwIFI+PgplbmRvYmoKOSAwIG9iago8PC9GaWx0ZXIvRmxhdGVEZWNvZGUvTGVuZ3RoIDI1NT4+c3RyZWFtCnicXZHBboMwEETv/gr/AYYEW0hoL8klh1ZV2x8gZok4xFgOOeTvM7skPfQwIz3Y1Q5DdTgdT2lebfVVlvjDq53mNBa+LfcS2Z75MidTN3ac4/oi9XgdsqkOH0P+fWS2GOBp48/hytV3pw/qbSUuI9/yELkM6cKmd476aSLDafz3qm63jfP0Gm0wKnIObvr9nlTOwYGRVMAIbBtSOQc3va9J5RwciD2vu152fUsqYCsYSAUMgh2pgJ0gjng95OWQZ1IBGRgQMGjIICEDIgSNESRG2JEKuBPEzaB34VLB+1ulDWn1XaKN91I4rVq9Viudzon//k5esmxZyDwBycR/ygplbmRzdHJlYW0KZW5kb2JqCjcgMCBvYmoKPDwvQmFzZUZvbnQvSGVsdmV0aWNhL1RvVW5pY29kZSA5IDAgUi9UeXBlL0ZvbnQKL1N1YnR5cGUvVHlwZTE+PgplbmRvYmoKMTAgMCBvYmoKPDwvVHlwZS9NZXRhZGF0YQovU3VidHlwZS9YTUwvTGVuZ3RoIDE0NTc+PnN0cmVhbQo8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pgo8P2Fkb2JlLXhhcC1maWx0ZXJzIGVzYz0iQ1JMRiI/Pgo8eDp4bXBtZXRhIHhtbG5zOng9J2Fkb2JlOm5zOm1ldGEvJyB4OnhtcHRrPSdYTVAgdG9vbGtpdCAyLjkuMS0xMywgZnJhbWV3b3JrIDEuNic+CjxyZGY6UkRGIHhtbG5zOnJkZj0naHR0cDovL3d3dy53My5vcmcvMTk5OS8wMi8yMi1yZGYtc3ludGF4LW5zIycgeG1sbnM6aVg9J2h0dHA6Ly9ucy5hZG9iZS5jb20vaVgvMS4wLyc+CjxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSIiIHhtbG5zOnBkZj0naHR0cDovL25zLmFkb2JlLmNvbS9wZGYvMS4zLycgcGRmOlByb2R1Y2VyPSdHUEwgR2hvc3RzY3JpcHQgMTAuMDcuMScvPgo8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczp4bXA9J2h0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8nPjx4bXA6TW9kaWZ5RGF0ZT4yMDI2LTEwLTE0VDE0OjAxOjA4KzA5OjAwPC94bXA6TW9kaWZ5RGF0ZT4KPHhtcDpDcmVhdGVEYXRlPjIwMjYtMTAtMTRUMTQ6MDE6MDgrMDk6MDA8L3htcDpDcmVhdGVEYXRlPgo8eG1wOk1ldGFkYXRhRGF0ZT4yMDI2LTEwLTE0VDE0OjAxOjA4KzA5OjAwPC94bXA6TWV0YWRhdGFEYXRlPgo8eG1wOkNyZWF0b3JUb29sPidVbmtub3duQXBwbGljYXRpb24nPC94bXA6Q3JlYXRvclRvb2w+PC9yZGY6RGVzY3JpcHRpb24+CjxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSIiIHhtbG5zOnhtcE1NPSdodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvbW0vJyB4bXBNTTpEb2N1bWVudElEPSd1dWlkOmQxMmJmMDM0LWZmYTgtMTFmYy0wMDAwLWRjYmRmN2MzMDUzYScvPgo8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczp4bXBNTT0naHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLycgeG1wTU06UmVuZGl0aW9uQ2xhc3M9J2RlZmF1bHQnLz4KPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wTU09J2h0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8nIHhtcE1NOlZlcnNpb25JRD0nMScvPgo8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczpkYz0naHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8nIGRjOmZvcm1hdD0nYXBwbGljYXRpb24vcGRmJz48ZGM6dGl0bGU+PHJkZjpBbHQ+PHJkZjpsaSB4bWw6bGFuZz0neC1kZWZhdWx0Jz4nVW50aXRsZWQnPC9yZGY6bGk+PC9yZGY6QWx0PjwvZGM6dGl0bGU+PC9yZGY6RGVzY3JpcHRpb24+CjwvcmRmOlJERj4KPC94OnhtcG1ldGE+CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKPD94cGFja2V0IGVuZD0ndyc/PgplbmRzdHJlYW0KZW5kb2JqCjIgMCBvYmoKPDwvUHJvZHVjZXIoR1BMIEdob3N0c2NyaXB0IDEwLjA3LjEpCi9DcmVhdGlvbkRhdGUoRDoyMDI2MTAxNDE0MDEwOCswOScwMCcpCi9Nb2REYXRlKEQ6MjAyNjEwMTQxNDAxMDgrMDknMDAnKT4+ZW5kb2JqCnhyZWYKMCAxMQowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDA1MDMgMDAwMDAgbiAKMDAwMDAwMjUzMyAwMDAwMCBuIAowMDAwMDAwNDQ0IDAwMDAwIG4gCjAwMDAwMDAzMDMgMDAwMDAgbiAKMDAwMDAwMDEyMCAwMDAwMCBuIAowMDAwMDAwMjg1IDAwMDAwIG4gCjAwMDAwMDA5MTkgMDAwMDAgbiAKMDAwMDAwMDU2OCAwMDAwMCBuIAowMDAwMDAwNTk3IDAwMDAwIG4gCjAwMDAwMDA5OTkgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSAxMSAvUm9vdCAxIDAgUiAvSW5mbyAyIDAgUgovSUQgWzxEQjcwNjVBOTU3N0Y4MjkwNjNBOEI1NEUxNzQ5NDlDMz48REI3MDY1QTk1NzdGODI5MDYzQThCNTRFMTc0OTQ5QzM+XQo+PgpzdGFydHhyZWYKMjY1OQolJUVPRgo=";
-  const key = await extractPaperContentKeyFromPdf(Buffer.from(base64Pdf, "base64"));
+  const bytes = Buffer.from(base64Pdf, "base64");
+  const padded = Buffer.alloc(bytes.length + 1024, 0x78);
+  bytes.copy(padded, 512);
+  const key = await extractPaperContentKeyFromPdf(padded.subarray(512, 512 + bytes.length));
   assert.equal(key.title, "Deep Residual Learning");
+});
+
+function writeSparsePdf(path: string, paddingBytes: number): void {
+  const fd = openSync(path, "w");
+  const offsets: number[] = [];
+  let position = 0;
+  const write = (text: string) => {
+    position += writeSync(fd, text, position, "ascii");
+  };
+  const startObject = (number: number) => {
+    offsets[number] = position;
+    write(`${number} 0 obj\n`);
+  };
+
+  try {
+    write("%PDF-1.4\n");
+    const objects = [
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>",
+      ...[7, 8, 9].map((stream) =>
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents ${stream} 0 R >>`,
+      ),
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+      ...[
+        "BT /F1 14 Tf 50 700 Td (Efficient Methods for Signal Processing) Tj 0 -25 Td (by Jane Smith) Tj ET",
+        "BT /F1 14 Tf 50 700 Td (doi: 10.1234/second-page) Tj ET",
+        "BT /F1 14 Tf 50 700 Td (Third page must be skipped) Tj ET",
+      ].map((stream) => `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`),
+      "<< /Title (arXiv:2401.12345v2) /Author (Metadata Author) >>",
+    ];
+    for (const [index, object] of objects.entries()) {
+      startObject(index + 1);
+      write(object + "\nendobj\n");
+    }
+
+    // Put a large unused stream before the xref table. Only the bytes written
+    // at each end occupy disk blocks.
+    startObject(11);
+    write(`<< /Length ${paddingBytes} >>\nstream\n`);
+    position += paddingBytes;
+    write("\nendstream\nendobj\n");
+
+    const xref = position;
+    write("xref\n0 12\n0000000000 65535 f \n");
+    for (let object = 1; object <= 11; object++) {
+      write(`${String(offsets[object]).padStart(10, "0")} 00000 n \n`);
+    }
+    write(`trailer\n<< /Size 12 /Root 1 0 R /Info 10 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+test("extractPaperContentKeyFromPdf: 大きな PDF の先頭 2 ページと情報欄を全体コピーせずに読む", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pp-sparse-pdf-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "paper.pdf");
+  const paddingMiB = 512;
+  writeSparsePdf(path, paddingMiB * 1024 * 1024);
+
+  // Use the same parser as the helper process, measuring its peak before
+  // and after reading. maxRSS is in KiB on both macOS and Linux.
+  const beforeKiB = process.resourceUsage().maxRSS;
+  const parsed = await readMappedPdfMatchData(path);
+  assert.match(parsed?.text ?? "", /second-page/);
+  assert.doesNotMatch(parsed?.text ?? "", /Third page/);
+
+  // Exercise the production path, including the helper process and IPC.
+  assert.deepEqual(await extractPaperContentKeyFromPdf(path), {
+    doi: "10.1234/second-page",
+    arxivId: "2401.12345",
+    title: "Efficient Methods for Signal Processing",
+    firstAuthor: "Jane Smith",
+  });
+
+  const growthKiB = process.resourceUsage().maxRSS - beforeKiB;
+  t.diagnostic(`512 MiB PDF: peak RSS increased by ${growthKiB} KiB`);
+  assert.ok(growthKiB < paddingMiB * 1024 / 4, `PDF parsing increased peak RSS by ${growthKiB} KiB`);
+});
+
+test("extractPaperContentKeyFromPdf: 空や破損したファイルは照合キーを返さない", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pp-invalid-pdf-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "2401.12345.pdf");
+  writeFileSync(path, "");
+  assert.deepEqual(await extractPaperContentKeyFromPdf(path), {});
+  writeFileSync(path, "not a PDF");
+  assert.deepEqual(await extractPaperContentKeyFromPdf(path), {});
 });
 
 test("extractPaperContentKeyFromState: state.json から各キーを取り出す", () => {
@@ -535,7 +631,7 @@ test("filterDuplicateInboxPdfs: 同じ実行中の inbox 同士の重複を検�
   rmSync(testDir, { recursive: true, force: true });
 });
 
-test("filterDuplicateInboxPdfs: 同じ targets で複数回 filterDuplicateInboxPdfs を呼んでも自分自身と一致して退避されない", async () => {
+test("filterDuplicateInboxPdfs: 同じ targets で複数回 filterDuplicateInboxPdfs を呼んでも自分自身と一致して退避されない", async (t) => {
   const testDir = join(tmpdir(), `pp-filter-rescan-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const inboxDir = join(testDir, "inbox");
   const holdDir = join(testDir, "hold");
@@ -553,25 +649,53 @@ test("filterDuplicateInboxPdfs: 同じ targets で複数回 filterDuplicateInbox
     },
   ];
 
+  t.after(() => rmSync(testDir, { recursive: true, force: true }));
   const targets: MatchTarget[] = [];
-  const fakeKey = { arxivId: "2401.99999", title: "Pending Paper", firstAuthor: "Author" };
+  const cache: InboxContentKeyCache = new Map();
+  let calls = 0;
+  let key: PaperContentKey = {};
+  const deps = {
+    cache,
+    extractKey: async () => {
+      calls++;
+      return key;
+    },
+  };
 
-  // 1回目のスキャン
-  const kept1 = await filterDuplicateInboxPdfs(inboxItems, targets, holdDir, {
-    extractKey: async () => fakeKey,
-  });
-  assert.equal(kept1.length, 1);
-  assert.equal(kept1[0]?.filename, "pending-paper.pdf");
+  assert.deepEqual(await filterDuplicateInboxPdfs(inboxItems, targets, holdDir, deps), inboxItems);
+  assert.deepEqual(await filterDuplicateInboxPdfs(inboxItems, targets, holdDir, deps), inboxItems);
+  assert.equal(calls, 1, "空の照合キーも再スキャンで再利用する");
   assert.equal(targets.length, 1);
 
-  // 2回目の再スキャン (refreshInbox)
-  const kept2 = await filterDuplicateInboxPdfs(inboxItems, targets, holdDir, {
-    extractKey: async () => fakeKey,
-  });
-  assert.equal(kept2.length, 1);
-  assert.equal(kept2[0]?.filename, "pending-paper.pdf");
-  assert.equal(targets.length, 1, "ターゲット配列に重複追加されないこと");
-  assert.equal(existsSync(file), true, "ファイルが hold へ移動されず残ること");
+  // A same-size change with a new mtime invalidates the cache.
+  const initialMtime = new Date("2026-01-01T00:00:00Z");
+  utimesSync(file, initialMtime, initialMtime);
+  key = { doi: "10.1234/old" };
+  assert.deepEqual(await filterDuplicateInboxPdfs(inboxItems, targets, holdDir, deps), inboxItems);
+  assert.equal(calls, 2);
+  assert.deepEqual(targets[0]?.key, key);
 
-  rmSync(testDir, { recursive: true, force: true });
+  // Changing only size also invalidates it. A second file scanned first
+  // must not be held on the basis of the replaced file's old key.
+  writeFileSync(file, "changed content");
+  utimesSync(file, initialMtime, initialMtime);
+  const other = {
+    filename: "other.pdf",
+    absPath: join(inboxDir, "other.pdf"),
+    stem: "other",
+    paperDir: join(testDir, "work", "other"),
+  };
+  writeFileSync(other.absPath, "other");
+  const rescanDeps = {
+    cache,
+    extractKey: async (path: string) => {
+      calls++;
+      return path === other.absPath ? { doi: "10.1234/old" } : { doi: "10.1234/new" };
+    },
+  };
+  const updatedItems = [other, ...inboxItems];
+  assert.deepEqual(await filterDuplicateInboxPdfs(updatedItems, targets, holdDir, rescanDeps), updatedItems);
+  assert.equal(calls, 4);
+  assert.equal(targets.length, 2);
+  assert.equal(targets.find((target) => target.path === file)?.key.doi, "10.1234/new");
 });
