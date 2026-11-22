@@ -709,11 +709,15 @@ export async function filterDuplicateInboxPdfs(
 ): Promise<InboxPdf[]> {
   const kept: InboxPdf[] = [];
   const stamps = new Map(items.map(({ absPath }) => [absPath, inboxPdfStamp(absPath)]));
-  // A prior inbox target can no longer match other files if it was removed or replaced.
+  // 完了時に inbox から移動した PDF も同じ実行の照合先に残す。
+  // 同じパスに内容の違う PDF があるときは古い照合先を外す。
   for (let i = targets.length - 1; i >= 0; i--) {
     const path = targets[i]?.path;
-    const cached = path && cache?.get(path);
-    if (path && cached && !samePdfStamp(stamps.get(path), cached)) targets.splice(i, 1);
+    if (!path) continue;
+    const cached = cache?.get(path);
+    if (!cached) continue;
+    const stamp = stamps.get(path) ?? inboxPdfStamp(path);
+    if (stamp && !samePdfStamp(stamp, cached)) targets.splice(i, 1);
   }
 
   for (const item of items) {
@@ -750,18 +754,16 @@ export async function filterDuplicateInboxPdfs(
       cache?.set(item.absPath, cached);
     }
     const key = await cached.key;
-    const targetIndex = targets.findIndex((t) => t.path === item.absPath);
     const match = findContentDuplicateMatch(key, relevantTargets, item.stem);
     if (match.matched && match.target) {
       const dest = movePdfToHold(item.absPath, holdDir);
-      if (targetIndex !== -1) targets.splice(targetIndex, 1);
       log(
         `同一論文が既に存在するため inbox から hold/ へ移動します: ${item.filename} → ${dest} (一致先: ${match.target.label}, 理由: ${match.reason})`,
       );
       continue;
     }
     // 同一実行中の後続 inbox PDF の照合先に追加（重複登録防止）
-    if (targetIndex === -1) {
+    if (!targets.some((t) => t.path === item.absPath)) {
       targets.push({
         key,
         label: `inbox/${item.filename}`,

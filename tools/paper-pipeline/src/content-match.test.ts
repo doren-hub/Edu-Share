@@ -22,6 +22,7 @@ import {
   type MatchTarget,
   type PaperContentKey,
 } from "./content-match.ts";
+import { listInboxPdfs, moveInboxPdfToPaperDir } from "./inbox.ts";
 import { readMappedPdfMatchData } from "./pdf-match-data.ts";
 
 test("normalizeArxivId: 各種 arXiv 表記から版番号を無視して正規化できる", () => {
@@ -698,4 +699,28 @@ test("filterDuplicateInboxPdfs: 同じ targets で複数回 filterDuplicateInbox
   assert.equal(calls, 4);
   assert.equal(targets.length, 2);
   assert.equal(targets.find((target) => target.path === file)?.key.doi, "10.1234/new");
+});
+
+test("filterDuplicateInboxPdfs: 作業フォルダへ移動した正本を次のスキャンでも照合先に使う", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pp-moved-match-target-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const inboxDir = join(dir, "inbox");
+  const workDir = join(dir, "work");
+  const holdDir = join(dir, "hold");
+  mkdirSync(inboxDir);
+  writeFileSync(join(inboxDir, "first.pdf"), "first");
+
+  const targets: MatchTarget[] = [];
+  const cache: InboxContentKeyCache = new Map();
+  const deps = { cache, extractKey: async () => ({ doi: "10.1234/same-paper" }) };
+  const [first] = await filterDuplicateInboxPdfs(listInboxPdfs(inboxDir, workDir), targets, holdDir, deps);
+  assert.ok(first);
+  mkdirSync(first.paperDir, { recursive: true });
+  const moved = moveInboxPdfToPaperDir(first.absPath, first.paperDir);
+
+  writeFileSync(join(inboxDir, "later.pdf"), "same paper");
+  assert.deepEqual(await filterDuplicateInboxPdfs(listInboxPdfs(inboxDir, workDir), targets, holdDir, deps), []);
+  assert.equal(existsSync(join(holdDir, "later.pdf")), true);
+  assert.equal(existsSync(moved), true);
+  assert.equal(targets[0]?.filename, "first.pdf");
 });
