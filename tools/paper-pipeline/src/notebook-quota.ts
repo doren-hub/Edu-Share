@@ -7,6 +7,9 @@ export const DEFAULT_SHORT_STOP_PERCENT = 85;
 export const DEFAULT_WEEKLY_STOP_PERCENT = 100;
 export const EXIT_QUOTA = 11;
 export const EXIT_QUOTA_UNAVAILABLE = 12;
+export const STUDIO_QUOTA_REACHED = "studio-quota-reached";
+export const STUDIO_HARVEST_ONLY_ARG = "--studio-harvest-only";
+export const STUDIO_QUOTA_MESSAGE = "NotebookLM Studio に「後で生成」のみ表示されたため、今回の新規生成を止めます";
 
 const FETCH_TIMEOUT_MS = 1_500;
 const SHORT_POLL_MS = 60_000;
@@ -41,6 +44,13 @@ export class NotebookQuotaPauseError extends Error {
   ) {
     super(formatQuotaPause(pause, quota));
     this.name = "NotebookQuotaPauseError";
+  }
+}
+
+export class StudioQuotaReachedError extends Error {
+  constructor() {
+    super(STUDIO_QUOTA_MESSAGE);
+    this.name = "StudioQuotaReachedError";
   }
 }
 

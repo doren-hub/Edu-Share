@@ -1,4 +1,7 @@
 import { fileURLToPath } from "node:url";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -10,12 +13,13 @@ import {
   formatExitOnWaitingMessage,
   getPaperWaitingStage,
   isMainModule,
+  orchestrate,
   resolveWorkerSpawn,
   EXIT_WAITING_TIMEOUT,
 } from "./orchestrate.ts";
 import type { SchedJob } from "./schedule.ts";
-import { emptyState, type PaperState } from "./state.ts";
-import { EXIT_QUOTA, type NotebookQuotaPause } from "./notebook-quota.ts";
+import { emptyState, saveState, STUDIO_STAGES, type PaperState } from "./state.ts";
+import { EXIT_QUOTA, STUDIO_HARVEST_ONLY_ARG, type NotebookQuotaPause } from "./notebook-quota.ts";
 import { EXIT_LOGIN_REQUIRED } from "./human.ts";
 
 function makeJob(partial: Partial<SchedJob> & Pick<SchedJob, "id">): SchedJob {
@@ -31,6 +35,58 @@ function makeJob(partial: Partial<SchedJob> & Pick<SchedJob, "id">): SchedJob {
     ...partial,
   };
 }
+
+test("Studio 上限の通知後は収集だけ続け、次の回では生成を再開する", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pp-studio-quota-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const inboxDir = join(dir, "inbox");
+  const workDir = join(dir, "work");
+  mkdirSync(inboxDir);
+  for (const stem of ["a", "b", "c"]) {
+    const filename = `${stem}.pdf`;
+    const inboxPdfPath = join(inboxDir, filename);
+    const paperDir = join(workDir, stem);
+    mkdirSync(paperDir, { recursive: true });
+    writeFileSync(inboxPdfPath, "%PDF-1.4 dummy");
+    const state = emptyState({ filename, inboxPdfPath, paperDir });
+    state.completed = stem === "b" ? ["sci-upload"] : ["sci-upload", "sci-meta"];
+    state.filesPaste = `${filename}\nPaper ${stem}\n2024 · Ada Lovelace\narXiv`;
+    saveState(state);
+  }
+  const cfg = {
+    inboxDir, workDir, holdDir: join(dir, "hold"), duplicatesDir: join(dir, "duplicates"),
+    onlyFilename: "", headed: false, studioGenerate: [...STUDIO_STAGES], studioSkip: [],
+    studioGenerateExplicit: false, newestFirst: false, exitOnQuota: true, maxWaitingMinutes: 0,
+    noRevealLogin: false, fromStage: null, stopOnError: false, ignoreNotebookQuota: true,
+    notebookQuotaUrls: [], notebookQuotaFiles: [], notebookShortStopPercent: 85,
+    notebookWeeklyStopPercent: 100,
+  };
+  for (const exitOnQuota of [true, false]) {
+    const calls: [string, boolean][] = [];
+    const code = await orchestrate({ ...cfg, exitOnQuota }, {}, {
+      sleep: async () => {},
+      runWorker: async (args, onStudioQuota) => {
+        const filename = args[args.indexOf("--only") + 1];
+        calls.push([filename, args.includes(STUDIO_HARVEST_ONLY_ARG)]);
+        assert.ok(calls.length <= 2);
+        if (filename === "a.pdf") onStudioQuota();
+        return EXIT_QUOTA;
+      },
+    });
+    assert.deepEqual(calls, [["a.pdf", false], ["b.pdf", true]]);
+    assert.equal(code, exitOnQuota ? 11 : 0);
+  }
+  const resumed: string[] = [];
+  assert.equal(await orchestrate(cfg, {}, {
+    sleep: async () => {},
+    runWorker: async (args) => {
+      assert.ok(!args.includes(STUDIO_HARVEST_ONLY_ARG));
+      resumed.push(args[args.indexOf("--only") + 1]);
+      return 0;
+    },
+  }), 0);
+  assert.deepEqual(resumed, ["a.pdf", "b.pdf", "c.pdf"]);
+});
 
 test("resolveWorkerSpawn: 事前変換済み JS (dist) で動くときは tsx を使わず node dist/cli.js を起動する", () => {
   const result = resolveWorkerSpawn(["--only", "paper.pdf", "--headless"], {

@@ -65,6 +65,7 @@ import {
   loadNotebookQuota,
   notebookGenerationPause,
   NotebookQuotaPauseError,
+  StudioQuotaReachedError,
   type NotebookQuotaConfig,
 } from "../notebook-quota.ts";
 import { VIDEO_MIN_BYTES, isRealVideoFile, videoFileReady } from "../video-file.ts";
@@ -895,6 +896,7 @@ async function clickStudioGenerate(page: Page): Promise<boolean> {
   }
   await page.keyboard.press("End").catch(() => undefined);
   await page.waitForTimeout(400);
+  await checkStudioQuota(page);
 
   const roots = [
     ...(await dialog.first().isVisible().catch(() => false) ? [dialog.first()] : []),
@@ -1092,8 +1094,8 @@ async function studioCustomizeRoot(page: Page, videoOnly = false): Promise<Locat
   const title = page.getByText(VIDEO_CUSTOMIZE_TITLE);
   const videoRoots = [
     page.locator("[role='dialog'], [aria-modal='true'], .cdk-overlay-pane").filter({ has: title }),
-    // Role-less modal: take the nearest heading ancestor containing its Generate button.
-    title.locator("xpath=ancestor::*[not(self::body) and not(self::html) and .//button[normalize-space(.)='生成' or normalize-space(.)='Generate' or normalize-space(.)='今すぐ生成' or normalize-space(.)='Generate now']][1]"),
+    // Role-less modal: take the nearest heading ancestor containing its generation action.
+    title.locator("xpath=ancestor::*[not(self::body) and not(self::html) and .//button[normalize-space(.)='生成' or normalize-space(.)='Generate' or normalize-space(.)='今すぐ生成' or normalize-space(.)='Generate now' or normalize-space(.)='後で生成' or normalize-space(.)='Generate later']][1]"),
   ];
   const groups = videoOnly ? videoRoots : [...videoRoots, page.getByRole("dialog"), page.locator(".cdk-overlay-pane")];
   for (const group of groups) {
@@ -1103,6 +1105,21 @@ async function studioCustomizeRoot(page: Page, videoOnly = false): Promise<Locat
     }
   }
   return null;
+}
+
+async function checkStudioQuota(page: Page): Promise<void> {
+  const root = await studioCustomizeRoot(page) ?? page;
+  const later = await root.getByRole("button", { name: /^(後で生成|Generate later)$/i }).all();
+  for (const button of later) {
+    if (!(await isVisibleNow(button))) continue;
+    const generate = await root.getByRole("button", {
+      name: /^(生成|作成|今すぐ(?:生成|作成)?|Generate(?: now)?|動画を生成|スライド.*生成)$/i,
+    }).all();
+    for (const action of generate) {
+      if (await isVisibleNow(action) && await action.isEnabled({ timeout: 500 }).catch(() => false)) return;
+    }
+    throw new StudioQuotaReachedError();
+  }
 }
 
 async function clickExplainerGenerate(page: Page): Promise<boolean> {
@@ -1190,6 +1207,7 @@ async function generateStudioItem(
   log(`Studio: ${String(labels[0])} を開きます`);
   const hit = opts.explainerVideo ? await openVideoCustomize(page) : await clickStudioTile(page, labels);
   if (!hit) {
+    await checkStudioQuota(page);
     await logVisibleButtonNames(page);
     throw new Error(`Studio 項目が見つかりません: ${labels[0]}`);
   }
@@ -1232,6 +1250,7 @@ async function generateStudioItem(
     await logVisibleButtonNames(page);
   }
 
+  await checkStudioQuota(page);
   if (opts.explainerVideo) {
     await selectExplainerVideoFormat(page);
     const existing = scanStudioVideoOutputs(await studioCardTexts(page));
@@ -1268,13 +1287,9 @@ async function generateStudioItem(
   }
   if (generated) log("Studio: 生成 をクリックしました");
   else {
+    await checkStudioQuota(page);
     if (opts.explainerVideo) await dismissStudioCustomize(page);
     await logVisibleButtonNames(page);
-    const hasGenerateLater = await page.getByRole("button", { name: /後で生成|Generate later/i }).first().isVisible({ timeout: 0 }).catch(() => false);
-    if (hasGenerateLater) {
-      warn("Studio: 「後で生成」のみ表示されているため、NotebookLM の日次生成上限などの可能性があります");
-      throw new Error("Studio の生成ボタンを押せませんでした（「後で生成」のみ表示。日次上限などの可能性があります）");
-    }
     throw new Error("Studio の生成ボタンを押せませんでした（カスタマイズ画面の右下「生成」）");
   }
 
@@ -2419,6 +2434,7 @@ export async function tryKickoffStudio(
     saveState(state);
     return r;
   } catch (e) {
+    if (e instanceof StudioQuotaReachedError) throw e;
     if (e instanceof GenerationWaitingError) {
       markStudioStarted(state, e.stage);
       throw e;
@@ -2890,6 +2906,7 @@ export async function runNotebookLm(
   } catch (e) {
     if (e instanceof GenerationWaitingError) throw e;
     if (e instanceof NotebookQuotaPauseError) throw e;
+    if (e instanceof StudioQuotaReachedError) throw e;
     if (skipKickoff && isTargetClosedError(e)) {
       warn("利用量待ちの収集中にブラウザが閉じました。手元のファイルで続けます");
       return;

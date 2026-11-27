@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { chromium, type Page } from "playwright";
 import { emptyState, loadState, hasStudioStarted, isCompleted, type PaperState } from "../state.ts";
 import { GenerationWaitingError } from "../waiting.ts";
+import { StudioQuotaReachedError } from "../notebook-quota.ts";
 import {
   tryKickoffStudio,
   collectReadyStudio,
@@ -365,6 +366,43 @@ test("NotebookLM Studio viewer return and stage transitions", async (t) => {
   await context.newPage(); // keeper tab so ensureKeeperTab is a no-op
 
   try {
+    await t.test("後で生成だけなら失敗回数を増やさず、残りの Studio も開始しない", async () => {
+      const page = await context.newPage();
+      const { paperDir, state } = makeTempState({ kickoffFailures: { "nlm-slides": 2 } });
+      try {
+        await mountStudioFixture(page, {});
+        await page.locator("#btn-generate-now").evaluate(el => el.remove());
+        await assert.rejects(
+          runStudioParallel(page, paperDir, state, [], false, { outputReadyTimeoutMs: 100 }),
+          StudioQuotaReachedError,
+        );
+        assert.deepEqual(state.kickoffFailures, { "nlm-slides": 2 });
+        assert.equal(state.kickoffRetryStage, "");
+        assert.equal(state.giveUp, undefined);
+        assert.deepEqual(await page.evaluate(() => Reflect.get(window, "__kickedOff")), []);
+        assert.equal(await page.getAttribute("body", "data-pending-stage"), "slides");
+        assert.equal(await page.getAttribute("body", "data-later"), null);
+      } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
+    });
+
+    await t.test("動画の形式選択より先に Generate later だけの表示を区別する", async () => {
+      const page = await context.newPage();
+      const { paperDir, state } = makeTempState({ kickoffFailures: { "nlm-video": 2 } });
+      try {
+        await mountStudioFixture(page, { videoDialog: "heading", videoSelectable: false });
+        await page.locator("#btn-generate-now").evaluate(el => el.remove());
+        await page.locator("#customize-dialog button").filter({ hasText: "後で生成" })
+          .evaluate(el => { el.textContent = "Generate later"; });
+        await assert.rejects(
+          tryKickoffStudio(page, state, "nlm-video", [/動画解説/], 100, { explainerVideo: true }),
+          StudioQuotaReachedError,
+        );
+        assert.deepEqual(state.kickoffFailures, { "nlm-video": 2 });
+        assert.equal(state.giveUp, undefined);
+        assert.equal(await page.getAttribute("body", "data-later"), null);
+      } finally { await page.close(); rmSync(paperDir, { recursive: true, force: true }); }
+    });
+
     await t.test("開始失敗は永続化し、開始済みにせず3回で打ち切る", async () => {
       const page = await context.newPage();
       const { paperDir, state: initial } = makeTempState();
