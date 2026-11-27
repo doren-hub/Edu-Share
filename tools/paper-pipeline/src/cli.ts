@@ -21,7 +21,7 @@ import {
   repairSciSpaceRecordLinks,
 } from "./pipeline.ts";
 import { formatStudioGenerateJa } from "./studio-select.ts";
-import { EXIT_QUOTA } from "./notebook-quota.ts";
+import { EXIT_QUOTA, STUDIO_HARVEST_ONLY_ARG, STUDIO_QUOTA_MESSAGE, STUDIO_QUOTA_REACHED } from "./notebook-quota.ts";
 import { EXIT_WAITING, isRetryCooling } from "./waiting.ts";
 import { emptyState, loadState, studioKickoffBegun } from "./state.ts";
 import { videoFileReady } from "./video-file.ts";
@@ -157,6 +157,12 @@ async function main(): Promise<void> {
   }
   const overrides = parseArgv(argv);
   const cfg = loadConfig(overrides);
+  let studioBlocked = argv.includes(STUDIO_HARVEST_ONLY_ARG);
+  const onStudioQuota = () => {
+    studioBlocked = true;
+    if (process.send) process.send(STUDIO_QUOTA_REACHED);
+    else log(STUDIO_QUOTA_MESSAGE);
+  };
   assertConfigPaths(cfg);
   mkdirSync(cfg.workDir, { recursive: true });
   const inbox = listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
@@ -235,6 +241,8 @@ async function main(): Promise<void> {
     }
     for (const item of items) {
       log(`--- ${item.filename} ---`);
+      const processPaper = (page: Page, skipStudio = false) =>
+        processOnePaper(page, cfg, item, existing, { skipStudio, skipKickoff: studioBlocked, onStudioQuota });
       let r: "done" | "skipped" | "failed" | "waiting" | "quota" = "failed";
       for (let attempt = 0; attempt <= MAX_RELAUNCH; attempt++) {
         if (shuttingDown) break;
@@ -242,9 +250,7 @@ async function main(): Promise<void> {
           warn(`${item.filename}: ブラウザ切断を検出したため再起動します`);
           session = await relaunch(session, cfg);
         }
-        const ran = await runCatchingLogin(session, cfg, (page) =>
-          processOnePaper(page, cfg, item, existing),
-        );
+        const ran = await runCatchingLogin(session, cfg, processPaper);
         session = ran.session;
         r = ran.value;
         if (r === "quota") break;
@@ -264,9 +270,7 @@ async function main(): Promise<void> {
           );
           session = await relaunch(session, cfg);
           const ranWait = await runCatchingLogin(session, cfg, (page) =>
-            processOnePaper(page, cfg, item, existing, {
-              skipStudio: haveVideo,
-            }),
+            processPaper(page, haveVideo),
           );
           session = ranWait.session;
           r = ranWait.value;
@@ -285,7 +289,7 @@ async function main(): Promise<void> {
           );
           session = await relaunch(session, cfg);
           const ranFail = await runCatchingLogin(session, cfg, (page) =>
-            processOnePaper(page, cfg, item, existing, { skipStudio: haveVideo }),
+            processPaper(page, haveVideo),
           );
           session = ranFail.session;
           r = ranFail.value;

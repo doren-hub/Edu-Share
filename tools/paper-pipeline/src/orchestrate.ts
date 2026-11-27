@@ -8,7 +8,7 @@ import {
   type InboxContentKeyCache,
   type MatchTarget,
 } from "./content-match.ts";
-import { assertConfigPaths, helpText, loadConfig, parseArgv } from "./config.ts";
+import { assertConfigPaths, helpText, loadConfig, parseArgv, type AppConfig } from "./config.ts";
 import { PACKAGE_ROOT } from "./env.ts";
 import { addUnregisteredInboxPdfs, hasDoneMarker, listInboxPdfs, listRawPasteRepairPdfs, type InboxPdf } from "./inbox.ts";
 import { error as logError, log, warn } from "./log.ts";
@@ -28,7 +28,11 @@ import {
   EXIT_QUOTA,
   fmtPct,
   formatJst,
+  STUDIO_HARVEST_ONLY_ARG,
+  STUDIO_QUOTA_MESSAGE,
+  STUDIO_QUOTA_REACHED,
   waitUntilNotebookQuotaAllows,
+  type NotebookQuotaConfig,
   type NotebookQuotaPause,
 } from "./notebook-quota.ts";
 import { EXIT_WAITING, EXIT_WAITING_TIMEOUT, recheckDelayMs, retryUntilMs } from "./waiting.ts";
@@ -86,14 +90,17 @@ export function resolveWorkerSpawn(
   };
 }
 
-function runWorker(args: string[]): Promise<number> {
+function runWorker(args: string[], onStudioQuota: () => void): Promise<number> {
   const { command, spawnArgs } = resolveWorkerSpawn(args);
   return new Promise((resolve, reject) => {
     const child = spawn(
       command,
       spawnArgs,
-      { cwd: PACKAGE_ROOT, stdio: "inherit", env: process.env },
+      { cwd: PACKAGE_ROOT, stdio: ["inherit", "inherit", "inherit", "ipc"], env: process.env },
     );
+    child.on("message", (message) => {
+      if (message === STUDIO_QUOTA_REACHED) onStudioQuota();
+    });
     child.on("error", reject);
     child.on("close", (code, signal) => {
       resolve(signal ? 1 : (code ?? 1));
@@ -183,6 +190,7 @@ export type WaitingPaperInfo = {
 
 export type IdleQuotaAction =
   | { action: "exit"; pause: NotebookQuotaPause; pendingPapers: number }
+  | { action: "end_studio_quota" }
   | { action: "exit_waiting"; waitingPapers: WaitingPaperInfo[]; elapsedMinutes: number }
   | { action: "wait_quota" }
   | { action: "sleep"; sleepMs: number; generationBlocked: boolean };
@@ -194,6 +202,7 @@ export function decideIdleAction(
     jobs: readonly SchedJob[];
     exitOnQuota: boolean;
     pause?: NotebookQuotaPause | null;
+    studioBlocked?: boolean;
     maxWaitingMinutes?: number;
     waitingSince?: number;
     now?: number;
@@ -205,6 +214,7 @@ export function decideIdleAction(
     (j) => j.harvestable && (j.status === "ready" || j.status === "waiting"),
   );
   if (opts.generationBlocked && !hasHarvestable) {
+    if (opts.studioBlocked) return { action: "end_studio_quota" };
     if (opts.exitOnQuota) {
       const pendingPapers = opts.jobs.filter(
         (j) => j.status === "ready" || j.status === "waiting",
@@ -258,6 +268,7 @@ export function detectProgress(
 ): boolean {
   if (code === 0) return true;
   if (after.completed.length > before.completed.length) return true;
+  if ((after.eduUploaded?.length ?? 0) > (before.eduUploaded?.length ?? 0)) return true;
   if (!before.videoMp4Path && Boolean(after.videoMp4Path)) return true;
   if (!before.slidePdfPath && Boolean(after.slidePdfPath)) return true;
   if (!before.quizCsvPath && Boolean(after.quizCsvPath)) return true;
@@ -323,6 +334,19 @@ async function main(): Promise<void> {
 
   const repairMeta = argv.includes("--repair-meta");
   const retryGivenUp = argv.includes("--retry-given-up");
+  const exitCode = await orchestrate(cfg, { repairMeta, retryGivenUp });
+  if (exitCode !== 0) process.exitCode = exitCode;
+}
+
+export async function orchestrate(
+  cfg: NotebookQuotaConfig & Pick<AppConfig,
+    "inboxDir" | "workDir" | "holdDir" | "duplicatesDir" | "onlyFilename" | "headed" |
+    "studioGenerate" | "studioSkip" | "studioGenerateExplicit" | "newestFirst" |
+    "exitOnQuota" | "maxWaitingMinutes" | "noRevealLogin" | "fromStage" | "stopOnError"
+  >,
+  { repairMeta = false, retryGivenUp = false } = {},
+  deps = { runWorker, sleep },
+): Promise<number> {
   const rawItems = repairMeta
     ? listRawPasteRepairPdfs(cfg.workDir, cfg.onlyFilename)
     : listInboxPdfs(cfg.inboxDir, cfg.workDir, cfg.onlyFilename);
@@ -385,11 +409,17 @@ async function main(): Promise<void> {
   let exitedOnWaitingTimeout = false;
   let loginRequired = false;
   let waitingSince = 0;
+  let studioBlocked = false;
+  const onStudioQuota = () => {
+    if (studioBlocked) return;
+    studioBlocked = true;
+    log(STUDIO_QUOTA_MESSAGE);
+  };
 
   while (true) {
     await refreshInbox();
-    const pause = await currentNotebookQuotaPause(cfg);
-    const generationBlocked = pause != null;
+    const pause = studioBlocked ? null : await currentNotebookQuotaPause(cfg);
+    const generationBlocked = studioBlocked || pause != null;
     const pick = pickNextJob(jobs, Date.now(), { generationBlocked });
     if (pick.kind === "done") {
       if ((await refreshInbox()) > 0) continue;
@@ -404,6 +434,7 @@ async function main(): Promise<void> {
         jobs,
         exitOnQuota: cfg.exitOnQuota,
         pause,
+        studioBlocked,
         maxWaitingMinutes: cfg.maxWaitingMinutes,
         waitingSince,
         getWaitingStage: (filename) => {
@@ -415,6 +446,7 @@ async function main(): Promise<void> {
           return "不明";
         },
       });
+      if (decision?.action === "end_studio_quota") break;
       if (decision?.action === "exit") {
         log(formatExitOnQuotaMessage(decision.pause, decision.pendingPapers));
         exitedOnQuota = true;
@@ -436,7 +468,7 @@ async function main(): Promise<void> {
           ? `オーケストレータ: 利用量回復待ち。先に進められる作業の再確認まで約 ${sec}s`
           : `オーケストレータ: 生成待ちのため約 ${sec}s 休みます`,
       );
-      await sleep(Math.min(pick.sleepMs, 60_000));
+      await deps.sleep(Math.min(pick.sleepMs, 60_000));
       continue;
     }
 
@@ -448,6 +480,7 @@ async function main(): Promise<void> {
     }
 
     const args = [cfg.headed ? "--headed" : "--headless", "--only", track.item.filename];
+    if (studioBlocked) args.push(STUDIO_HARVEST_ONLY_ARG);
     if (cfg.studioGenerateExplicit) {
       args.push("--generate", formatStudioGenerateArg(cfg.studioGenerate));
     }
@@ -465,8 +498,9 @@ async function main(): Promise<void> {
     );
     const stateBefore = loadPaperState(track.item);
 
-    const code = await runWorker(args);
-    await sleep(CHROME_UNLOCK_MS);
+    const harvestOnly = studioBlocked;
+    const code = await deps.runWorker(args, onStudioQuota);
+    await deps.sleep(CHROME_UNLOCK_MS);
 
     const stateAfter = loadPaperState(track.item);
     const progressMade = detectProgress(stateBefore, stateAfter, code);
@@ -493,11 +527,13 @@ async function main(): Promise<void> {
     }
 
     if (code === EXIT_QUOTA) {
-      const state = loadPaperState(track.item);
-      applyKickoff(job, state, skip, cfg.studioGenerate);
+      applyKickoff(job, stateAfter, skip, cfg.studioGenerate);
+      // Harvest-only polling can report quota while waiting for work it cannot advance this run.
+      if (harvestOnly && !progressMade) job.harvestable = false;
       holdWaiting(track.giveUp, Date.now());
       job.status = "waiting";
-      job.nextCheckAt = Date.now() + 60_000;
+      job.nextCheckAt = Math.max(Date.now() + 60_000, retryUntilMs(stateAfter));
+      if (studioBlocked) continue;
       log(
         job.harvestable
           ? `オーケストレータ: ${track.item.filename} は利用量待ち。できた作業は載せました。他の論文を先に回します`
@@ -509,15 +545,9 @@ async function main(): Promise<void> {
     if (code === EXIT_WAITING) {
       const state = loadPaperState(track.item);
       applyKickoff(job, state, skip, cfg.studioGenerate);
+      if (harvestOnly && !progressMade) job.harvestable = false;
       const stage = getPaperWaitingStage(state);
       const cooldownUntil = retryUntilMs(state);
-      const limitHint =
-        cooldownUntil > Date.now() &&
-        state.kickoffRetryStage === stage &&
-        state.lastError &&
-        /日次上限|後で生成/.test(state.lastError)
-          ? `（${state.lastError}）`
-          : "";
       if (generationBlocked || cooldownUntil > Date.now()) {
         holdWaiting(track.giveUp, Date.now());
       } else if (noteWaiting(track.giveUp, stage, Date.now())) {
@@ -535,7 +565,7 @@ async function main(): Promise<void> {
         generationBlocked
           ? `オーケストレータ: ${track.item.filename} は生成待ち。利用量回復までは他の論文の SciSpace / Edu Share を進めます`
           : cooldownUntil > Date.now()
-            ? `オーケストレータ: ${track.item.filename} は ${stage} 開始クールダウン${limitHint}。他の論文の SciSpace / Edu Share を進めます`
+            ? `オーケストレータ: ${track.item.filename} は ${stage} 開始クールダウン。他の論文の SciSpace / Edu Share を進めます`
             : `オーケストレータ: ${track.item.filename} は ${stage} 待ち（指定項目は開始済み）。次の論文の生成へ`,
       );
       continue;
@@ -603,6 +633,7 @@ async function main(): Promise<void> {
     job.attempts = track.retries;
   }
 
+  exitedOnQuota ||= studioBlocked && cfg.exitOnQuota;
   log(
     `オーケストレータ結果: 完了 ${processed.length} / スキップ ${skipped.length} / 失敗 ${failed.length}${
       exitedOnQuota
@@ -620,12 +651,10 @@ async function main(): Promise<void> {
     exitedOnWaitingTimeout,
     failedCount: failed.length,
   });
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-  }
   if (!loginRequired && !exitedOnQuota && !exitedOnWaitingTimeout && failed.length) {
     logError(`失敗: ${failed.join(", ")}`);
   }
+  return exitCode;
 }
 
 export function decideOrchestratorExitCode(opts: {

@@ -69,7 +69,7 @@ import {
   tldrUsable,
 } from "./scispace-card.ts";
 import { harvestBackoffMs, applyHarvestFailure, GenerationWaitingError, isRetryCooling } from "./waiting.ts";
-import { currentNotebookQuotaPause, NotebookQuotaPauseError } from "./notebook-quota.ts";
+import { currentNotebookQuotaPause, NotebookQuotaPauseError, STUDIO_QUOTA_MESSAGE, StudioQuotaReachedError } from "./notebook-quota.ts";
 import { needsLocalVideoFile, videoFileReady } from "./video-file.ts";
 import { formatStudioGenerateJa, missingStudioStages } from "./studio-select.ts";
 import {
@@ -489,7 +489,7 @@ export async function processOnePaper(
   cfg: AppConfig,
   item: InboxPdf,
   _existing: ExistingPaper[] = [],
-  opts: { skipStudio?: boolean } = {},
+  opts: { skipStudio?: boolean; skipKickoff?: boolean; onStudioQuota?: () => void } = {},
 ): Promise<"done" | "skipped" | "failed" | "waiting" | "quota"> {
   ensurePaperDir(item.paperDir);
   let state = loadState(
@@ -617,12 +617,11 @@ export async function processOnePaper(
 
   applyFromStage(state, cfg.fromStage && cfg.onlyFilename ? cfg.fromStage : null);
 
-  const quotaPause = await currentNotebookQuotaPause(cfg);
   const skipStudioAfterDisconnect =
     isTargetClosedMessage(state.lastError) &&
     studioKickoffSettled(state, cfg.studioSkip) &&
     videoFileReady(item.paperDir, state.videoMp4Path);
-  const skipKickoff = quotaPause != null;
+  let skipKickoff = opts.skipKickoff === true || (await currentNotebookQuotaPause(cfg)) != null;
   const forceSkipStudio = opts.skipStudio === true || skipStudioAfterDisconnect;
   const skipStudio =
     forceSkipStudio ||
@@ -643,15 +642,22 @@ export async function processOnePaper(
     if (skipStudio) {
       log(`${item.filename}: Studio は開かず、SciSpace メタ / Edu Share を先に進めます`);
     } else {
-      await runNotebookLm(page, {
-        homeUrl: cfg.notebooklmUrl,
-        pdfPath: item.absPath,
-        paperDir: item.paperDir,
-        state,
-        studioSkip: cfg.studioSkip,
-        quota: cfg,
-        skipKickoff,
-      });
+      try {
+        await runNotebookLm(page, {
+          homeUrl: cfg.notebooklmUrl,
+          pdfPath: item.absPath,
+          paperDir: item.paperDir,
+          state,
+          studioSkip: cfg.studioSkip,
+          quota: cfg,
+          skipKickoff,
+        });
+      } catch (e) {
+        if (!(e instanceof StudioQuotaReachedError)) throw e;
+        skipKickoff = true;
+        if (opts.onStudioQuota) opts.onStudioQuota();
+        else log(STUDIO_QUOTA_MESSAGE);
+      }
     }
 
     if (!(await recoverStuckPage(page))) {
